@@ -1,0 +1,34 @@
+[project]
+name = "study-agent-worker"
+version = "0.1.0"
+description = "M1 pull worker for document parsing"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "httpx>=0.28,<0.29",
+  "lxml>=6.0,<7",
+  "pdfplumber>=0.11,<0.12",
+  "pillow>=12.3,<13",
+  "pydantic-settings>=2.10,<3",
+  "pypdf>=6.0,<7",
+  "pypdfium2>=5.12,<6",
+  "python-pptx>=1.0,<2",
+  "study-contracts",
+  "typer>=0.16,<0.17",
+]
+
+[project.scripts]
+study-agent-worker = "study_worker.cli:app"
+study-agent-native-parser = "study_worker.parsers.subprocess_entry:main"
+
+[project.entry-points."study_agent.worker_handlers"]
+native-v1 = "study_worker.runtime:build_native_handler"
+
+[tool.uv.sources]
+study-contracts = { workspace = true }
+
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/study_worker"]

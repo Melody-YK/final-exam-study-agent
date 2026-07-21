@@ -1,0 +1,68 @@
+[project]
+name = "final-exam-study-agent-workspace"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = [
+  "packages/contracts/python",
+  "services/api",
+  "services/worker",
+]
+
+[dependency-groups]
+dev = [
+  "coverage[toml]>=7.10,<8",
+  "mypy>=1.17,<2",
+  "pytest>=9.0.3,<10",
+  "pytest-asyncio>=1.1,<2",
+  "pytest-cov>=6.2,<7",
+  "ruff>=0.12,<0.13",
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers --strict-config"
+asyncio_mode = "auto"
+pythonpath = ["."]
+testpaths = [
+  "packages/contracts/python/tests",
+  "services/api/tests",
+  "services/worker/tests",
+  "tests",
+]
+markers = [
+  "integration: requires local infrastructure",
+  "live: requires explicitly injected external provider credentials",
+]
+
+[tool.coverage.run]
+branch = true
+concurrency = ["thread", "greenlet"]
+parallel = true
+source = ["study_agent", "study_contracts", "study_worker"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+skip_covered = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "ASYNC", "RUF"]
+ignore = ["B008"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["study_agent", "study_contracts", "study_worker"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+explicit_package_bases = true
+warn_unused_configs = true
+plugins = ["pydantic.mypy"]

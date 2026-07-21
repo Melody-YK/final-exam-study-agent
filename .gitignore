@@ -1,0 +1,36 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+.venv/
+**/.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+.vite/
+playwright-report/
+test-results/
+.local/
+.claude/planning/
+data/
+*.log
+
+# Private course material and generated evaluation outputs must stay local.
+学校/
+操作系统/
+evals/private/
+evals/reports/generated/
+
+# Secrets are injected at runtime only.
+*.pem
+*.key
+secrets/

@@ -1,0 +1,1 @@
+"""Persistent parse job domain."""

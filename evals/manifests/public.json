@@ -1,0 +1,53 @@
+{
+  "schema_version": "1.0",
+  "fixture_set": "self-authored-document-parser-v1",
+  "generator": "tests/fixtures/build_documents.py",
+  "license_status": "self-authored-test-fixture",
+  "contains_private_course_material": false,
+  "licenses": {
+    "CC0-1.0": {
+      "name": "Creative Commons Zero v1.0 Universal",
+      "url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "attribution": "Self-authored by the final-exam-study-agent contributors"
+    }
+  },
+  "files": [
+    {
+      "name": "self-authored-native.pdf",
+      "sha256": "5cede1b1a47f8ffd791ec4b472bf7abcf66c02ee14dc4458f2768e47fc171bda",
+      "corpus_role": "corpus",
+      "purpose": "native-pdf-and-no-text-page",
+      "fixture_kind": "generated",
+      "license_id": "CC0-1.0",
+      "contains_reference_answers": false
+    },
+    {
+      "name": "self-authored-native.pptx",
+      "sha256": "4ded660d34fc7c2330c920c94c3edf4e1f426d7ac615f10556affb0bd90385b3",
+      "corpus_role": "corpus",
+      "purpose": "native-pptx-structure-and-security-metadata",
+      "fixture_kind": "generated",
+      "license_id": "CC0-1.0",
+      "contains_reference_answers": false
+    },
+    {
+      "name": "self-authored-macro.pptx",
+      "sha256": "de6f68f2970018773ea09c6e897c11d851f0f0e749987b2af2a5bbc9d1b8eeec",
+      "corpus_role": "excluded",
+      "purpose": "macro-rejection-negative-fixture",
+      "fixture_kind": "generated",
+      "license_id": "CC0-1.0",
+      "contains_reference_answers": false
+    },
+    {
+      "name": "rag-seed-v1.jsonl",
+      "path": "evals/fixtures/public/rag-seed-v1.jsonl",
+      "sha256": "42bb4afe2ab859b1834ad750b6480f550f6215c2e70cdbccb196904d71edd827",
+      "corpus_role": "mixed-evaluation-seed",
+      "purpose": "dense-bm25-rrf-citation-and-abstention-evaluation",
+      "fixture_kind": "tracked",
+      "license_id": "CC0-1.0",
+      "contains_reference_answers": false
+    }
+  ]
+}

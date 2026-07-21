@@ -1,0 +1,36 @@
+[project]
+name = "study-agent-api"
+version = "0.1.0"
+description = "FastAPI control plane for the final exam study agent"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "alembic>=1.16,<2",
+  "asyncpg>=0.30,<0.31",
+  "bm25s>=0.2.14,<0.3",
+  "fastapi>=0.139,<0.140",
+  "filetype>=1.2,<2",
+  "httpx>=0.28,<0.29",
+  "jieba>=0.42.1,<0.43",
+  "pgvector>=0.4,<0.5",
+  "pydantic-settings>=2.10,<3",
+  "python-multipart>=0.0.20,<0.1",
+  "sqlalchemy[asyncio]>=2.0.40,<2.1",
+  "study-contracts",
+  "structlog>=25.4,<26",
+  "uvicorn[standard]>=0.35,<0.36",
+]
+
+[project.scripts]
+study-agent-api = "study_agent.main:run"
+study-agent-index-runner = "study_agent.runner:main"
+study-agent-provider-probe = "study_agent.cli:main"
+
+[tool.uv.sources]
+study-contracts = { workspace = true }
+
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/study_agent"]

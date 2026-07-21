@@ -1,0 +1,47 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: study_agent_test
+          POSTGRES_USER: study_agent
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U study_agent -d study_agent_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql+asyncpg://study_agent@127.0.0.1:5432/study_agent_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.14"
+          enable-cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: uv sync --all-packages --frozen
+      - run: npm ci
+      - run: make check
+      - run: ./scripts/security_check.sh
+      - run: npm audit --registry=https://registry.npmjs.org --audit-level=low
+      - run: npm audit --registry=https://registry.npmjs.org --audit-level=low --omit=dev
+      - run: uv run python scripts/run_advisory_audit.py

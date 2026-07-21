@@ -1,0 +1,26 @@
+# LOCAL DEVELOPMENT ONLY. The loopback-bound trust profile is not a production template.
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: study_agent
+      POSTGRES_HOST_AUTH_METHOD: trust
+      POSTGRES_USER: study_agent
+    command:
+      - postgres
+      - -c
+      - config_file=/etc/postgresql/postgresql.conf
+    ports:
+      - "127.0.0.1:54329:5432"
+    volumes:
+      - study-agent-postgres:/var/lib/postgresql/data
+      - ../postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U study_agent -d study_agent"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  study-agent-postgres:
