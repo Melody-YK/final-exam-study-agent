@@ -24,7 +24,7 @@ from study_agent.api.routers.queries import router as queries_router
 from study_agent.api.routers.sources import router as sources_router
 from study_agent.api.routers.worker import router as worker_router
 from study_agent.api.routers.workspace import router as workspace_router
-from study_agent.config import AppMode, Settings
+from study_agent.config import AppMode, Settings, normalize_host
 from study_agent.identity.principal import LocalPrincipalProvider, PrincipalProvider
 from study_agent.infrastructure.db.session import Database
 from study_agent.modules.answering.retrieval import (
@@ -174,9 +174,9 @@ def _validated_request_host(request: Request) -> str | None:
     if parsed.hostname.lower() != hostname.lower():
         return None
     try:
-        return ip_address(parsed.hostname).compressed
+        return normalize_host(parsed.hostname)
     except ValueError:
-        return parsed.hostname.lower()
+        return None
 
 
 def _host_is_allowed(host: str, allowed_hosts: tuple[str, ...]) -> bool:

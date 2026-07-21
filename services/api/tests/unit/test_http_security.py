@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
 from study_agent.config import AppMode, Settings
 from study_agent.main import create_app, run
@@ -113,6 +113,82 @@ async def test_local_api_rejects_malformed_host_header(tmp_path: Path, host: str
     async with AsyncClient(transport=transport, base_url="http://localhost:8000") as client:
         response = await client.get("/healthz", headers={"Host": host})
 
+    assert response.status_code == 400
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "host",
+    [
+        "study.example",
+        "unrelated.example",
+        ".study.example",
+        "chapter..study.example",
+        "-chapter.study.example",
+        "chapter-.study.example",
+        r"chapter\.study.example",
+        "chapter,notes.study.example",
+        "chapter_notes.study.example",
+    ],
+)
+async def test_wildcard_host_rejects_apex_unrelated_and_malformed_dns_names(
+    tmp_path: Path,
+    host: str,
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        app_mode=AppMode.TEST,
+        allowed_hosts=("*.study.example",),
+        local_storage_root=tmp_path / "storage",
+    )
+    app = create_app(settings=settings, storage=LocalStorage(tmp_path / "storage"))
+    transport = ASGITransport(app=app, client=("127.0.0.1", 51000))
+    async with AsyncClient(transport=transport, base_url="http://notes.study.example") as client:
+        response = await client.get("/healthz", headers={"Host": host})
+
+    assert response.status_code == 400
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+
+
+@pytest.mark.asyncio
+async def test_wildcard_host_accepts_a_valid_dns_subdomain(tmp_path: Path) -> None:
+    settings = Settings(
+        _env_file=None,
+        app_mode=AppMode.TEST,
+        allowed_hosts=("*.study.example",),
+        local_storage_root=tmp_path / "storage",
+    )
+    app = create_app(settings=settings, storage=LocalStorage(tmp_path / "storage"))
+    transport = ASGITransport(app=app, client=("127.0.0.1", 51000))
+    async with AsyncClient(transport=transport, base_url="http://notes.study.example") as client:
+        response = await client.get(
+            "/healthz",
+            headers={"Host": "chapter-1.notes.study.example"},
+        )
+
+    assert response.status_code == 200
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+
+
+@pytest.mark.asyncio
+async def test_failed_settings_assignment_cannot_enable_wildcard_host(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        app_mode=AppMode.LOCAL,
+        local_storage_root=tmp_path / "storage",
+    )
+    with pytest.raises(ValidationError, match="frozen"):
+        settings.allowed_hosts = ("*",)
+
+    app = create_app(settings=settings, storage=LocalStorage(tmp_path / "storage"))
+    transport = ASGITransport(app=app, client=("127.0.0.1", 51000))
+    async with AsyncClient(transport=transport, base_url="http://localhost:8000") as client:
+        response = await client.get("/healthz", headers={"Host": "attacker.example"})
+
+    assert settings.allowed_hosts == ()
     assert response.status_code == 400
     assert response.headers["X-Content-Type-Options"] == "nosniff"
 

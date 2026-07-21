@@ -46,7 +46,7 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
-        validate_assignment=True,
+        frozen=True,
     )
 
     app_mode: AppMode = AppMode.LOCAL
@@ -156,7 +156,7 @@ class Settings(BaseSettings):
     def normalize_allowed_hosts(cls, value: tuple[str, ...]) -> tuple[str, ...]:
         normalized: list[str] = []
         for host in value:
-            normalized_host = _normalize_allowed_host(host)
+            normalized_host = normalize_host(host, allow_wildcard=True)
             if normalized_host and normalized_host not in normalized:
                 normalized.append(normalized_host)
         return tuple(normalized)
@@ -312,66 +312,68 @@ class Settings(BaseSettings):
         )
 
 
-def _normalize_allowed_host(value: str) -> str:
+def normalize_host(value: str, *, allow_wildcard: bool = False) -> str:
     host = value.strip().lower()
     if not host:
         return ""
     if not host.isascii() or any(
         character.isspace() or character in "/\\@?#%" for character in host
     ):
-        raise ValueError("allowed hosts must contain ASCII host names only")
+        raise ValueError("hosts must contain ASCII host names only")
     if host == "*":
-        return host
+        if allow_wildcard:
+            return host
+        raise ValueError("hosts contain an invalid wildcard")
 
-    wildcard = host.startswith("*.")
+    wildcard = allow_wildcard and host.startswith("*.")
     if "*" in host and (not wildcard or host.count("*") != 1):
-        raise ValueError("allowed hosts contain an invalid wildcard")
+        raise ValueError("hosts contain an invalid wildcard")
     candidate = host[2:] if wildcard else host
     if not candidate or candidate.startswith(".") or candidate.endswith(".") or ".." in candidate:
-        raise ValueError("allowed hosts contain an invalid host name")
+        raise ValueError("hosts contain an invalid host name")
 
     if candidate.startswith("["):
         if wildcard or not candidate.endswith("]") or candidate.count("[") != 1:
-            raise ValueError("allowed hosts contain an invalid IPv6 literal")
+            raise ValueError("hosts contain an invalid IPv6 literal")
         try:
             address = ip_address(candidate[1:-1])
         except ValueError as exc:
-            raise ValueError("allowed hosts contain an invalid IP address") from exc
+            raise ValueError("hosts contain an invalid IP address") from exc
         if address.version != 6:
-            raise ValueError("brackets are only valid for IPv6 allowed hosts")
+            raise ValueError("brackets are only valid for IPv6 hosts")
         return address.compressed
     if "[" in candidate or "]" in candidate:
-        raise ValueError("allowed hosts contain an invalid IPv6 literal")
+        raise ValueError("hosts contain an invalid IPv6 literal")
 
     if ":" in candidate:
         if wildcard:
-            raise ValueError("wildcard allowed hosts require a DNS suffix")
+            raise ValueError("wildcard hosts require a DNS suffix")
         try:
             address = ip_address(candidate)
         except ValueError as exc:
-            raise ValueError("allowed hosts must not include a port") from exc
+            raise ValueError("hosts must not include a port") from exc
         if address.version != 6:
-            raise ValueError("allowed hosts must not include a port")
+            raise ValueError("hosts must not include a port")
         return address.compressed
 
     try:
         address = ip_address(candidate)
     except ValueError:
         if len(candidate) > 253:
-            raise ValueError("allowed host name is too long") from None
+            raise ValueError("host name is too long") from None
         labels = candidate.split(".")
         if any(
             len(label) > 63
             or label.startswith("-")
             or label.endswith("-")
-            or any(not (character.isalnum() or character in "-_") for character in label)
+            or any(not (character.isalnum() or character == "-") for character in label)
             for label in labels
         ):
-            raise ValueError("allowed hosts contain an invalid host name") from None
+            raise ValueError("hosts contain an invalid host name") from None
         normalized = candidate
     else:
         if wildcard:
-            raise ValueError("wildcard allowed hosts require a DNS suffix")
+            raise ValueError("wildcard hosts require a DNS suffix")
         normalized = address.compressed
 
     return f"*.{normalized}" if wildcard else normalized

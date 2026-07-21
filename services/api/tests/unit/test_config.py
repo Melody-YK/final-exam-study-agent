@@ -99,6 +99,15 @@ def test_test_settings_allow_explicit_global_host_wildcard() -> None:
     assert settings.effective_allowed_hosts == ("*",)
 
 
+def test_settings_are_immutable_after_validation() -> None:
+    settings = Settings(_env_file=None, app_mode=AppMode.LOCAL)
+
+    with pytest.raises(ValidationError, match="frozen"):
+        settings.allowed_hosts = ("*",)
+
+    assert settings.allowed_hosts == ()
+
+
 def test_bracketed_ipv6_allowed_host_is_normalized() -> None:
     settings = Settings(
         _env_file=None,
