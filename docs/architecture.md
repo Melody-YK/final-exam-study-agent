@@ -39,4 +39,4 @@ Compose 只负责 PostgreSQL/pgvector；API、Runner、Worker 和 Web 在本地 
 
 本地基线是静态 Web、单 Uvicorn、小 PostgreSQL 连接配置、单 Index Runner、精确向量和 BM25 mmap。`2 GiB` 报告是等效本地 preflight，固定写入 `local_equivalent_only=true` 与 `production_capacity_verified=false`。它不能代替真实服务器、网络、备份、TLS、生产认证或长期负载验证。
 
-生产相关事实不在本文复制，统一链接 [延期范围台账](../.claude/planning/add-final-exam-study-agent/00_DEFERRED_SCOPE.md)。
+当前架构只描述本地可验证边界，不构成生产就绪声明。生产认证、入口代理、隔离、容量、部署、回滚和观测仍需在目标环境中单独设计与验证。
