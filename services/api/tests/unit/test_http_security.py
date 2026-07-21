@@ -172,6 +172,92 @@ async def test_wildcard_host_accepts_a_valid_dns_subdomain(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("allowed_host", "request_host"),
+    [
+        ("*.0.0.1", "127.0.0.1:8000"),
+        ("*.168.1.1", "192.168.1.1"),
+        ("*.1", "10.0.0.1"),
+        ("*.1", "127.1"),
+        ("*.1", "127.0.1"),
+        ("*.1", "0177.0.0.1"),
+        ("*.1", "127.000.0.1"),
+        ("*.1", "0x7f.1"),
+    ],
+)
+async def test_wildcard_host_does_not_match_ipv4_literals(
+    tmp_path: Path,
+    allowed_host: str,
+    request_host: str,
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        app_mode=AppMode.TEST,
+        allowed_hosts=(allowed_host,),
+        local_storage_root=tmp_path / "storage",
+    )
+    app = create_app(settings=settings, storage=LocalStorage(tmp_path / "storage"))
+    transport = ASGITransport(app=app, client=("127.0.0.1", 51000))
+    async with AsyncClient(transport=transport, base_url="http://test.invalid") as client:
+        response = await client.get("/healthz", headers={"Host": request_host})
+
+    assert response.status_code == 400
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("allowed_hosts", "request_host"),
+    [
+        (("*.0.0.1", "127.0.0.1"), "127.0.0.1:8000"),
+        (("*.1",), "chapter.1"),
+    ],
+)
+async def test_ip_type_isolation_preserves_exact_ip_and_dns_wildcards(
+    tmp_path: Path,
+    allowed_hosts: tuple[str, ...],
+    request_host: str,
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        app_mode=AppMode.TEST,
+        allowed_hosts=allowed_hosts,
+        local_storage_root=tmp_path / "storage",
+    )
+    app = create_app(settings=settings, storage=LocalStorage(tmp_path / "storage"))
+    transport = ASGITransport(app=app, client=("127.0.0.1", 51000))
+    async with AsyncClient(transport=transport, base_url="http://test.invalid") as client:
+        response = await client.get("/healthz", headers={"Host": request_host})
+
+    assert response.status_code == 200
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+
+
+@pytest.mark.parametrize(
+    "update",
+    [
+        {"allowed_hosts": ("*",)},
+        {"allowed_hosts": ("*.study.example",)},
+        {"allowed_hosts": ("bad_host",)},
+        {"embedding_base_url": "not-a-url"},
+        {"app_mode": "production"},
+    ],
+)
+def test_create_app_revalidates_untrusted_settings_copy(
+    tmp_path: Path,
+    update: dict[str, object],
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        app_mode=AppMode.LOCAL,
+        local_storage_root=tmp_path / "storage",
+    ).model_copy(update=update)
+
+    with pytest.raises(ValidationError):
+        create_app(settings=settings, storage=LocalStorage(tmp_path / "storage"))
+
+
+@pytest.mark.asyncio
 async def test_failed_settings_assignment_cannot_enable_wildcard_host(
     tmp_path: Path,
 ) -> None:

@@ -180,12 +180,34 @@ def _validated_request_host(request: Request) -> str | None:
 
 
 def _host_is_allowed(host: str, allowed_hosts: tuple[str, ...]) -> bool:
+    host_is_ip = _host_is_ip_like(host)
+
     for allowed_host in allowed_hosts:
         if allowed_host == "*" or host == allowed_host:
             return True
+        # A DNS wildcard must not authorize an IP-like host through text suffix overlap.
+        if host_is_ip:
+            continue
         if allowed_host.startswith("*.") and host.endswith(allowed_host[1:]):
             return host != allowed_host[2:]
     return False
+
+
+def _host_is_ip_like(host: str) -> bool:
+    try:
+        ip_address(host)
+    except ValueError:
+        labels = host.split(".")
+        return all(
+            label.isdigit()
+            or (
+                label.startswith("0x")
+                and len(label) > 2
+                and all(character in "0123456789abcdef" for character in label[2:])
+            )
+            for label in labels
+        )
+    return True
 
 
 def _boundary_rejection(status_code: int, title: str) -> JSONResponse:
@@ -232,7 +254,8 @@ def create_app(
     worker_presence: WorkerPresenceRegistry | None = None,
     local_read_signer: LocalReadTokenSigner | None = None,
 ) -> FastAPI:
-    resolved_settings = settings or Settings()
+    # Rebuild from raw field values so every Settings validator runs again.
+    resolved_settings = Settings() if settings is None else Settings.model_validate(dict(settings))
     if resolved_settings.app_mode is AppMode.PRODUCTION:
         raise RuntimeError(
             "production principal provider is not implemented; local identity fallback is forbidden"
