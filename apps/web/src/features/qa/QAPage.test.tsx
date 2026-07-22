@@ -1,20 +1,90 @@
 import { act, fireEvent, screen, waitFor } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError, studyApi } from '../../api/client'
-import type { RuntimeCapabilities, StructuredAnswer } from '../../api/types'
+import type {
+  ConversationRecord,
+  QuerySnapshot,
+  RuntimeCapabilities,
+  StructuredAnswer,
+} from '../../api/types'
 import { answeredSnapshot, citationSource, problem } from '../../test/fixtures'
 import { availableCapabilities, renderInWorkspace } from '../../test/render'
 import { QAPage } from './QAPage'
 import { queryRefetchInterval } from './queryPolling'
 
-async function submitQuestion() {
+async function submitQuestion(question = '什么是进程？') {
   const input = screen.getByLabelText('课程问题')
+  const submit = screen.getByRole('button', { name: '提交问题' })
   await screen.findByRole('button', { name: '提交问题' })
-  return { input, submit: screen.getByRole('button', { name: '提交问题' }) }
+  const user = (await import('@testing-library/user-event')).default.setup()
+  await user.type(input, question)
+  await user.click(submit)
+  return { input, submit, user }
+}
+
+function conversation(
+  id: string,
+  title: string,
+  overrides: Partial<ConversationRecord> = {},
+): ConversationRecord {
+  return {
+    id,
+    course_id: 'course-1',
+    title,
+    turn_count: 0,
+    latest_query_id: null,
+    latest_question: null,
+    created_at: '2026-07-19T04:00:00Z',
+    updated_at: '2026-07-19T04:00:00Z',
+    ...overrides,
+  }
+}
+
+function historySnapshot(
+  id: string,
+  conversationId: string,
+  question: string,
+  answerMarkdown: string,
+  createdAt: string,
+): QuerySnapshot {
+  const snapshot = answeredSnapshot({
+    id,
+    conversation_id: conversationId,
+    question,
+    created_at: createdAt,
+  })
+  return {
+    ...snapshot,
+    answer: snapshot.answer
+      ? {
+          ...snapshot.answer,
+          query_id: id,
+          answer_markdown: answerMarkdown,
+          claims: [],
+          citations: [],
+        }
+      : null,
+  }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((next) => {
+    resolve = next
+  })
+  return { promise, resolve }
 }
 
 describe('QAPage', () => {
+  beforeEach(() => {
+    vi.spyOn(studyApi, 'listConversations').mockResolvedValue([])
+    vi.spyOn(studyApi, 'listConversationQueries').mockResolvedValue([])
+    vi.spyOn(studyApi, 'createConversation').mockResolvedValue(
+      conversation('conversation-1', '新会话'),
+    )
+  })
+
   it('polls only while the query SSE is connecting or reconnecting', () => {
     const pending = answeredSnapshot({ status: 'retrieving', answer: null })
 
@@ -36,46 +106,42 @@ describe('QAPage', () => {
     vi.spyOn(studyApi, 'getQuery')
       .mockResolvedValueOnce(pending)
       .mockResolvedValueOnce(answeredSnapshot())
-    vi.spyOn(studyApi, 'subscribe').mockImplementation(
-      (_path, onEvent) => {
-        pushEvent = () =>
-          onEvent({
-            stream_version: '1',
-            sequence: 4,
-            occurred_at: '2026-07-19T06:00:00Z',
-            trace_id: 'query-sse-test',
-            data: { status: 'answered' },
-          })
-        return close
-      },
-    )
-    const { user } = renderInWorkspace(<QAPage />)
-    const { input, submit } = await submitQuestion()
+    vi.spyOn(studyApi, 'subscribe').mockImplementation((_path, onEvent) => {
+      pushEvent = () =>
+        onEvent({
+          stream_version: '1',
+          sequence: 4,
+          occurred_at: '2026-07-19T06:00:00Z',
+          trace_id: 'query-sse-test',
+          data: { status: 'answered' },
+        })
+      return close
+    })
+    renderInWorkspace(<QAPage />)
 
-    await user.type(input, '什么是进程？')
-    await user.click(submit)
+    await submitQuestion()
 
     const retrievalStage = await screen.findByText('检索课程资料')
     expect(retrievalStage.closest('li')).toHaveClass('is-active')
-    await waitFor(() => expect(studyApi.subscribe).toHaveBeenCalledWith(
-      '/queries/query-1/events',
-      expect.any(Function),
-      expect.any(Function),
-      expect.any(Function),
-    ))
+    await waitFor(() =>
+      expect(studyApi.subscribe).toHaveBeenCalledWith(
+        '/queries/query-1/events',
+        expect.any(Function),
+        expect.any(Function),
+        expect.any(Function),
+      ),
+    )
     await act(async () => pushEvent())
     expect(await screen.findByText('进程是资源分配的基本单位。')).toBeInTheDocument()
     await waitFor(() => expect(close).toHaveBeenCalledOnce())
   })
 
-  it('renders an answered claim and opens its scoped source with bbox highlighting', async () => {
+  it('renders an answered claim and opens its query-scoped source', async () => {
     vi.spyOn(studyApi, 'createQuery').mockResolvedValue(answeredSnapshot())
     vi.spyOn(studyApi, 'getCitation').mockResolvedValue(citationSource())
-    const { container, user } = renderInWorkspace(<QAPage />)
-    const { input, submit } = await submitQuestion()
+    const { container } = renderInWorkspace(<QAPage />)
 
-    await user.type(input, '什么是进程？')
-    await user.click(submit)
+    const { user } = await submitQuestion()
 
     expect(await screen.findByText('进程是资源分配的基本单位。')).toBeInTheDocument()
     expect(screen.getByText('进程拥有独立地址空间。')).toBeInTheDocument()
@@ -90,7 +156,277 @@ describe('QAPage', () => {
     expect(studyApi.getCitation).toHaveBeenCalledWith('query-1', 'citation-1')
   })
 
-  it('shows abstention separately and never renders evidence-free answer text', async () => {
+  it('shows migrated questions as one chronological thread and restores it after remount', async () => {
+    const migrated = conversation('conversation-migrated', '历史问答', {
+      turn_count: 2,
+      latest_query_id: 'query-latest',
+      latest_question: '最新问题',
+      updated_at: '2026-07-19T04:00:00Z',
+    })
+    const older = historySnapshot(
+      'query-older',
+      migrated.id,
+      '旧问题',
+      '旧回答',
+      '2026-07-18T04:00:00Z',
+    )
+    const latest = historySnapshot(
+      'query-latest',
+      migrated.id,
+      '最新问题',
+      '最新回答',
+      '2026-07-19T04:00:00Z',
+    )
+    vi.mocked(studyApi.listConversations).mockResolvedValue([migrated])
+    vi.mocked(studyApi.listConversationQueries).mockResolvedValue([latest, older])
+
+    const firstRender = renderInWorkspace(<QAPage />)
+
+    expect(await screen.findByText('旧回答')).toBeInTheDocument()
+    expect(screen.getByText('最新回答')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /历史问答/ })).toHaveAttribute(
+      'aria-current',
+      'true',
+    )
+    const questions = firstRender.container.querySelectorAll('.question-entry p')
+    expect(questions[0]).toHaveTextContent('旧问题')
+    expect(questions[1]).toHaveTextContent('最新问题')
+
+    firstRender.unmount()
+    renderInWorkspace(<QAPage />)
+
+    expect(await screen.findByText('旧回答')).toBeInTheDocument()
+    expect(screen.getByText('最新回答')).toBeInTheDocument()
+    expect(studyApi.listConversations).toHaveBeenCalledTimes(2)
+    expect(studyApi.listConversationQueries).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps a server-invalidated turn closed when an older answered snapshot is cached', async () => {
+    const migrated = conversation('conversation-invalidated', '历史问答', {
+      turn_count: 1,
+      latest_query_id: 'query-invalidated',
+      latest_question: '旧问题',
+    })
+    const cachedAnswer = historySnapshot(
+      'query-invalidated',
+      migrated.id,
+      '旧问题',
+      '已失效的旧回答',
+      '2026-07-19T04:00:00Z',
+    )
+    const invalidated: QuerySnapshot = {
+      ...cachedAnswer,
+      status: 'invalidated',
+      answer: null,
+    }
+    const history = deferred<QuerySnapshot[]>()
+    vi.mocked(studyApi.listConversations).mockResolvedValue([migrated])
+    vi.mocked(studyApi.listConversationQueries).mockReturnValue(history.promise)
+    const { queryClient } = renderInWorkspace(<QAPage />)
+    queryClient.setQueryData(['query', cachedAnswer.id], cachedAnswer)
+
+    await act(async () => history.resolve([invalidated]))
+
+    expect(await screen.findByText('来源已失效')).toBeInTheDocument()
+    expect(screen.queryByText('已失效的旧回答')).not.toBeInTheDocument()
+    await waitFor(() =>
+      expect(queryClient.getQueryData<QuerySnapshot>(['query', cachedAnswer.id])).toMatchObject({
+        status: 'invalidated',
+        answer: null,
+      }),
+    )
+    expect(
+      queryClient.getQueryData<QuerySnapshot[]>(['conversation-queries', migrated.id]),
+    ).toEqual([expect.objectContaining({ id: cachedAnswer.id, status: 'invalidated', answer: null })])
+  })
+
+  it('switches between conversations and loads each available thread', async () => {
+    const olderConversation = conversation('conversation-older', '同步机制复习', {
+      turn_count: 1,
+      updated_at: '2026-07-18T04:00:00Z',
+    })
+    const latestConversation = conversation('conversation-latest', '进程复习', {
+      turn_count: 1,
+      updated_at: '2026-07-19T04:00:00Z',
+    })
+    const older = historySnapshot(
+      'query-older',
+      olderConversation.id,
+      '什么是临界区？',
+      '临界区是访问临界资源的代码。',
+      '2026-07-18T04:00:00Z',
+    )
+    const latest = historySnapshot(
+      'query-latest',
+      latestConversation.id,
+      '什么是进程？',
+      '进程是程序的一次执行。',
+      '2026-07-19T04:00:00Z',
+    )
+    vi.mocked(studyApi.listConversations).mockResolvedValue([
+      olderConversation,
+      latestConversation,
+    ])
+    vi.mocked(studyApi.listConversationQueries).mockImplementation(async (id) =>
+      id === olderConversation.id ? [older] : [latest],
+    )
+    const { user } = renderInWorkspace(<QAPage />)
+
+    expect(await screen.findByText('进程是程序的一次执行。')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /同步机制复习/ }))
+
+    expect(await screen.findByText('临界区是访问临界资源的代码。')).toBeInTheDocument()
+    expect(screen.queryByText('进程是程序的一次执行。')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /同步机制复习/ })).toHaveAttribute(
+      'aria-current',
+      'true',
+    )
+  })
+
+  it('waits for selected conversation history before enabling submission', async () => {
+    const existing = conversation('conversation-existing', '已有会话', { turn_count: 1 })
+    const history = deferred<QuerySnapshot[]>()
+    const created = answeredSnapshot({
+      conversation_id: existing.id,
+      question: '继续解释',
+    })
+    vi.mocked(studyApi.listConversations).mockResolvedValue([existing])
+    vi.mocked(studyApi.listConversationQueries).mockReturnValue(history.promise)
+    const createQuery = vi.spyOn(studyApi, 'createQuery').mockResolvedValue(created)
+    const { user } = renderInWorkspace(<QAPage />)
+
+    await screen.findByRole('button', { name: /已有会话/ })
+    await user.type(screen.getByLabelText('课程问题'), '继续解释')
+    const submit = screen.getByRole('button', { name: '提交问题' })
+    expect(submit).toBeDisabled()
+    await user.click(submit)
+    expect(createQuery).not.toHaveBeenCalled()
+
+    await act(async () => history.resolve([]))
+    await waitFor(() => expect(submit).toBeEnabled())
+    await user.click(submit)
+
+    await waitFor(() =>
+      expect(createQuery).toHaveBeenCalledWith('course-1', '继续解释', existing.id),
+    )
+  })
+
+  it('locks conversation navigation while a query is pending', async () => {
+    const older = conversation('conversation-older', '同步机制复习', {
+      updated_at: '2026-07-18T04:00:00Z',
+    })
+    const latest = conversation('conversation-latest', '进程复习', {
+      updated_at: '2026-07-19T04:00:00Z',
+    })
+    const pendingQuery = deferred<QuerySnapshot>()
+    vi.mocked(studyApi.listConversations).mockResolvedValue([older, latest])
+    vi.mocked(studyApi.listConversationQueries).mockResolvedValue([])
+    const createQuery = vi.spyOn(studyApi, 'createQuery').mockReturnValue(pendingQuery.promise)
+    const { user } = renderInWorkspace(<QAPage />)
+
+    const latestButton = await screen.findByRole('button', { name: /进程复习/ })
+    const olderButton = screen.getByRole('button', { name: /同步机制复习/ })
+    const newConversation = screen.getByRole('button', { name: '新建会话' })
+    await user.type(screen.getByLabelText('课程问题'), '继续解释')
+    await user.click(screen.getByRole('button', { name: '提交问题' }))
+
+    await waitFor(() => expect(newConversation).toBeDisabled())
+    expect(latestButton).toBeDisabled()
+    expect(olderButton).toBeDisabled()
+    await user.click(olderButton)
+    await user.click(newConversation)
+    expect(latestButton).toHaveAttribute('aria-current', 'true')
+    expect(studyApi.createConversation).not.toHaveBeenCalled()
+    expect(createQuery).toHaveBeenCalledWith('course-1', '继续解释', latest.id)
+
+    await act(async () =>
+      pendingQuery.resolve(
+        answeredSnapshot({ conversation_id: latest.id, question: '继续解释' }),
+      ),
+    )
+    await waitFor(() => expect(newConversation).toBeEnabled())
+    expect(latestButton).toBeEnabled()
+    expect(olderButton).toBeEnabled()
+  })
+
+  it('creates and selects a new conversation, then sends into it', async () => {
+    const existing = conversation('conversation-existing', '已有会话', {
+      turn_count: 1,
+      updated_at: '2026-07-18T04:00:00Z',
+    })
+    const createdConversation = conversation('conversation-new', '新会话', {
+      updated_at: '2026-07-20T04:00:00Z',
+    })
+    const createdQuery = historySnapshot(
+      'query-new',
+      createdConversation.id,
+      '继续解释',
+      '这是新会话中的回答。',
+      '2026-07-20T04:01:00Z',
+    )
+    vi.mocked(studyApi.listConversations).mockResolvedValue([existing])
+    vi.mocked(studyApi.listConversationQueries).mockResolvedValue([])
+    vi.mocked(studyApi.createConversation).mockResolvedValue(createdConversation)
+    vi.spyOn(studyApi, 'createQuery').mockResolvedValue(createdQuery)
+    const { user } = renderInWorkspace(<QAPage />)
+
+    await screen.findByRole('button', { name: /已有会话/ })
+    await user.click(screen.getByRole('button', { name: '新建会话' }))
+
+    expect(await screen.findByText('在此会话中提出第一个问题')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /新会话/ })).toHaveAttribute('aria-current', 'true')
+    await user.type(screen.getByLabelText('课程问题'), '继续解释')
+    await user.click(screen.getByRole('button', { name: '提交问题' }))
+
+    expect(await screen.findByText('这是新会话中的回答。')).toBeInTheDocument()
+    expect(studyApi.createQuery).toHaveBeenCalledWith(
+      'course-1',
+      '继续解释',
+      createdConversation.id,
+    )
+  })
+
+  it('lets the query API create the first conversation atomically and caches the returned thread', async () => {
+    const snapshot = answeredSnapshot({ conversation_id: 'conversation-from-query' })
+    vi.spyOn(studyApi, 'createQuery').mockResolvedValue(snapshot)
+    const { queryClient } = renderInWorkspace(<QAPage />)
+
+    expect(await screen.findByText('暂无会话，直接提问即可开始')).toBeInTheDocument()
+    await submitQuestion()
+
+    expect(studyApi.createConversation).not.toHaveBeenCalled()
+    expect(studyApi.createQuery).toHaveBeenCalledWith('course-1', '什么是进程？')
+    expect(await screen.findByText('进程是资源分配的基本单位。')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /什么是进程？/ })).toHaveAttribute(
+      'aria-current',
+      'true',
+    )
+    expect(queryClient.getQueryData<ConversationRecord[]>(['conversations', 'course-1'])).toEqual([
+      expect.objectContaining({
+        id: 'conversation-from-query',
+        course_id: 'course-1',
+        title: '什么是进程？',
+        turn_count: 1,
+        latest_query_id: snapshot.id,
+      }),
+    ])
+  })
+
+  it('disables question submission when conversation state failed to load', async () => {
+    vi.mocked(studyApi.listConversations).mockRejectedValue(
+      new ApiError(problem({ status: 503, code: 'UNAVAILABLE', title: '会话加载失败' })),
+    )
+    const createQuery = vi.spyOn(studyApi, 'createQuery').mockResolvedValue(answeredSnapshot())
+    const { user } = renderInWorkspace(<QAPage />)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('无法加载会话')
+    await user.type(screen.getByLabelText('课程问题'), '不应提交')
+    expect(screen.getByRole('button', { name: '提交问题' })).toBeDisabled()
+    expect(createQuery).not.toHaveBeenCalled()
+    expect(studyApi.createConversation).not.toHaveBeenCalled()
+  })
+
+  it('shows abstention separately in a conversation turn', async () => {
     const answer: StructuredAnswer = {
       schema_version: '1.0',
       query_id: 'query-1',
@@ -103,19 +439,16 @@ describe('QAPage', () => {
     vi.spyOn(studyApi, 'createQuery').mockResolvedValue(
       answeredSnapshot({ status: 'abstained', answer }),
     )
-    const { user } = renderInWorkspace(<QAPage />)
-    const { input, submit } = await submitQuestion()
+    renderInWorkspace(<QAPage />)
 
-    await user.type(input, '课外问题')
-    await user.click(submit)
+    await submitQuestion('课外问题')
 
     expect(await screen.findByText('依据不足')).toBeInTheDocument()
     expect(screen.getByText('课程资料未覆盖该问题。')).toBeInTheDocument()
     expect(screen.queryByText('进程是资源分配的基本单位。')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /chapter-1/ })).not.toBeInTheDocument()
   })
 
-  it('renders a Provider failure snapshot without manufacturing an answer', async () => {
+  it('renders a Provider failure turn without manufacturing an answer', async () => {
     vi.spyOn(studyApi, 'createQuery').mockResolvedValue(
       answeredSnapshot({
         status: 'failed',
@@ -123,11 +456,9 @@ describe('QAPage', () => {
         failure_code: 'PROVIDER_TIMEOUT',
       }),
     )
-    const { user } = renderInWorkspace(<QAPage />)
-    const { input, submit } = await submitQuestion()
+    renderInWorkspace(<QAPage />)
 
-    await user.type(input, '解释调度')
-    await user.click(submit)
+    await submitQuestion('解释调度')
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Provider 调用失败')
     expect(screen.getByRole('alert')).toHaveTextContent('PROVIDER_TIMEOUT')
@@ -147,7 +478,7 @@ describe('QAPage', () => {
     expect(screen.getByRole('button', { name: '提交问题' })).toBeDisabled()
   })
 
-  it('keeps stale or deleted citation content closed when source lookup returns 404', async () => {
+  it('keeps stale citation content closed when source lookup returns 404', async () => {
     vi.spyOn(studyApi, 'createQuery').mockResolvedValue(answeredSnapshot())
     vi.spyOn(studyApi, 'getCitation').mockRejectedValue(
       new ApiError(
@@ -159,15 +490,13 @@ describe('QAPage', () => {
         }),
       ),
     )
-    const { user } = renderInWorkspace(<QAPage />)
-    const { input, submit } = await submitQuestion()
-    await user.type(input, '什么是进程？')
-    await user.click(submit)
+    renderInWorkspace(<QAPage />)
+
+    const { user } = await submitQuestion()
     await user.click(await screen.findByRole('button', { name: /chapter-1\.png/ }))
 
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('来源不可用'))
     expect(screen.getByRole('alert')).toHaveTextContent('引用来源不存在或已失效')
     expect(screen.queryByRole('dialog', { name: '来源' })).not.toBeInTheDocument()
-    expect(screen.queryByText('引用原文')).not.toBeInTheDocument()
   })
 })

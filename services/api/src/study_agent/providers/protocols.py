@@ -31,9 +31,16 @@ class Passage:
 
 
 @dataclass(frozen=True, slots=True)
+class ConversationContextTurn:
+    question: str
+    answer_markdown: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class EvidencePrompt:
     query: str
     passages: tuple[Passage, ...]
+    conversation_context: tuple[ConversationContextTurn, ...] = ()
     response_schema_version: str = "1.0"
 
 

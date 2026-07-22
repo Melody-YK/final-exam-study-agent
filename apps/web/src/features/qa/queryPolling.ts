@@ -4,7 +4,8 @@ export type QueryStreamConnection = 'connecting' | 'open' | 'reconnecting'
 
 export function isTerminal(snapshot: QuerySnapshot | undefined): boolean {
   return Boolean(
-    snapshot?.answer || ['failed', 'abstained', 'answered'].includes(snapshot?.status ?? ''),
+    snapshot?.answer ||
+      ['failed', 'abstained', 'answered', 'invalidated'].includes(snapshot?.status ?? ''),
   )
 }
 

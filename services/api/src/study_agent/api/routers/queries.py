@@ -16,6 +16,7 @@ from study_agent.identity.principal import Principal, PrincipalProvider
 from study_agent.infrastructure.db.session import Database
 from study_agent.modules.answering.events import QueryEventReader
 from study_agent.modules.answering.queries import (
+    ConversationSnapshot,
     QueryRepository,
     QueryService,
     QuerySnapshot,
@@ -36,6 +37,24 @@ class QueryCreate(BaseModel):
 
     question: str = Field(min_length=1, max_length=8_000)
     document_ids: list[str] | None = Field(default=None, max_length=100)
+    conversation_id: str | None = Field(default=None, min_length=1, max_length=36)
+
+
+class ConversationCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+
+
+class ConversationResponse(BaseModel):
+    id: str
+    course_id: str
+    title: str
+    turn_count: int
+    latest_query_id: str | None
+    latest_question: str | None
+    created_at: datetime
+    updated_at: datetime
 
 
 class QueryTraceResponse(BaseModel):
@@ -47,6 +66,7 @@ class QueryTraceResponse(BaseModel):
 class QueryResponse(BaseModel):
     id: str
     course_id: str
+    conversation_id: str
     question: str
     status: str
     answer: StructuredAnswer | None
@@ -95,6 +115,7 @@ def _response(snapshot: QuerySnapshot) -> QueryResponse:
     return QueryResponse(
         id=snapshot.id,
         course_id=snapshot.course_id,
+        conversation_id=snapshot.conversation_id,
         question=snapshot.question,
         status=snapshot.status,
         answer=snapshot.answer,
@@ -108,6 +129,97 @@ def _response(snapshot: QuerySnapshot) -> QueryResponse:
         created_at=snapshot.created_at,
         completed_at=snapshot.completed_at,
     )
+
+
+def _conversation_response(snapshot: ConversationSnapshot) -> ConversationResponse:
+    return ConversationResponse(
+        id=snapshot.id,
+        course_id=snapshot.course_id,
+        title=snapshot.title,
+        turn_count=snapshot.turn_count,
+        latest_query_id=snapshot.latest_query_id,
+        latest_question=snapshot.latest_question,
+        created_at=snapshot.created_at,
+        updated_at=snapshot.updated_at,
+    )
+
+
+@router.post(
+    "/courses/{course_id}/conversations",
+    response_model=ConversationResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_conversation(
+    course_id: str,
+    payload: ConversationCreate,
+    request: Request,
+) -> ConversationResponse:
+    try:
+        conversation = await _repository(request).create_conversation(
+            _principal(request),
+            course_id,
+            payload.title,
+        )
+    except ValueError as exc:
+        raise ApiProblem(
+            status=422,
+            code=ProblemCode.INVALID_REQUEST,
+            title="会话标题无效",
+        ) from exc
+    except LookupError as exc:
+        raise ApiProblem(
+            status=404,
+            code=ProblemCode.RESOURCE_NOT_FOUND,
+            title="课程不存在",
+        ) from exc
+    return _conversation_response(conversation)
+
+
+@router.get(
+    "/courses/{course_id}/conversations",
+    response_model=list[ConversationResponse],
+)
+async def list_conversations(
+    course_id: str,
+    request: Request,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+) -> list[ConversationResponse]:
+    try:
+        conversations = await _repository(request).list_conversations(
+            _principal(request),
+            course_id,
+            limit=limit,
+        )
+    except LookupError as exc:
+        raise ApiProblem(
+            status=404,
+            code=ProblemCode.RESOURCE_NOT_FOUND,
+            title="课程不存在",
+        ) from exc
+    return [_conversation_response(conversation) for conversation in conversations]
+
+
+@router.get(
+    "/conversations/{conversation_id}/queries",
+    response_model=list[QueryResponse],
+)
+async def list_conversation_queries(
+    conversation_id: str,
+    request: Request,
+    limit: Annotated[int, Query(ge=1, le=100)] = 100,
+) -> list[QueryResponse]:
+    snapshots = await _repository(request).list_for_conversation(
+        _principal(request),
+        conversation_id,
+        limit=limit,
+    )
+    if snapshots is None:
+        raise ApiProblem(
+            status=404,
+            code=ProblemCode.RESOURCE_NOT_FOUND,
+            title="会话不存在",
+        )
+    return [_response(snapshot) for snapshot in snapshots]
 
 
 @router.post(
@@ -135,6 +247,7 @@ async def create_query(
             course_id,
             payload.question,
             document_ids=document_ids,
+            conversation_id=payload.conversation_id,
         )
     except LookupError as exc:
         raise ApiProblem(
@@ -143,6 +256,27 @@ async def create_query(
             title="课程或资料不存在",
         ) from exc
     return _response(snapshot)
+
+
+@router.get("/courses/{course_id}/queries", response_model=list[QueryResponse])
+async def list_queries(
+    course_id: str,
+    request: Request,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+) -> list[QueryResponse]:
+    try:
+        snapshots = await _repository(request).list_for_course(
+            _principal(request),
+            course_id,
+            limit=limit,
+        )
+    except LookupError as exc:
+        raise ApiProblem(
+            status=404,
+            code=ProblemCode.RESOURCE_NOT_FOUND,
+            title="课程不存在",
+        ) from exc
+    return [_response(snapshot) for snapshot in snapshots]
 
 
 @router.get("/queries/{query_id}", response_model=QueryResponse)

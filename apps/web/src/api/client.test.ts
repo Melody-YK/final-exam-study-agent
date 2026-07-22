@@ -1,10 +1,53 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { noteRecord, problem } from '../test/fixtures'
+import { answeredSnapshot, noteRecord, problem } from '../test/fixtures'
 import { documentRecord } from '../test/fixtures'
 import { StudyApiClient } from './client'
 
 describe('StudyApiClient', () => {
+  it('omits conversation_id for an atomic first query and includes it for an existing thread', async () => {
+    const snapshot = answeredSnapshot()
+    const fetchMock = vi.fn().mockImplementation(async () =>
+      Promise.resolve(
+        new Response(JSON.stringify(snapshot), {
+          status: 202,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const client = new StudyApiClient('/api/v1')
+
+    await client.createQuery('course-1', '首次提问')
+    await client.createQuery('course-1', '追问', 'conversation-1')
+
+    const firstInit = fetchMock.mock.calls[0]?.[1] as RequestInit
+    const followUpInit = fetchMock.mock.calls[1]?.[1] as RequestInit
+    expect(JSON.parse(String(firstInit.body))).toEqual({ question: '首次提问' })
+    expect(JSON.parse(String(followUpInit.body))).toEqual({
+      question: '追问',
+      conversation_id: 'conversation-1',
+    })
+  })
+
+  it('lists the latest course queries with an explicit bounded limit', async () => {
+    const snapshots = [answeredSnapshot()]
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(snapshots), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const client = new StudyApiClient('/api/v1')
+
+    await expect(client.listQueries('course-1')).resolves.toEqual(snapshots)
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/courses/course-1/queries?limit=50',
+      expect.objectContaining({ headers: expect.any(Headers) }),
+    )
+  })
+
   it('hashes and completes the browser upload sequence without bypassing the API', async () => {
     const digest = new Uint8Array(32).fill(0xab).buffer
     vi.stubGlobal('crypto', {

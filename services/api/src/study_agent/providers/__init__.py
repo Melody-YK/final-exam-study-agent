@@ -7,6 +7,7 @@ from study_agent.providers.factory import ProviderRegistry, build_provider_regis
 from study_agent.providers.protocols import (
     ChatProvider,
     Clock,
+    ConversationContextTurn,
     EmbeddingContract,
     EmbeddingProvider,
     EvidencePrompt,
@@ -24,6 +25,7 @@ from study_agent.providers.protocols import (
 __all__ = [
     "ChatProvider",
     "Clock",
+    "ConversationContextTurn",
     "DeepSeekChatProvider",
     "EmbeddingContract",
     "EmbeddingProvider",

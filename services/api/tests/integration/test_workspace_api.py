@@ -16,6 +16,7 @@ from study_agent.identity.principal import (
 from study_agent.infrastructure.db.migrations import upgrade_database
 from study_agent.infrastructure.db.models import (
     AnswerDependencyModel,
+    ConversationModel,
     DocumentModel,
     DocumentRevisionModel,
     EmbeddingModelModel,
@@ -357,10 +358,20 @@ async def test_lab_trace_projects_only_linked_persisted_retrieval_and_query_fact
             timings_ms={"total": 9.5},
             reranker_applied=False,
         )
+        conversation = ConversationModel(
+            id=str(uuid4()),
+            user_id=course.user_id,
+            course_id=course.id,
+            title="实验室测试",
+            auto_title_pending=False,
+        )
+        session.add(conversation)
+        await session.flush()
         query = QueryRunModel(
             id=query_id,
             user_id=course.user_id,
             course_id=course.id,
+            conversation_id=conversation.id,
             question="什么是词法分析?",
             question_sha256="1" * 64,
             requested_document_ids=[document_id],
@@ -451,6 +462,15 @@ async def test_lab_trace_projects_persisted_refusal_and_partial_usage(
     query_id = str(uuid4())
 
     async with database.session(owner) as session:
+        conversation = ConversationModel(
+            id=str(uuid4()),
+            user_id=course.user_id,
+            course_id=course.id,
+            title="拒答测试",
+            auto_title_pending=False,
+        )
+        session.add(conversation)
+        await session.flush()
         session.add(
             RetrievalTraceModel(
                 id=trace_id,
@@ -473,6 +493,7 @@ async def test_lab_trace_projects_persisted_refusal_and_partial_usage(
                 id=query_id,
                 user_id=course.user_id,
                 course_id=course.id,
+                conversation_id=conversation.id,
                 question="什么是拥塞控制?",
                 question_sha256="4" * 64,
                 requested_document_ids=[],

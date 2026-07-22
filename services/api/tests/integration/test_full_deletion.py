@@ -12,6 +12,7 @@ from study_agent.infrastructure.db.migrations import upgrade_database
 from study_agent.infrastructure.db.models import (
     AnswerDependencyModel,
     ChunkEmbeddingModel,
+    ConversationModel,
     CourseModel,
     DocumentModel,
     DocumentRevisionModel,
@@ -180,10 +181,20 @@ async def test_full_document_deletion_invalidates_sources_and_cleans_dependencie
         course_model.active_lexical_index_id = manifest.id
         document.active_revision_id = revision_id
 
+        conversation = ConversationModel(
+            id=str(uuid4()),
+            user_id=course.user_id,
+            course_id=course.id,
+            title="删除测试",
+            auto_title_pending=False,
+        )
+        session.add(conversation)
+        await session.flush()
         query = QueryRunModel(
             id="query-1",
             user_id=course.user_id,
             course_id=course.id,
+            conversation_id=conversation.id,
             question="什么是进程?",
             question_sha256="0" * 64,
             requested_document_ids=[],

@@ -70,6 +70,7 @@ export function answeredSnapshot(overrides: Partial<QuerySnapshot> = {}): QueryS
   return {
     id: 'query-1',
     course_id: 'course-1',
+    conversation_id: 'conversation-1',
     question: '什么是进程？',
     status: 'answered',
     answer,

@@ -78,10 +78,16 @@ function note(version = 1) {
   }
 }
 
-function answered(question: string, queryId: string) {
+function answered(
+  question: string,
+  queryId: string,
+  conversationId: string,
+  createdAt: string,
+) {
   return {
     id: queryId,
     course_id: courseId,
+    conversation_id: conversationId,
     question,
     status: 'answered',
     answer: {
@@ -117,14 +123,19 @@ function answered(question: string, queryId: string) {
       retrieval_snapshot_id: 'snapshot-e2e',
       retrieval_trace_id: 'retrieval-e2e',
     },
-    created_at: '2026-07-19T05:20:00Z',
-    completed_at: '2026-07-19T05:20:01Z',
+    created_at: createdAt,
+    completed_at: new Date(Date.parse(createdAt) + 1_000).toISOString(),
   }
 }
 
-function abstained(question: string, queryId: string) {
+function abstained(
+  question: string,
+  queryId: string,
+  conversationId: string,
+  createdAt: string,
+) {
   return {
-    ...answered(question, queryId),
+    ...answered(question, queryId, conversationId, createdAt),
     status: 'abstained',
     answer: {
       schema_version: '1.0',
@@ -145,7 +156,41 @@ export interface MockApiOptions {
 export async function installMockApi(page: Page, options: MockApiOptions = {}) {
   const providerAvailable = options.providerAvailable ?? true
   let notesVersion = 1
+  let conversationSequence = 0
   let querySequence = 0
+  type MockQuerySnapshot = ReturnType<typeof answered> | ReturnType<typeof abstained>
+  type MockConversation = {
+    id: string
+    course_id: string
+    title: string
+    turn_count: number
+    latest_query_id: string | null
+    latest_question: string | null
+    created_at: string
+    updated_at: string
+  }
+  const conversations: MockConversation[] = []
+  const conversationQueries = new Map<string, MockQuerySnapshot[]>()
+  const queries = new Map<string, MockQuerySnapshot>()
+  const mockTimestamp = (sequence: number) =>
+    new Date(Date.parse('2026-07-19T05:20:00Z') + sequence * 1_000).toISOString()
+  const createConversation = (title: string): MockConversation => {
+    conversationSequence += 1
+    const createdAt = mockTimestamp(conversationSequence)
+    const conversation = {
+      id: `conversation-e2e-${conversationSequence}`,
+      course_id: courseId,
+      title,
+      turn_count: 0,
+      latest_query_id: null,
+      latest_question: null,
+      created_at: createdAt,
+      updated_at: createdAt,
+    }
+    conversations.push(conversation)
+    conversationQueries.set(conversation.id, [])
+    return conversation
+  }
   let uploadDeclaration:
     | {
         filename: string
@@ -290,24 +335,97 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
     if (method === 'GET' && path === '/deletions/deletion-e2e') {
       return route.fulfill({ json: { id: 'deletion-e2e', target_id: 'document-ready', target_type: 'document', deletion_epoch: 1, status: 'completed', attempt_count: 1, completed_at: '2026-07-19T05:30:00Z' } })
     }
+    if (method === 'GET' && path === `/courses/${courseId}/conversations`) {
+      const ordered = [...conversations].sort(
+        (left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at),
+      )
+      return route.fulfill({ json: ordered })
+    }
+    if (method === 'POST' && path === `/courses/${courseId}/conversations`) {
+      const payload = request.postDataJSON() as { title?: string | null }
+      const conversation = createConversation(payload.title?.trim() || '新会话')
+      return route.fulfill({ status: 201, json: conversation })
+    }
+    if (method === 'GET' && /^\/conversations\/[^/]+\/queries$/.test(path)) {
+      const conversationId = decodeURIComponent(path.split('/')[2] ?? '')
+      const history = conversationQueries.get(conversationId)
+      if (history === undefined) {
+        return route.fulfill({
+          status: 404,
+          json: problem(404, 'RESOURCE_NOT_FOUND', '会话不存在'),
+        })
+      }
+      const ordered = [...history].sort(
+        (left, right) => Date.parse(left.created_at) - Date.parse(right.created_at),
+      )
+      return route.fulfill({ json: ordered })
+    }
     if (method === 'POST' && path === `/courses/${courseId}/queries`) {
-      const payload = request.postDataJSON() as { question: string }
+      const payload = request.postDataJSON() as {
+        question: string
+        conversation_id?: string | null
+      }
+      let conversation: MockConversation | undefined
+      if (typeof payload.conversation_id === 'string') {
+        conversation = conversations.find((item) => item.id === payload.conversation_id)
+        if (conversation === undefined) {
+          return route.fulfill({
+            status: 404,
+            json: problem(404, 'RESOURCE_NOT_FOUND', '会话不存在'),
+          })
+        }
+      } else {
+        conversation = createConversation(payload.question.trim())
+      }
       querySequence += 1
       const queryId = `query-e2e-${querySequence}`
+      const createdAt = mockTimestamp(100 + querySequence)
+      const snapshot = payload.question.includes('课件外')
+        ? abstained(payload.question, queryId, conversation.id, createdAt)
+        : answered(payload.question, queryId, conversation.id, createdAt)
+      const history = conversationQueries.get(conversation.id)
+      if (history === undefined) {
+        return route.fulfill({
+          status: 404,
+          json: problem(404, 'RESOURCE_NOT_FOUND', '会话不存在'),
+        })
+      }
+      if (conversation.turn_count === 0 && conversation.title === '新会话') {
+        conversation.title = payload.question.trim()
+      }
+      history.push(snapshot)
+      queries.set(queryId, snapshot)
+      conversation.turn_count += 1
+      conversation.latest_query_id = queryId
+      conversation.latest_question = payload.question
+      conversation.updated_at = createdAt
       return route.fulfill({
         status: 202,
-        json: payload.question.includes('课件外')
-          ? abstained(payload.question, queryId)
-          : answered(payload.question, queryId),
+        json: snapshot,
       })
     }
-    if (method === 'GET' && /^\/queries\/query-e2e-\d+$/.test(path)) {
-      return route.fulfill({ json: answered('什么是进程？', path.split('/')[2] ?? 'query-e2e') })
+    if (method === 'GET' && /^\/queries\/[^/]+$/.test(path)) {
+      const queryId = decodeURIComponent(path.split('/')[2] ?? '')
+      const snapshot = queries.get(queryId)
+      if (snapshot === undefined) {
+        return route.fulfill({
+          status: 404,
+          json: problem(404, 'RESOURCE_NOT_FOUND', '问答不存在'),
+        })
+      }
+      return route.fulfill({ json: snapshot })
     }
     if (
       method === 'GET' &&
       /^\/queries\/query-e2e-\d+\/citations\/citation-e2e$/.test(path)
     ) {
+      const queryId = path.split('/')[2] ?? ''
+      if (!queries.has(queryId)) {
+        return route.fulfill({
+          status: 404,
+          json: problem(404, 'RESOURCE_NOT_FOUND', '问答不存在'),
+        })
+      }
       return route.fulfill({
         json: {
           citation_id: 'citation-e2e',
