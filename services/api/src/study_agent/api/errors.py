@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 from urllib.parse import urlparse
 
@@ -37,6 +38,21 @@ class ProblemCode(StrEnum):
     EVENT_HISTORY_EXPIRED = "EVENT_HISTORY_EXPIRED"
     PRECONDITION_REQUIRED = "PRECONDITION_REQUIRED"
     VERSION_CONFLICT = "VERSION_CONFLICT"
+    NOTE_PROVIDER_NOT_CONFIGURED = "NOTE_PROVIDER_NOT_CONFIGURED"
+    NOTE_PROVIDER_TEMPORARILY_UNAVAILABLE = "NOTE_PROVIDER_TEMPORARILY_UNAVAILABLE"
+    NOTE_DOCUMENT_NOT_READY = "NOTE_DOCUMENT_NOT_READY"
+    NOTE_REQUEST_LIMIT_EXCEEDED = "NOTE_REQUEST_LIMIT_EXCEEDED"
+    NOTE_ACTIVE_BATCH_LIMITED = "NOTE_ACTIVE_BATCH_LIMITED"
+    NOTE_SOURCE_CHANGED = "NOTE_SOURCE_CHANGED"
+    NOTE_COVERAGE_INCOMPLETE = "NOTE_COVERAGE_INCOMPLETE"
+    NOTE_OUTPUT_INVALID = "NOTE_OUTPUT_INVALID"
+    NOTE_CITATION_INVALID = "NOTE_CITATION_INVALID"
+    NOTE_VERSION_NOT_FOUND = "NOTE_VERSION_NOT_FOUND"
+    NOTE_BATCH_NOT_RETRYABLE = "NOTE_BATCH_NOT_RETRYABLE"
+    NOTE_EXPORT_UNAVAILABLE = "NOTE_EXPORT_UNAVAILABLE"
+    NOTE_EXPORT_REVOKED = "NOTE_EXPORT_REVOKED"
+    NOTE_EXPORT_CONTENT_UNSUPPORTED = "NOTE_EXPORT_CONTENT_UNSUPPORTED"
+    NOTE_EXPORT_RENDER_FAILED = "NOTE_EXPORT_RENDER_FAILED"
 
 
 class FieldError(BaseModel):
@@ -84,13 +100,16 @@ class ApiProblem(Exception):
         title: str,
         detail: str | None = None,
         retryable: bool = False,
+        retry_after_ms: int | None = None,
     ) -> None:
-        super().__init__(detail or title)
+        safe_detail = sanitize_problem_detail(detail)
+        super().__init__(safe_detail or title)
         self.status = status
         self.code = code
         self.title = title
-        self.detail = detail
+        self.detail = safe_detail
         self.retryable = retryable
+        self.retry_after_ms = retry_after_ms
 
 
 async def api_problem_handler(request: Request, exc: ApiProblem) -> JSONResponse:
@@ -104,12 +123,67 @@ async def api_problem_handler(request: Request, exc: ApiProblem) -> JSONResponse
         instance=request.url.path,
         trace_id=trace_id,
         retryable=exc.retryable,
+        retry_after_ms=exc.retry_after_ms,
     )
     return JSONResponse(
         status_code=exc.status,
         content=problem.model_dump(mode="json"),
         media_type="application/problem+json",
     )
+
+
+_SENSITIVE_DETAIL = re.compile(
+    r"""
+    (?:
+        (?<![A-Za-z0-9])
+        (?:
+            api[\s_-]*key
+            | access[\s_-]*token
+            | refresh[\s_-]*token
+            | authorization
+            | bearer
+            | client[\s_-]*secret
+            | password
+            | secret
+            | lease[\s_-]*token
+            | request[\s_-]*body
+            | response[\s_-]*body
+            | prompt
+            | object[\s_-]*key
+            | stack(?:[\s_-]*trace)?
+            | traceback
+        )
+        (?![A-Za-z0-9])
+        | \b(?:s3|file)://
+        | (?:^|[\s='\"]|\bpath\s*:\s*)\s*[A-Za-z]:[\\/]
+        | (?:^|[\s='\"]|\bpath\s*:\s*)\s*\\\\[^\\\s]+\\[^\\\s]+
+        | (?:^|[\s='\"]|\bpath\s*:\s*)\s*/
+          (?!
+              api(?:/|$)
+              | worker(?:/|$)
+              | healthz(?:[/?#]|$)
+              | docs(?:[/?#]|$)
+              | redoc(?:[/?#]|$)
+              | openapi\.json(?:[?#]|$)
+          )
+          (?=[^\s'\"]+)
+    )
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def sanitize_problem_detail(detail: str | None) -> str | None:
+    """Keep public details actionable without exposing upstream/private data."""
+
+    if detail is None:
+        return None
+    normalized = " ".join(str(detail).replace("\r", " ").replace("\n", " ").split())
+    if not normalized:
+        return None
+    if len(normalized) > 500 or _SENSITIVE_DETAIL.search(normalized):
+        return "请求未完成, 请根据错误码和追踪编号重试或联系管理员。"
+    return normalized
 
 
 async def request_validation_handler(request: Request, exc: RequestValidationError) -> JSONResponse:

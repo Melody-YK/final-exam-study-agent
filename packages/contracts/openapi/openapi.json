@@ -1549,6 +1549,32 @@
         "title": "NoteSourceResponse",
         "type": "object"
       },
+      "NoteWorkflowCapabilityResponse": {
+        "description": "Capability projection for the independently gated note workflow.",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "eta": {
+            "$ref": "#/components/schemas/CapabilityResponse"
+          },
+          "export": {
+            "$ref": "#/components/schemas/CapabilityResponse"
+          },
+          "generation": {
+            "$ref": "#/components/schemas/CapabilityResponse"
+          }
+        },
+        "required": [
+          "enabled",
+          "generation",
+          "export",
+          "eta"
+        ],
+        "title": "NoteWorkflowCapabilityResponse",
+        "type": "object"
+      },
       "PageCheckpointRequest": {
         "additionalProperties": false,
         "properties": {
@@ -1881,6 +1907,9 @@
           "native_parser": {
             "$ref": "#/components/schemas/CapabilityResponse"
           },
+          "note_workflow": {
+            "$ref": "#/components/schemas/NoteWorkflowCapabilityResponse"
+          },
           "ocr_parser": {
             "$ref": "#/components/schemas/CapabilityResponse"
           },
@@ -1893,7 +1922,8 @@
           "embedding",
           "native_parser",
           "ocr_parser",
-          "demo_lab_enabled"
+          "demo_lab_enabled",
+          "note_workflow"
         ],
         "title": "RuntimeCapabilitiesResponse",
         "type": "object"

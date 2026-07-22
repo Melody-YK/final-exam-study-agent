@@ -13,6 +13,12 @@ export const availableCapabilities: RuntimeCapabilities = {
   native_parser: { status: 'available', label: '原生解析可用' },
   ocr_parser: { status: 'worker_required', label: '需要本地 OCR Worker' },
   demo_lab_enabled: true,
+  note_workflow: {
+    enabled: true,
+    generation: { status: 'available', label: '异步笔记生成已就绪' },
+    export: { status: 'available', label: 'DOCX 导出已就绪' },
+    eta: { status: 'available', label: '数值 ETA 已启用' },
+  },
 }
 
 const course: Course = { id: 'course-1', title: '操作系统', lifecycle: 'active' }

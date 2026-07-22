@@ -243,6 +243,24 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
           native_parser: { status: 'available', label: '原生解析可用' },
           ocr_parser: { status: 'worker_required', label: '需要本地 OCR Worker' },
           demo_lab_enabled: true,
+          note_workflow: {
+            enabled: false,
+            generation: {
+              status: 'unavailable',
+              label: '异步笔记生成功能未启用',
+              error_code: 'NOTE_WORKFLOW_DISABLED',
+            },
+            export: {
+              status: 'unavailable',
+              label: 'DOCX 导出未启用',
+              error_code: 'NOTE_EXPORT_UNAVAILABLE',
+            },
+            eta: {
+              status: 'unavailable',
+              label: '数值 ETA 未启用',
+              error_code: 'NOTE_ETA_UNAVAILABLE',
+            },
+          },
         },
       })
     }

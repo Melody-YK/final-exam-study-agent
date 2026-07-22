@@ -3,6 +3,31 @@ from pathlib import Path
 
 from study_agent.openapi import build_openapi_document
 
+FORBIDDEN_PUBLIC_SCHEMA_PREFIXES = (
+    "CoverageUnit",
+    "EtaConfidence",
+    "EtaRange",
+    "EtaUnavailableReason",
+    "MergedNoteBatch",
+    "NoteAst",
+    "NoteBatch",
+    "NoteContentAst",
+    "NoteCoverage",
+    "NoteExport",
+    "NoteGeneration",
+    "NoteInput",
+    "NoteItem",
+    "NoteSourceOverlay",
+    "NoteVersion",
+    "PerDocumentNoteBatch",
+    "StructuredNoteDraft",
+)
+
+
+def _assert_dormant_note_workflow_schemas_are_absent(schemas: dict[str, object]) -> None:
+    leaked = sorted(name for name in schemas if name.startswith(FORBIDDEN_PUBLIC_SCHEMA_PREFIXES))
+    assert leaked == []
+
 
 def test_openapi_document_is_stable_and_contains_health_contract() -> None:
     document = build_openapi_document()
@@ -30,10 +55,32 @@ def test_query_conversation_contract_is_present_without_note_workflow_routes() -
 
     excluded_route_fragment = "-".join(("note", "batches"))
     assert all(excluded_route_fragment not in path for path in paths)
-    excluded_prefixes = tuple(
-        f"Note{suffix}" for suffix in ("Batch", "Export", "Generation", "Version")
+    _assert_dormant_note_workflow_schemas_are_absent(schemas)
+
+
+def test_note_workflow_capability_preserves_legacy_notes_and_hides_dormant_contracts() -> None:
+    document = build_openapi_document()
+    paths = document["paths"]
+    schemas = document["components"]["schemas"]
+
+    runtime_capabilities = schemas["RuntimeCapabilitiesResponse"]
+    assert "note_workflow" in runtime_capabilities["required"]
+    assert runtime_capabilities["properties"]["note_workflow"]["$ref"].endswith(
+        "/NoteWorkflowCapabilityResponse"
     )
-    assert not any(name.startswith(excluded_prefixes) for name in schemas)
+
+    note_workflow = schemas["NoteWorkflowCapabilityResponse"]
+    expected_fields = {"enabled", "generation", "export", "eta"}
+    assert set(note_workflow["properties"]) == expected_fields
+    assert set(note_workflow["required"]) == expected_fields
+
+    legacy_create = paths["/api/v1/courses/{course_id}/notes"]["post"]
+    response_schema = legacy_create["responses"]["201"]["content"]["application/json"]["schema"]
+    assert response_schema["$ref"].endswith("/NoteResponse")
+    assert "/api/v1/notes/{note_id}/versions/{version}" not in paths
+    assert all("note-batches" not in path for path in paths)
+
+    _assert_dormant_note_workflow_schemas_are_absent(schemas)
 
 
 def test_committed_openapi_matches_generated_document() -> None:
