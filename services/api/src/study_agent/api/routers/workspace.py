@@ -67,12 +67,22 @@ class CapabilityResponse(BaseModel):
     error_code: str | None = None
 
 
+class NoteWorkflowCapabilityResponse(BaseModel):
+    """Capability projection for the independently gated note workflow."""
+
+    enabled: bool
+    generation: CapabilityResponse
+    export: CapabilityResponse
+    eta: CapabilityResponse
+
+
 class RuntimeCapabilitiesResponse(BaseModel):
     provider: CapabilityResponse
     embedding: CapabilityResponse
     native_parser: CapabilityResponse
     ocr_parser: CapabilityResponse
     demo_lab_enabled: bool
+    note_workflow: NoteWorkflowCapabilityResponse
 
 
 class ParseRetryRequest(BaseModel):
@@ -160,6 +170,26 @@ async def get_runtime_capabilities(request: Request) -> RuntimeCapabilitiesRespo
     embedding_status: Literal["available", "not_configured"] = (
         "available" if settings.embedding_configured else "not_configured"
     )
+    generation_ready = settings.note_workflow_configured
+    generation_capability = CapabilityResponse(
+        status="available" if generation_ready else "unavailable",
+        label=(
+            "异步笔记生成已就绪" if generation_ready else "异步笔记生成功能未启用或缺少受信 Runner"
+        ),
+        error_code=None if generation_ready else "NOTE_WORKFLOW_DISABLED",
+    )
+    export_ready = settings.note_docx_configured
+    export_capability = CapabilityResponse(
+        status="available" if export_ready else "unavailable",
+        label="DOCX 导出已就绪" if export_ready else "DOCX 导出未启用或缺少 Renderer",
+        error_code=None if export_ready else "NOTE_EXPORT_UNAVAILABLE",
+    )
+    eta_ready = settings.note_numeric_eta_enabled and generation_ready
+    eta_capability = CapabilityResponse(
+        status="available" if eta_ready else "unavailable",
+        label="数值 ETA 已启用" if eta_ready else "样本不足时仅显示阶段耗时",
+        error_code=None if eta_ready else "NOTE_ETA_UNAVAILABLE",
+    )
     return RuntimeCapabilitiesResponse(
         provider=CapabilityResponse(
             status=chat_status,
@@ -192,6 +222,12 @@ async def get_runtime_capabilities(request: Request) -> RuntimeCapabilitiesRespo
             error_code=None if availability.ocr_parser else "OCR_WORKER_REQUIRED",
         ),
         demo_lab_enabled=settings.demo_lab_enabled,
+        note_workflow=NoteWorkflowCapabilityResponse(
+            enabled=settings.note_async_workflow_enabled,
+            generation=generation_capability,
+            export=export_capability,
+            eta=eta_capability,
+        ),
     )
 
 

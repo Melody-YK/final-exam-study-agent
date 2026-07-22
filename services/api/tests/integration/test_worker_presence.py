@@ -39,6 +39,14 @@ async def test_capabilities_follow_recent_authenticated_worker_claims(
         lexical_index_root=tmp_path / "lexical",
         worker_token=SecretStr("worker-presence-test-token"),
         worker_presence_ttl_seconds=45,
+        embedding_api_key=SecretStr("embedding-test-key"),
+        deepseek_api_key=SecretStr("chat-test-key"),
+        note_async_workflow_enabled=True,
+        note_runner_enabled=True,
+        note_docx_export_enabled=True,
+        note_export_runner_enabled=True,
+        note_docx_renderer_enabled=True,
+        note_numeric_eta_enabled=True,
     )
     app = create_app(
         settings=settings,
@@ -76,10 +84,17 @@ async def test_capabilities_follow_recent_authenticated_worker_claims(
         expired = await client.get("/api/v1/capabilities")
 
     assert before.json()["native_parser"]["status"] == "worker_required"
+    note_workflow = before.json()["note_workflow"]
+    assert note_workflow["enabled"] is True
+    for capability in ("generation", "export", "eta"):
+        assert note_workflow[capability]["status"] == "available"
+        assert note_workflow[capability]["error_code"] is None
     assert claimed.status_code == 200
     assert claimed.json()["lease"] is None
     assert online.json()["native_parser"]["status"] == "available"
     assert online.json()["ocr_parser"]["status"] == "available"
+    assert online.json()["note_workflow"] == note_workflow
     assert expired.json()["native_parser"]["status"] == "worker_required"
     assert expired.json()["ocr_parser"]["status"] == "worker_required"
+    assert expired.json()["note_workflow"] == note_workflow
     await database.dispose()

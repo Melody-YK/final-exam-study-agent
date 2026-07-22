@@ -1116,6 +1116,17 @@ export interface components {
             /** Unavailable Reason */
             unavailable_reason: string | null;
         };
+        /**
+         * NoteWorkflowCapabilityResponse
+         * @description Capability projection for the independently gated note workflow.
+         */
+        NoteWorkflowCapabilityResponse: {
+            /** Enabled */
+            enabled: boolean;
+            eta: components["schemas"]["CapabilityResponse"];
+            export: components["schemas"]["CapabilityResponse"];
+            generation: components["schemas"]["CapabilityResponse"];
+        };
         /** PageCheckpointRequest */
         PageCheckpointRequest: {
             /** Attempt */
@@ -1224,6 +1235,7 @@ export interface components {
             demo_lab_enabled: boolean;
             embedding: components["schemas"]["CapabilityResponse"];
             native_parser: components["schemas"]["CapabilityResponse"];
+            note_workflow: components["schemas"]["NoteWorkflowCapabilityResponse"];
             ocr_parser: components["schemas"]["CapabilityResponse"];
             provider: components["schemas"]["CapabilityResponse"];
         };

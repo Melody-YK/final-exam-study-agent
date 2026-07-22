@@ -103,6 +103,33 @@ class Settings(BaseSettings):
     job_event_retention_seconds: int = Field(default=24 * 60 * 60, ge=60)
     sse_heartbeat_seconds: int = Field(default=15, ge=1, le=60)
 
+    # Note workflow controls are deliberately disabled by default.  The
+    # runner/capability checks below make enabling them fail closed.
+    note_async_workflow_enabled: bool = False
+    note_runner_enabled: bool = False
+    note_runner_poll_seconds: float = Field(default=1.0, gt=0, le=60)
+    note_runner_lease_seconds: int = Field(default=60, ge=5, le=900)
+    note_generation_max_attempts: int = Field(default=3, ge=1, le=20)
+    note_batch_max_documents: int = Field(default=20, ge=1, le=500)
+    note_batch_max_coverage_units: int = Field(default=2_000, ge=1, le=100_000)
+    note_batch_max_pages: int = Field(default=4_000, ge=1, le=1_000_000)
+    note_batch_max_estimated_tokens: int = Field(default=1_000_000, ge=1_000, le=100_000_000)
+    note_max_active_batches_per_user: int = Field(default=3, ge=1, le=100)
+    note_command_dedup_retention_seconds: int = Field(default=7 * 24 * 60 * 60, ge=1)
+    note_event_retention_seconds: int = Field(default=24 * 60 * 60, ge=60)
+    note_eta_min_success_samples: int = Field(default=20, ge=1, le=10_000)
+    note_numeric_eta_enabled: bool = False
+    note_docx_export_enabled: bool = False
+    note_export_runner_enabled: bool = False
+    note_export_max_attempts: int = Field(default=3, ge=1, le=20)
+    note_export_lease_seconds: int = Field(default=120, ge=5, le=1_800)
+    note_export_max_bytes: int = Field(default=64 * 1024 * 1024, ge=1_024, le=2**31)
+    note_export_retention_seconds: int = Field(default=7 * 24 * 60 * 60, ge=60)
+    note_docx_render_timeout_seconds: int = Field(default=180, ge=1, le=3_600)
+    note_docx_images_enabled: bool = False
+    note_docx_renderer_enabled: bool = False
+    note_docx_cjk_font_family: str = "Noto Sans CJK SC"
+
     reranker_enabled: bool = False
     complex_parser_enabled: bool = False
     partial_ready_enabled: bool = False
@@ -177,7 +204,13 @@ class Settings(BaseSettings):
             normalized.append(stripped.lower())
         return tuple(dict.fromkeys(normalized))
 
-    @field_validator("embedding_base_url", "chat_base_url", "embedding_model", "chat_model")
+    @field_validator(
+        "embedding_base_url",
+        "chat_base_url",
+        "embedding_model",
+        "chat_model",
+        "note_docx_cjk_font_family",
+    )
     @classmethod
     def required_text_must_not_be_blank(cls, value: str) -> str:
         stripped = value.strip()
@@ -236,6 +269,37 @@ class Settings(BaseSettings):
         if self.provider_retry_max_seconds < self.provider_retry_base_seconds:
             raise ValueError("provider retry maximum must be at least the base delay")
 
+        if self.note_command_dedup_retention_seconds < self.note_event_retention_seconds:
+            raise ValueError("note dedup retention must not be shorter than event retention")
+        if self.note_batch_max_coverage_units < self.note_batch_max_documents:
+            raise ValueError("note coverage-unit limit must cover the document limit")
+        if self.note_async_workflow_enabled:
+            missing: list[str] = []
+            if not self.note_runner_enabled:
+                missing.append("note_runner_enabled")
+            if not self.chat_configured:
+                missing.append("deepseek_api_key")
+            if not self.embedding_configured:
+                missing.append("embedding_api_key")
+            if missing:
+                raise ValueError(
+                    "note workflow requires configured capabilities: " + ", ".join(missing)
+                )
+        if self.note_numeric_eta_enabled and not self.note_async_workflow_enabled:
+            raise ValueError("numeric ETA requires note_async_workflow_enabled")
+        if self.note_docx_export_enabled:
+            missing_docx: list[str] = []
+            if not self.note_async_workflow_enabled:
+                missing_docx.append("note_async_workflow_enabled")
+            if not self.note_export_runner_enabled:
+                missing_docx.append("note_export_runner_enabled")
+            if not self.note_docx_renderer_enabled:
+                missing_docx.append("note_docx_renderer_enabled")
+            if missing_docx:
+                raise ValueError(
+                    "DOCX export requires configured capabilities: " + ", ".join(missing_docx)
+                )
+
         secret_endpoints = (
             (self.embedding_api_key, self.embedding_base_url),
             (self.deepseek_api_key, self.chat_base_url),
@@ -253,21 +317,21 @@ class Settings(BaseSettings):
             raise ValueError("OSS settings require storage_backend=oss")
 
         if self.app_mode is AppMode.PRODUCTION:
-            missing: list[str] = []
+            missing_production: list[str] = []
             if self.auth_provider != "oidc":
-                missing.append("auth_provider")
+                missing_production.append("auth_provider")
             if self.auth_issuer is None:
-                missing.append("auth_issuer")
+                missing_production.append("auth_issuer")
             if self.auth_audience is None:
-                missing.append("auth_audience")
+                missing_production.append("auth_audience")
             if self.worker_token is None:
-                missing.append("worker_token")
+                missing_production.append("worker_token")
             if not self.allowed_hosts:
-                missing.append("allowed_hosts")
+                missing_production.append("allowed_hosts")
             if not self.allowed_origins:
-                missing.append("allowed_origins")
-            if missing:
-                fields = ", ".join(missing)
+                missing_production.append("allowed_origins")
+            if missing_production:
+                fields = ", ".join(missing_production)
                 raise ValueError(f"production configuration is missing: {fields}")
             if self.worker_token is not None:
                 _validate_production_worker_token(self.worker_token)
@@ -289,6 +353,27 @@ class Settings(BaseSettings):
         """Whether both runtime model capabilities can be constructed."""
 
         return self.embedding_configured and self.chat_configured
+
+    @property
+    def note_workflow_configured(self) -> bool:
+        """Whether the asynchronous generation gate can safely accept work."""
+
+        return (
+            self.note_async_workflow_enabled
+            and self.note_runner_enabled
+            and self.providers_configured
+        )
+
+    @property
+    def note_docx_configured(self) -> bool:
+        """Whether DOCX export has all independent capability gates enabled."""
+
+        return (
+            self.note_docx_export_enabled
+            and self.note_workflow_configured
+            and self.note_export_runner_enabled
+            and self.note_docx_renderer_enabled
+        )
 
     @property
     def effective_allowed_hosts(self) -> tuple[str, ...]:

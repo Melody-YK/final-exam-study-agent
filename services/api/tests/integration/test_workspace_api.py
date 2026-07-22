@@ -106,8 +106,17 @@ async def test_workspace_lists_status_and_retries_only_requested_pages_idempoten
         capabilities = await client.get("/api/v1/capabilities")
         before = await client.get(f"/api/v1/courses/{course_id}/documents")
         assert capabilities.status_code == 200
-        assert capabilities.json()["provider"]["status"] == "not_configured"
-        assert capabilities.json()["ocr_parser"]["status"] == "worker_required"
+        capability_payload = capabilities.json()
+        assert capability_payload["provider"]["status"] == "not_configured"
+        assert capability_payload["ocr_parser"]["status"] == "worker_required"
+        note_workflow = capability_payload["note_workflow"]
+        assert note_workflow["enabled"] is False
+        assert note_workflow["generation"]["status"] == "unavailable"
+        assert note_workflow["generation"]["error_code"] == "NOTE_WORKFLOW_DISABLED"
+        assert note_workflow["export"]["status"] == "unavailable"
+        assert note_workflow["export"]["error_code"] == "NOTE_EXPORT_UNAVAILABLE"
+        assert note_workflow["eta"]["status"] == "unavailable"
+        assert note_workflow["eta"]["error_code"] == "NOTE_ETA_UNAVAILABLE"
         assert before.status_code == 200
         assert before.json()[0]["status"] == "queued"
         assert before.json()[0]["parse_job_id"]
