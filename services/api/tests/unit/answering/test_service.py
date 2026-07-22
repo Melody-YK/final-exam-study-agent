@@ -3,7 +3,11 @@ import pytest
 from study_agent.modules.answering.service import TrustedAnswerService
 from study_agent.modules.answering.types import AuthorizedEvidence
 from study_agent.providers.errors import ProviderError, ProviderErrorCode
-from study_agent.providers.protocols import EvidencePrompt, StructuredAnswerDraft
+from study_agent.providers.protocols import (
+    ConversationContextTurn,
+    EvidencePrompt,
+    StructuredAnswerDraft,
+)
 from study_contracts import AnswerStatus, Evidence, SourceLocator
 
 
@@ -112,6 +116,32 @@ async def test_answer_is_returned_only_after_post_provider_source_recheck() -> N
     assert result.answer.status is AnswerStatus.ABSTAINED
     assert result.answer.refusal is not None
     assert result.answer.refusal.code == "SOURCE_CHANGED"
+
+
+@pytest.mark.asyncio
+async def test_conversation_context_remains_separate_from_current_evidence() -> None:
+    provider = RecordingProvider(StructuredAnswerDraft(payload=_valid_payload(), model="test-chat"))
+    context = (
+        ConversationContextTurn(
+            question="进程是什么?",
+            answer_markdown="历史回答不能成为本轮证据。",
+        ),
+    )
+
+    result = await TrustedAnswerService(lambda: provider).answer(
+        query_id="query-context",
+        question="它和线程有什么区别?",
+        active_index=True,
+        candidates=(_candidate(),),
+        sources_are_current=_current,
+        conversation_context=context,
+    )
+
+    assert result.answer is not None
+    assert result.answer.status is AnswerStatus.ANSWERED
+    assert len(provider.requests) == 1
+    assert provider.requests[0].conversation_context == context
+    assert [passage.id for passage in provider.requests[0].passages] == ["evidence-1"]
 
 
 @pytest.mark.asyncio

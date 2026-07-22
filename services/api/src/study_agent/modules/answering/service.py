@@ -14,7 +14,7 @@ from study_agent.modules.answering.evidence_gate import EvidenceGate
 from study_agent.modules.answering.prompts import build_evidence_prompt
 from study_agent.modules.answering.types import AnswerExecution, AuthorizedEvidence
 from study_agent.providers.errors import ProviderError, ProviderErrorCode
-from study_agent.providers.protocols import ChatProvider
+from study_agent.providers.protocols import ChatProvider, ConversationContextTurn
 from study_contracts import AnswerStatus, Refusal, StructuredAnswer
 
 type ProviderFactory = Callable[[], ChatProvider]
@@ -58,6 +58,7 @@ class TrustedAnswerService:
         active_index: bool,
         candidates: tuple[AuthorizedEvidence, ...],
         sources_are_current: SourceStateCheck,
+        conversation_context: tuple[ConversationContextTurn, ...] = (),
     ) -> AnswerExecution:
         decision = self._evidence_gate.evaluate(
             active_index=active_index,
@@ -71,7 +72,11 @@ class TrustedAnswerService:
         except ProviderError as exc:
             return self._provider_failure(exc)
 
-        prompt = build_evidence_prompt(question, decision.candidates)
+        prompt = build_evidence_prompt(
+            question,
+            decision.candidates,
+            conversation_context=conversation_context,
+        )
         last_draft_model: str | None = None
         for _attempt in range(self._max_validation_attempts):
             try:

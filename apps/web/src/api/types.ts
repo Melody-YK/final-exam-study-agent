@@ -66,6 +66,9 @@ export type QuerySnapshot = Omit<GeneratedQueryResponse, 'answer'> & {
 }
 export type QueryCreate = Schema<'QueryCreate'>
 
+export type ConversationRecord = Schema<'ConversationResponse'>
+export type ConversationCreate = Schema<'ConversationCreate'>
+
 export interface JobEventData {
   status?: string
   phase?: string

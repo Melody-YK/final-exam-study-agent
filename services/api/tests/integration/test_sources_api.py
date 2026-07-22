@@ -15,6 +15,7 @@ from study_agent.identity.principal import LocalPrincipalProvider, Principal
 from study_agent.infrastructure.db.migrations import upgrade_database
 from study_agent.infrastructure.db.models import (
     AnswerDependencyModel,
+    ConversationModel,
     DocumentModel,
     DocumentRevisionModel,
     JobArtifactModel,
@@ -363,10 +364,20 @@ async def _seed_slide_citation(
             )
         document.active_revision_id = active_revision_id
 
+        conversation = ConversationModel(
+            id=str(uuid4()),
+            user_id=course.user_id,
+            course_id=course.id,
+            title="来源测试",
+            auto_title_pending=False,
+        )
+        session.add(conversation)
+        await session.flush()
         query = QueryRunModel(
             id=query_id,
             user_id=course.user_id,
             course_id=course.id,
+            conversation_id=conversation.id,
             question="第 2 页讲了什么?",
             question_sha256="c" * 64,
             requested_document_ids=[],

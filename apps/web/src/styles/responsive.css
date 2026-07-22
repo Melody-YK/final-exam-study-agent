@@ -207,6 +207,10 @@
     padding-bottom: 106px;
   }
 
+  .qa-conversations__list > li {
+    flex-basis: min(76vw, 220px);
+  }
+
   .source-viewer {
     grid-template-columns: 1fr;
   }
@@ -320,6 +324,14 @@
 
   .question-entry {
     max-width: 94%;
+  }
+
+  .qa-conversations__heading {
+    flex-wrap: wrap;
+  }
+
+  .qa-conversations__new {
+    margin-left: auto;
   }
 
   .citation-button span {

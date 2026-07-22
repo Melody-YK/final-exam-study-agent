@@ -7,12 +7,13 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import cast
 
-from sqlalchemy import and_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from study_agent.identity.principal import Principal
 from study_agent.infrastructure.db.models import (
     AnswerDependencyModel,
+    ConversationModel,
     CourseModel,
     DocumentModel,
     QueryRunModel,
@@ -29,7 +30,7 @@ from study_agent.modules.answering.types import AnswerExecution, AuthorizedEvide
 from study_agent.observability.trace import get_trace_id, new_trace_id
 from study_agent.providers.errors import ProviderError, ProviderErrorCode
 from study_agent.providers.factory import ProviderRegistry
-from study_agent.providers.protocols import Clock
+from study_agent.providers.protocols import Clock, ConversationContextTurn
 from study_contracts import AnswerStatus, Refusal, StructuredAnswer
 
 
@@ -44,6 +45,7 @@ class QueryTrace:
 class QuerySnapshot:
     id: str
     course_id: str
+    conversation_id: str
     question: str
     status: str
     answer: StructuredAnswer | None
@@ -52,6 +54,54 @@ class QuerySnapshot:
     trace: QueryTrace
     created_at: datetime
     completed_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationSnapshot:
+    id: str
+    course_id: str
+    title: str
+    turn_count: int
+    latest_query_id: str | None
+    latest_question: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+DEFAULT_CONVERSATION_TITLE = "新会话"
+AUTO_TITLE_MAX_LENGTH = 60
+CONVERSATION_CONTEXT_TURNS = 4
+CONVERSATION_CONTEXT_MAX_CHARS = 6_000
+CONVERSATION_CONTEXT_QUESTION_MAX_CHARS = 1_000
+CONVERSATION_CONTEXT_ANSWER_MAX_CHARS = 1_500
+
+
+def _question_title(question: str) -> str:
+    normalized = " ".join(question.split())
+    if len(normalized) <= AUTO_TITLE_MAX_LENGTH:
+        return normalized
+    return f"{normalized[: AUTO_TITLE_MAX_LENGTH - 1].rstrip()}…"
+
+
+def _bounded_text(value: str, limit: int) -> str:
+    normalized = value.strip()
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[:limit].rstrip()
+
+
+def _contextual_retrieval_query(
+    question: str,
+    context: tuple[ConversationContextTurn, ...],
+) -> str:
+    normalized = question.strip()
+    if not context:
+        return normalized
+    lines = ["[NON_EVIDENCE_CONVERSATION_CONTEXT]"]
+    for turn in context:
+        lines.append(f"User: {turn.question}")
+    lines.extend(("[CURRENT_QUESTION]", normalized))
+    return "\n".join(lines)
 
 
 def _abstained(query_id: str, code: str, message: str) -> StructuredAnswer:
@@ -75,27 +125,27 @@ class QueryRepository:
         course_id: str,
         question: str,
         document_ids: frozenset[str] | None,
+        *,
+        conversation_id: str | None = None,
     ) -> str:
         normalized = question.strip()
         if not normalized:
             raise ValueError("question must not be blank")
         query_id = new_id()
         async with self._database.session(principal) as session:
-            course = cast(
-                CourseModel | None,
-                await session.scalar(
-                    select(CourseModel)
-                    .join(UserModel, UserModel.id == CourseModel.user_id)
-                    .where(
-                        CourseModel.id == course_id,
-                        CourseModel.deleted_at.is_(None),
-                        UserModel.subject == principal.subject,
-                        UserModel.authentication_method == principal.authentication_method.value,
-                    )
-                ),
+            course = await self._owned_course(
+                session,
+                principal,
+                course_id,
+                for_update=True,
             )
             if course is None:
                 raise LookupError("course is unavailable")
+            conversation = await self._resolve_conversation(
+                session,
+                course,
+                conversation_id,
+            )
             if document_ids is not None:
                 available = set(
                     await session.scalars(
@@ -114,6 +164,7 @@ class QueryRepository:
                 id=query_id,
                 user_id=course.user_id,
                 course_id=course.id,
+                conversation_id=conversation.id,
                 question=normalized,
                 question_sha256=hashlib.sha256(normalized.encode("utf-8")).hexdigest(),
                 requested_document_ids=sorted(document_ids or ()),
@@ -127,13 +178,18 @@ class QueryRepository:
                 event_sequence=0,
             )
             session.add(query)
+            now = self._clock.now()
+            if conversation.auto_title_pending:
+                conversation.title = _question_title(normalized)
+                conversation.auto_title_pending = False
+            conversation.updated_at = now
             await session.flush()
             append_query_event(
                 session,
                 query,
                 "query.created",
-                {"status": "pending"},
-                now=self._clock.now(),
+                {"status": "pending", "conversation_id": conversation.id},
+                now=now,
                 retention=self._event_retention,
             )
         return query_id
@@ -325,6 +381,442 @@ class QueryRepository:
                 return None
             return await self._snapshot(session, query)
 
+    async def list_for_course(
+        self,
+        principal: Principal,
+        course_id: str,
+        *,
+        limit: int,
+    ) -> tuple[QuerySnapshot, ...]:
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        async with self._database.session(principal) as session:
+            course = cast(
+                CourseModel | None,
+                await session.scalar(
+                    select(CourseModel)
+                    .join(UserModel, UserModel.id == CourseModel.user_id)
+                    .where(
+                        CourseModel.id == course_id,
+                        CourseModel.deleted_at.is_(None),
+                        UserModel.subject == principal.subject,
+                        UserModel.authentication_method == principal.authentication_method.value,
+                    )
+                ),
+            )
+            if course is None:
+                raise LookupError("course is unavailable")
+            queries = (
+                await session.scalars(
+                    select(QueryRunModel)
+                    .where(
+                        QueryRunModel.user_id == course.user_id,
+                        QueryRunModel.course_id == course.id,
+                    )
+                    .order_by(QueryRunModel.created_at.desc(), QueryRunModel.id.desc())
+                    .limit(limit)
+                )
+            ).all()
+            if not queries:
+                return ()
+            retrievals = (
+                await session.scalars(
+                    select(RetrievalSnapshotModel).where(
+                        RetrievalSnapshotModel.query_id.in_(query.id for query in queries)
+                    )
+                )
+            ).all()
+            retrieval_by_query = {retrieval.query_id: retrieval for retrieval in retrievals}
+            return tuple(
+                self._snapshot_from_model(query, retrieval_by_query.get(query.id))
+                for query in queries
+            )
+
+    async def create_conversation(
+        self,
+        principal: Principal,
+        course_id: str,
+        title: str | None,
+    ) -> ConversationSnapshot:
+        normalized_title = title.strip() if title is not None else DEFAULT_CONVERSATION_TITLE
+        if not normalized_title:
+            raise ValueError("title must not be blank")
+        if len(normalized_title) > 255:
+            raise ValueError("title must not exceed 255 characters")
+        now = self._clock.now()
+        async with self._database.session(principal) as session:
+            course = await self._owned_course(session, principal, course_id)
+            if course is None:
+                raise LookupError("course is unavailable")
+            conversation = ConversationModel(
+                id=new_id(),
+                user_id=course.user_id,
+                course_id=course.id,
+                title=normalized_title,
+                auto_title_pending=title is None,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(conversation)
+            await session.flush()
+            return self._conversation_snapshot(conversation, 0, None)
+
+    async def list_conversations(
+        self,
+        principal: Principal,
+        course_id: str,
+        *,
+        limit: int,
+    ) -> tuple[ConversationSnapshot, ...]:
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        async with self._database.session(principal) as session:
+            course = await self._owned_course(session, principal, course_id)
+            if course is None:
+                raise LookupError("course is unavailable")
+            conversations = (
+                await session.scalars(
+                    select(ConversationModel)
+                    .where(
+                        ConversationModel.user_id == course.user_id,
+                        ConversationModel.course_id == course.id,
+                    )
+                    .order_by(
+                        ConversationModel.updated_at.desc(),
+                        ConversationModel.id.desc(),
+                    )
+                    .limit(limit)
+                )
+            ).all()
+            if not conversations:
+                return ()
+            conversation_ids = [conversation.id for conversation in conversations]
+            count_rows = await session.execute(
+                select(QueryRunModel.conversation_id, func.count(QueryRunModel.id))
+                .where(QueryRunModel.conversation_id.in_(conversation_ids))
+                .group_by(QueryRunModel.conversation_id)
+            )
+            counts = {conversation_id: count for conversation_id, count in count_rows}
+            latest_rows = await session.execute(
+                select(
+                    QueryRunModel.conversation_id,
+                    QueryRunModel.id,
+                    QueryRunModel.question,
+                )
+                .where(QueryRunModel.conversation_id.in_(conversation_ids))
+                .distinct(QueryRunModel.conversation_id)
+                .order_by(
+                    QueryRunModel.conversation_id,
+                    QueryRunModel.created_at.desc(),
+                    QueryRunModel.id.desc(),
+                )
+            )
+            latest = {
+                conversation_id: (query_id, question)
+                for conversation_id, query_id, question in latest_rows
+            }
+            return tuple(
+                self._conversation_snapshot(
+                    conversation,
+                    counts.get(conversation.id, 0),
+                    latest.get(conversation.id),
+                )
+                for conversation in conversations
+            )
+
+    async def list_for_conversation(
+        self,
+        principal: Principal,
+        conversation_id: str,
+        *,
+        limit: int,
+    ) -> tuple[QuerySnapshot, ...] | None:
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        async with self._database.session(principal) as session:
+            conversation = await self._scoped_conversation(
+                session,
+                principal,
+                conversation_id,
+            )
+            if conversation is None:
+                return None
+            queries = list(
+                (
+                    await session.scalars(
+                        select(QueryRunModel)
+                        .where(
+                            QueryRunModel.user_id == conversation.user_id,
+                            QueryRunModel.course_id == conversation.course_id,
+                            QueryRunModel.conversation_id == conversation.id,
+                        )
+                        .order_by(QueryRunModel.created_at.desc(), QueryRunModel.id.desc())
+                        .limit(limit)
+                    )
+                ).all()
+            )
+            if not queries:
+                return ()
+            queries.reverse()
+            retrievals = (
+                await session.scalars(
+                    select(RetrievalSnapshotModel).where(
+                        RetrievalSnapshotModel.query_id.in_(query.id for query in queries)
+                    )
+                )
+            ).all()
+            retrieval_by_query = {retrieval.query_id: retrieval for retrieval in retrievals}
+            return tuple(
+                self._snapshot_from_model(query, retrieval_by_query.get(query.id))
+                for query in queries
+            )
+
+    async def recent_context(
+        self,
+        principal: Principal,
+        query_id: str,
+        *,
+        max_turns: int = CONVERSATION_CONTEXT_TURNS,
+        max_chars: int = CONVERSATION_CONTEXT_MAX_CHARS,
+    ) -> tuple[ConversationContextTurn, ...]:
+        if max_turns <= 0 or max_chars <= 0:
+            raise ValueError("conversation context limits must be positive")
+        async with self._database.session(principal) as session:
+            current = await self._scoped(session, principal, query_id)
+            if current is None:
+                raise LookupError("query is unavailable")
+            queries = (
+                await session.scalars(
+                    select(QueryRunModel)
+                    .where(
+                        QueryRunModel.user_id == current.user_id,
+                        QueryRunModel.course_id == current.course_id,
+                        QueryRunModel.conversation_id == current.conversation_id,
+                        QueryRunModel.id != current.id,
+                        or_(
+                            QueryRunModel.created_at < current.created_at,
+                            and_(
+                                QueryRunModel.created_at == current.created_at,
+                                QueryRunModel.id < current.id,
+                            ),
+                        ),
+                        QueryRunModel.status.in_(("answered", "abstained", "failed")),
+                    )
+                    .order_by(QueryRunModel.created_at.desc(), QueryRunModel.id.desc())
+                    .limit(max_turns)
+                )
+            ).all()
+            answered_ids = [query.id for query in queries if query.status == "answered"]
+            dependencies = (
+                (
+                    await session.scalars(
+                        select(AnswerDependencyModel).where(
+                            AnswerDependencyModel.query_id.in_(answered_ids)
+                        )
+                    )
+                ).all()
+                if answered_ids
+                else []
+            )
+            document_ids = {dependency.document_id for dependency in dependencies}
+            documents = (
+                (
+                    await session.scalars(
+                        select(DocumentModel).where(
+                            DocumentModel.id.in_(document_ids),
+                            DocumentModel.user_id == current.user_id,
+                            DocumentModel.course_id == current.course_id,
+                        )
+                    )
+                ).all()
+                if document_ids
+                else []
+            )
+            chunk_keys = {
+                (dependency.chunk_id, dependency.revision_id) for dependency in dependencies
+            }
+            chunks = (
+                (
+                    await session.scalars(
+                        select(RevisionChunkModel).where(
+                            RevisionChunkModel.id.in_(key[0] for key in chunk_keys),
+                            RevisionChunkModel.revision_id.in_(key[1] for key in chunk_keys),
+                        )
+                    )
+                ).all()
+                if chunk_keys
+                else []
+            )
+
+        dependencies_by_query: dict[str, list[AnswerDependencyModel]] = {}
+        for dependency in dependencies:
+            dependencies_by_query.setdefault(dependency.query_id, []).append(dependency)
+        documents_by_id = {document.id: document for document in documents}
+        chunks_by_key = {(chunk.id, chunk.revision_id): chunk for chunk in chunks}
+
+        remaining = max_chars
+        turns: list[ConversationContextTurn] = []
+        for query in queries:
+            question = _bounded_text(
+                query.question,
+                min(CONVERSATION_CONTEXT_QUESTION_MAX_CHARS, remaining),
+            )
+            if not question:
+                continue
+            remaining -= len(question)
+            answer: str | None = None
+            if query.status == "answered" and remaining > 0:
+                query_dependencies = dependencies_by_query.get(query.id, [])
+                expected_citations = len(query.citations)
+                sources_current = bool(query_dependencies) and (
+                    len(query_dependencies) == expected_citations
+                    and all(
+                        self._context_dependency_is_current(
+                            dependency,
+                            documents_by_id,
+                            chunks_by_key,
+                        )
+                        for dependency in query_dependencies
+                    )
+                )
+                if sources_current:
+                    answer = (
+                        _bounded_text(
+                            query.answer_markdown,
+                            min(CONVERSATION_CONTEXT_ANSWER_MAX_CHARS, remaining),
+                        )
+                        or None
+                    )
+                    if answer is not None:
+                        remaining -= len(answer)
+            turns.append(
+                ConversationContextTurn(
+                    question=question,
+                    answer_markdown=answer,
+                )
+            )
+            if remaining <= 0:
+                break
+        turns.reverse()
+        return tuple(turns)
+
+    @staticmethod
+    def _context_dependency_is_current(
+        dependency: AnswerDependencyModel,
+        documents: dict[str, DocumentModel],
+        chunks: dict[tuple[str, str], RevisionChunkModel],
+    ) -> bool:
+        document = documents.get(dependency.document_id)
+        chunk = chunks.get((dependency.chunk_id, dependency.revision_id))
+        return bool(
+            dependency.available
+            and document is not None
+            and document.deleted_at is None
+            and document.deletion_epoch == dependency.document_deletion_epoch
+            and document.active_revision_id == dependency.revision_id
+            and chunk is not None
+            and chunk.content_sha256 == dependency.content_sha256
+        )
+
+    async def _resolve_conversation(
+        self,
+        session: AsyncSession,
+        course: CourseModel,
+        conversation_id: str | None,
+    ) -> ConversationModel:
+        statement = select(ConversationModel).where(
+            ConversationModel.user_id == course.user_id,
+            ConversationModel.course_id == course.id,
+        )
+        if conversation_id is not None:
+            statement = statement.where(ConversationModel.id == conversation_id)
+        else:
+            statement = statement.order_by(
+                ConversationModel.updated_at.desc(),
+                ConversationModel.id.desc(),
+            ).limit(1)
+        conversation = cast(
+            ConversationModel | None,
+            await session.scalar(statement.with_for_update(of=ConversationModel)),
+        )
+        if conversation is not None:
+            return conversation
+        if conversation_id is not None:
+            raise LookupError("conversation is unavailable")
+        now = self._clock.now()
+        conversation = ConversationModel(
+            id=new_id(),
+            user_id=course.user_id,
+            course_id=course.id,
+            title=DEFAULT_CONVERSATION_TITLE,
+            auto_title_pending=True,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(conversation)
+        await session.flush()
+        return conversation
+
+    @staticmethod
+    async def _owned_course(
+        session: AsyncSession,
+        principal: Principal,
+        course_id: str,
+        *,
+        for_update: bool = False,
+    ) -> CourseModel | None:
+        statement = (
+            select(CourseModel)
+            .join(UserModel, UserModel.id == CourseModel.user_id)
+            .where(
+                CourseModel.id == course_id,
+                CourseModel.deleted_at.is_(None),
+                UserModel.subject == principal.subject,
+                UserModel.authentication_method == principal.authentication_method.value,
+            )
+        )
+        if for_update:
+            statement = statement.with_for_update(of=CourseModel)
+        return cast(CourseModel | None, await session.scalar(statement))
+
+    @staticmethod
+    async def _scoped_conversation(
+        session: AsyncSession,
+        principal: Principal,
+        conversation_id: str,
+    ) -> ConversationModel | None:
+        return cast(
+            ConversationModel | None,
+            await session.scalar(
+                select(ConversationModel)
+                .join(CourseModel, CourseModel.id == ConversationModel.course_id)
+                .join(UserModel, UserModel.id == ConversationModel.user_id)
+                .where(
+                    ConversationModel.id == conversation_id,
+                    CourseModel.deleted_at.is_(None),
+                    UserModel.subject == principal.subject,
+                    UserModel.authentication_method == principal.authentication_method.value,
+                )
+            ),
+        )
+
+    @staticmethod
+    def _conversation_snapshot(
+        conversation: ConversationModel,
+        turn_count: int,
+        latest: tuple[str, str] | None,
+    ) -> ConversationSnapshot:
+        return ConversationSnapshot(
+            id=conversation.id,
+            course_id=conversation.course_id,
+            title=conversation.title,
+            turn_count=turn_count,
+            latest_query_id=latest[0] if latest else None,
+            latest_question=latest[1] if latest else None,
+            created_at=conversation.created_at,
+            updated_at=conversation.updated_at,
+        )
+
     async def _scoped(
         self,
         session: AsyncSession,
@@ -377,6 +869,13 @@ class QueryRepository:
         retrieval = await session.scalar(
             select(RetrievalSnapshotModel).where(RetrievalSnapshotModel.query_id == query.id)
         )
+        return self._snapshot_from_model(query, retrieval)
+
+    @staticmethod
+    def _snapshot_from_model(
+        query: QueryRunModel,
+        retrieval: RetrievalSnapshotModel | None,
+    ) -> QuerySnapshot:
         answer: StructuredAnswer | None = None
         if query.status in {AnswerStatus.ANSWERED.value, AnswerStatus.ABSTAINED.value}:
             answer = StructuredAnswer(
@@ -394,6 +893,7 @@ class QueryRepository:
         return QuerySnapshot(
             id=query.id,
             course_id=query.course_id,
+            conversation_id=query.conversation_id,
             question=query.question,
             status=query.status,
             answer=answer,
@@ -498,19 +998,23 @@ class QueryService:
         question: str,
         *,
         document_ids: frozenset[str] | None = None,
+        conversation_id: str | None = None,
     ) -> QuerySnapshot:
         query_id = await self._repository.create(
             principal,
             course_id,
             question,
             document_ids,
+            conversation_id=conversation_id,
         )
         await self._repository.start_retrieval(principal, query_id)
+        conversation_context = await self._repository.recent_context(principal, query_id)
+        retrieval_question = _contextual_retrieval_query(question, conversation_context)
         try:
             retrieved = await self._evidence.retrieve(
                 principal,
                 course_id,
-                question,
+                retrieval_question,
                 document_ids=document_ids,
             )
         except ProviderError as exc:
@@ -550,6 +1054,7 @@ class QueryService:
                 retrieved.active_lexical_index_id,
                 retrieved.candidates,
             ),
+            conversation_context=conversation_context,
         )
         return await self._repository.finalize(
             principal,

@@ -1,5 +1,7 @@
 import type {
   CitationSource,
+  ConversationCreate,
+  ConversationRecord,
   CorpusRole,
   Course,
   CourseCreate,
@@ -195,11 +197,37 @@ export class StudyApiClient {
     return this.request('/capabilities')
   }
 
-  createQuery(courseId: string, question: string): Promise<QuerySnapshot> {
+  createConversation(courseId: string, title?: string): Promise<ConversationRecord> {
+    return this.request(`/courses/${courseId}/conversations`, {
+      method: 'POST',
+      body: jsonBody<ConversationCreate>(title ? { title } : {}),
+    })
+  }
+
+  listConversations(courseId: string): Promise<ConversationRecord[]> {
+    return this.request(`/courses/${courseId}/conversations`)
+  }
+
+  listConversationQueries(conversationId: string, limit = 100): Promise<QuerySnapshot[]> {
+    return this.request(`/conversations/${conversationId}/queries?limit=${limit}`)
+  }
+
+  createQuery(
+    courseId: string,
+    question: string,
+    conversationId?: string,
+  ): Promise<QuerySnapshot> {
     return this.request(`/courses/${courseId}/queries`, {
       method: 'POST',
-      body: jsonBody<QueryCreate>({ question }),
+      body: jsonBody<QueryCreate>({
+        question,
+        ...(conversationId === undefined ? {} : { conversation_id: conversationId }),
+      }),
     })
+  }
+
+  listQueries(courseId: string, limit = 50): Promise<QuerySnapshot[]> {
+    return this.request(`/courses/${courseId}/queries?limit=${limit}`)
   }
 
   getQuery(queryId: string): Promise<QuerySnapshot> {

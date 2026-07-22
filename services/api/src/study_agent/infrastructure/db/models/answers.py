@@ -26,6 +26,38 @@ from study_agent.infrastructure.db.base import Base
 from study_agent.infrastructure.db.models.core import new_id
 
 
+class ConversationModel(Base):
+    __tablename__ = "conversations"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["course_id", "user_id"],
+            ["courses.id", "courses.user_id"],
+            name="fk_conversations_course_user",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("id", "course_id", "user_id", name="uq_conversations_id_scope"),
+        CheckConstraint("btrim(title) <> ''", name="ck_conversations_title_nonblank"),
+        Index(
+            "ix_conversations_scope_updated",
+            "user_id",
+            "course_id",
+            "updated_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    course_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    auto_title_pending: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class QueryRunModel(Base):
     __tablename__ = "query_runs"
     __table_args__ = (
@@ -33,6 +65,12 @@ class QueryRunModel(Base):
             ["course_id", "user_id"],
             ["courses.id", "courses.user_id"],
             name="fk_query_runs_course_user",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["conversation_id", "course_id", "user_id"],
+            ["conversations.id", "conversations.course_id", "conversations.user_id"],
+            name="fk_query_runs_conversation_scope",
             ondelete="CASCADE",
         ),
         UniqueConstraint("id", "course_id", "user_id", name="uq_query_runs_id_scope"),
@@ -48,11 +86,19 @@ class QueryRunModel(Base):
         ),
         Index("ix_query_runs_scope_created", "user_id", "course_id", "created_at"),
         Index("ix_query_runs_scope_status", "user_id", "course_id", "status"),
+        Index(
+            "ix_query_runs_conversation_created",
+            "user_id",
+            "course_id",
+            "conversation_id",
+            "created_at",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     user_id: Mapped[str] = mapped_column(String(36), nullable=False)
     course_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    conversation_id: Mapped[str] = mapped_column(String(36), nullable=False)
     question: Mapped[str] = mapped_column(Text, nullable=False)
     question_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     requested_document_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
