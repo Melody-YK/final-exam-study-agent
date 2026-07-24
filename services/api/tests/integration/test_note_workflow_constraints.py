@@ -47,6 +47,7 @@ REQUIRED_CONSTRAINTS = {
     "ck_note_coverage_unit_results_reason",
     "ck_note_version_coverage_units_reason",
     "ck_note_generation_items_phase",
+    "ck_note_generation_batches_style",
     "ck_note_version_coverage_units_type",
 }
 P1_PHASES = (
@@ -175,6 +176,7 @@ async def _insert_batch(
     batch_id: str | None = None,
     command_kind: str = "create",
     mode: str = "merged",
+    style: str = "exam_focus",
     retry_of_batch_id: str | None = None,
     title: str | None = "Generated note",
     title_prefix: str | None = None,
@@ -190,10 +192,11 @@ async def _insert_batch(
     await connection.execute(
         text(
             "INSERT INTO note_generation_batches "
-            "(id, user_id, course_id, mode, retry_of_batch_id, status, state_version, "
+            "(id, user_id, course_id, mode, style, retry_of_batch_id, status, state_version, "
             "event_sequence, cancel_epoch, command_kind, title, title_prefix, section_path, "
             "target_note_id, target_note_version, target_note_version_sha256, completed_at) "
-            "VALUES (:id, :user_id, :course_id, :mode, :retry_of_batch_id, :status, 1, 0, 0, "
+            "VALUES (:id, :user_id, :course_id, :mode, :style, :retry_of_batch_id, :status, "
+            "1, 0, 0, "
             ":command_kind, :title, :title_prefix, CAST(:section_path AS jsonb), "
             ":target_note_id, :target_note_version, :target_note_version_sha256, :completed_at)"
         ),
@@ -202,6 +205,7 @@ async def _insert_batch(
             "user_id": scope.user_id,
             "course_id": scope.course_id,
             "mode": mode,
+            "style": style,
             "retry_of_batch_id": retry_of_batch_id,
             "command_kind": command_kind,
             "title": title,
@@ -935,12 +939,13 @@ async def test_note_workflow_inventory_head_and_temporary_defaults(
             )
         }
 
-    assert head == "20260722_0008"
+    assert head == "20260724_0012"
     assert tables >= SELECTED_TABLES
     assert DEFERRED_TABLES.isdisjoint(tables)
     assert constraints >= REQUIRED_CONSTRAINTS
     assert {
         "command_kind",
+        "style",
         "title",
         "title_prefix",
         "section_path",
@@ -950,6 +955,7 @@ async def test_note_workflow_inventory_head_and_temporary_defaults(
     } <= batch_columns.keys()
     assert output_columns["note_version"] == ("NO", None)
     assert batch_columns["command_kind"] == ("NO", None)
+    assert batch_columns["style"] == ("NO", None)
     assert batch_columns["section_path"] == ("NO", None)
 
 
@@ -1316,7 +1322,7 @@ async def test_batch_and_item_terminal_time_constraints(
 
 
 @pytest.mark.integration
-async def test_0008_batch_command_target_title_and_output_rules(
+async def test_batch_command_target_title_style_and_output_rules(
     head_engine: AsyncEngine,
 ) -> None:
     async with head_engine.begin() as connection:
@@ -1428,6 +1434,10 @@ async def test_0008_batch_command_target_title_and_output_rules(
     with _raises_constraint("ck_note_generation_batches_command_kind"):
         async with head_engine.begin() as connection:
             await _insert_batch(connection, scope, command_kind="unknown")
+
+    with _raises_constraint("ck_note_generation_batches_style"):
+        async with head_engine.begin() as connection:
+            await _insert_batch(connection, scope, style="unknown")
 
     with _raises_constraint("ck_note_generation_batches_target_version"):
         async with head_engine.begin() as connection:

@@ -82,6 +82,7 @@ async def _seed_revision(
             corpus_role="corpus",
             verified_sha256="d" * 64,
             status="ready",
+            review_status="approved",
             deletion_epoch=0,
         )
         session.add(document)
@@ -490,6 +491,20 @@ async def test_query_persists_answer_snapshot_and_aggregated_sse(
         assert query["trace"]["retrieval_trace_id"] is None
         assert query["usage"]["total_tokens"] == 30
 
+        async with database.session(principal) as session:
+            document = await session.get(DocumentModel, document_id)
+            assert document is not None
+            document.review_status = "pending"
+
+        explicit_scope = await client.post(
+            f"/api/v1/courses/{course_id}/queries",
+            json={"question": "还能选择吗?", "document_ids": [document_id]},
+        )
+        source_changed = await client.post(
+            f"/api/v1/courses/{course_id}/queries",
+            json={"question": "审核撤回后还能回答吗?"},
+        )
+
         snapshot = await client.get(f"/api/v1/queries/{query['id']}")
         events = await client.get(f"/api/v1/queries/{query['id']}/events?once=true")
 
@@ -498,8 +513,13 @@ async def test_query_persists_answer_snapshot_and_aggregated_sse(
     deltas = [item for item in envelopes if item["event_type"] == "answer.delta"]
     assert len(deltas) == 1
     assert deltas[0]["data"]["delta"] == "进程是资源分配的基本单位。"  # type: ignore[index]
-    assert len(provider.requests) == 1
-    assert evidence.calls == 1
+    assert explicit_scope.status_code == 404
+    assert explicit_scope.json()["code"] == "RESOURCE_NOT_FOUND"
+    assert source_changed.status_code == 202
+    assert source_changed.json()["status"] == "abstained"
+    assert source_changed.json()["answer"]["refusal"]["code"] == "SOURCE_CHANGED"
+    assert len(provider.requests) == 2
+    assert evidence.calls == 2
     await database.dispose()
 
 

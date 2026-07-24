@@ -30,6 +30,7 @@ function document(overrides: Record<string, unknown> = {}) {
     corpus_role: 'corpus',
     verified_sha256: 'a'.repeat(64),
     status: 'ready',
+    review_status: 'approved',
     preview_revision_id: null,
     active_revision_id: 'revision-active',
     deletion_epoch: 0,
@@ -51,7 +52,9 @@ function note(version = 1) {
     section_path: ['第二章', '进程管理'],
     title: '进程管理',
     body_markdown:
-      version === 1 ? '# 进程管理\n\n进程是资源分配的基本单位。' : '# 进程管理\n\n服务器上的最新正文。',
+      version === 1
+        ? '# 进程管理\n\n进程是资源分配的基本单位。'
+        : '# 进程管理\n\n服务器上的最新正文。',
     version,
     generation: 2,
     generated_by_model: true,
@@ -78,12 +81,39 @@ function note(version = 1) {
   }
 }
 
-function answered(
-  question: string,
-  queryId: string,
-  conversationId: string,
-  createdAt: string,
+function generatedNote(
+  title: string,
+  sectionPath: string[],
+  style: 'exam_focus' | 'outline' | 'complete',
 ) {
+  const rendered = {
+    exam_focus: {
+      label: '考前速记',
+      content: '- 进程是资源分配的基本单位。\n- 线程是调度的基本单位。',
+    },
+    outline: {
+      label: '结构提纲',
+      content: '1. 进程与线程\n2. 调度与同步\n3. 死锁处理',
+    },
+    complete: {
+      label: '完整讲义',
+      content:
+        '进程是资源分配的基本单位，线程是调度的基本单位。完整讲义保留资料中的定义、例子和上下文。',
+    },
+  }[style]
+  return {
+    ...note(1),
+    id: 'note-generated-e2e',
+    section_path: sectionPath,
+    title,
+    body_markdown: `# ${title}\n\n> 笔记模板: ${rendered.label}\n\n## 核心内容\n\n${rendered.content}`,
+    generation: 1,
+    created_at: '2026-07-19T05:40:00Z',
+    updated_at: '2026-07-19T05:40:00Z',
+  }
+}
+
+function answered(question: string, queryId: string, conversationId: string, createdAt: string) {
   return {
     id: queryId,
     course_id: courseId,
@@ -128,12 +158,7 @@ function answered(
   }
 }
 
-function abstained(
-  question: string,
-  queryId: string,
-  conversationId: string,
-  createdAt: string,
-) {
+function abstained(question: string, queryId: string, conversationId: string, createdAt: string) {
   return {
     ...answered(question, queryId, conversationId, createdAt),
     status: 'abstained',
@@ -144,18 +169,93 @@ function abstained(
       answer_markdown: '',
       claims: [],
       citations: [],
-      refusal: { code: 'INSUFFICIENT_EVIDENCE', message: '当前课程资料没有足够依据。' },
+      refusal: {
+        code: 'INSUFFICIENT_EVIDENCE',
+        message: '当前课程资料没有足够依据。',
+      },
     },
   }
 }
 
 export interface MockApiOptions {
+  accountRole?: 'admin' | 'user'
+  authenticated?: boolean
+  includeNoteEligibilityDriftDocuments?: boolean
+  noteBatchPollsBeforeSuccess?: number
   providerAvailable?: boolean
+  seedCourseSelection?: boolean
 }
 
 export async function installMockApi(page: Page, options: MockApiOptions = {}) {
+  const accountRole = options.accountRole ?? 'user'
+  let authenticated = options.authenticated ?? true
+  const mockAccount = {
+    id: 'account-e2e',
+    email: accountRole === 'admin' ? 'admin@example.com' : 'student@example.com',
+    display_name: accountRole === 'admin' ? '本地管理员' : '复习同学',
+    role: accountRole,
+  }
+  type MockAdminAccount = typeof mockAccount & {
+    status: 'active' | 'suspended'
+    admin_note: string | null
+    created_at: string
+  }
+  type MockInvitation = {
+    id: string
+    created_by_account_id: string
+    used_by_account_id: string | null
+    status: 'available' | 'used' | 'revoked' | 'expired'
+    created_at: string
+    expires_at: string
+    used_at: string | null
+    revoked_at: string | null
+  }
+  let signedInAccount = mockAccount
+  let adminAccounts: MockAdminAccount[] = [
+    {
+      ...mockAccount,
+      status: 'active' as const,
+      admin_note: accountRole === 'admin' ? '本地演示负责人' : null,
+      created_at: '2026-07-20T08:00:00Z',
+    },
+    {
+      id: 'account-student-e2e',
+      email: 'student@example.com',
+      display_name: '复习同学',
+      role: 'user' as const,
+      status: 'active' as const,
+      admin_note: null,
+      created_at: '2026-07-21T08:00:00Z',
+    },
+  ]
+  const registrationInviteCode = 'e2e-invite-code-123456'
+  let invitationSequence = 1
+  let invitations: MockInvitation[] = [
+    {
+      id: 'invitation-e2e-1',
+      created_by_account_id: 'account-e2e',
+      used_by_account_id: null,
+      status: 'available',
+      created_at: '2026-07-23T08:00:00Z',
+      expires_at: '2026-07-30T08:00:00Z',
+      used_at: null,
+      revoked_at: null,
+    },
+  ]
+  const noteBatchPollsBeforeSuccess = options.noteBatchPollsBeforeSuccess ?? 3
   const providerAvailable = options.providerAvailable ?? true
   let notesVersion = 1
+  let generatedNoteRecord: ReturnType<typeof generatedNote> | null = null
+  let noteBatchPolls = 0
+  let noteBatchPayload:
+    | {
+        mode: 'merged'
+        document_ids: string[]
+        style: 'exam_focus' | 'outline' | 'complete'
+        title?: string
+        section_path?: string[]
+      }
+    | undefined
   let conversationSequence = 0
   let querySequence = 0
   type MockQuerySnapshot = ReturnType<typeof answered> | ReturnType<typeof abstained>
@@ -208,8 +308,10 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
       filename: '文件系统.pptx',
       media_type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
       status: 'parsed_index_blocked',
+      review_status: 'pending',
       active_revision_id: null,
       preview_revision_id: 'revision-preview',
+      indexable: false,
       page_count: 18,
     }),
     document({
@@ -223,32 +325,458 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
       error_code: 'OCR_PROFILE_UNAVAILABLE',
     }),
   ]
+  type MockReviewMetadata = {
+    review_note: string | null
+    reviewed_by_account_id: string | null
+    reviewed_by_email: string | null
+    reviewed_at: string | null
+  }
+  const reviewMetadata = new Map<string, MockReviewMetadata>()
+  const adminDocument = (item: (typeof documents)[number]) => {
+    const review = reviewMetadata.get(item.id) ?? {
+      review_note: null,
+      reviewed_by_account_id: null,
+      reviewed_by_email: null,
+      reviewed_at: null,
+    }
+    return {
+      id: item.id,
+      course_id: item.course_id,
+      course_title: '操作系统',
+      owner_account_id: 'account-student-e2e',
+      owner_email: 'student@example.com',
+      owner_display_name: '复习同学',
+      owner_subject: 'student@example.com',
+      filename: item.filename,
+      media_type: item.media_type,
+      size_bytes: item.id === 'document-preview' ? 524_288 : 262_144,
+      corpus_role: item.corpus_role,
+      status: item.status,
+      page_count: item.page_count,
+      review_status: item.review_status,
+      ...review,
+      created_at: '2026-07-23T08:00:00Z',
+      updated_at: item.updated_at,
+    }
+  }
+  if (options.includeNoteEligibilityDriftDocuments) {
+    documents.push(
+      document({
+        id: 'document-slides-ready',
+        filename: '调度算法.pptx',
+        media_type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        active_revision_id: 'revision-slides-active',
+        page_count: 16,
+      }),
+      document({
+        id: 'document-non-corpus',
+        filename: '题库.pdf',
+        corpus_role: 'questions',
+      }),
+      document({
+        id: 'document-not-indexable',
+        filename: '未索引.pdf',
+        indexable: false,
+      }),
+      document({
+        id: 'document-extension-only',
+        filename: '伪装资料.pdf',
+        media_type: 'application/octet-stream',
+      }),
+      document({
+        id: 'document-legacy-ppt-filename',
+        filename: '旧版课件.ppt',
+        media_type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      }),
+    )
+  }
 
-  await page.addInitScript((id) => localStorage.setItem('study-agent.course-id', id), courseId)
+  function noteBatchSnapshot(status: 'queued' | 'running' | 'succeeded') {
+    const payload = noteBatchPayload ?? {
+      mode: 'merged' as const,
+      document_ids: [],
+      style: 'exam_focus' as const,
+    }
+    const selectedDocuments = payload.document_ids.map(
+      (id) => documents.find((item) => item.id === id) ?? document({ id }),
+    )
+    const succeeded = status === 'succeeded'
+    const itemStatus = succeeded ? 'succeeded' : status === 'running' ? 'running' : 'queued'
+    return {
+      schema_version: '1.0',
+      id: 'note-batch-e2e',
+      command_kind: 'create',
+      retry_of_batch_id: null,
+      course_id: courseId,
+      mode: 'merged',
+      style: payload.style,
+      title: payload.title?.trim() || null,
+      title_prefix: null,
+      section_path: payload.section_path?.length ? payload.section_path : ['未分类'],
+      target_note_id: null,
+      target_note_version: null,
+      target_note_version_sha256: null,
+      status,
+      completed_items: succeeded ? 1 : 0,
+      total_items: 1,
+      inputs: selectedDocuments.map((selected, index) => ({
+        id: `note-input-e2e-${index + 1}`,
+        ordinal: index + 1,
+        document_id: selected.id,
+        revision_id: selected.active_revision_id ?? 'revision-active',
+        deletion_epoch: selected.deletion_epoch,
+        document_name: selected.filename,
+        media_type: selected.media_type,
+        content_sha256: selected.verified_sha256,
+        index_manifest_at_submit: 'manifest-e2e',
+      })),
+      coverage_units: [],
+      items: [
+        {
+          id: 'note-item-e2e',
+          input_ids: selectedDocuments.map((_, index) => `note-input-e2e-${index + 1}`),
+          status: itemStatus,
+          phase: status === 'running' ? 'generating' : null,
+          elapsed_seconds: succeeded ? 12 : status === 'running' ? 7 : 0,
+          eta: null,
+          eta_unavailable_reason: succeeded
+            ? 'terminal'
+            : status === 'running'
+              ? 'insufficient_history'
+              : 'not_started',
+          attempt: status === 'queued' ? 0 : 1,
+          note_id: generatedNoteRecord?.id ?? null,
+          failure_code: null,
+          retryable_in_new_batch: false,
+        },
+      ],
+      last_event_sequence: noteBatchPolls,
+      created_at: '2026-07-19T05:35:00Z',
+      started_at: status === 'queued' ? null : '2026-07-19T05:35:01Z',
+      completed_at: succeeded ? '2026-07-19T05:35:12Z' : null,
+    }
+  }
+
+  if (options.seedCourseSelection !== false) {
+    await page.addInitScript(
+      (id) => localStorage.setItem('study-agent.course-id:account-e2e', id),
+      courseId,
+    )
+  }
   await page.route('**/api/v1/**', async (route: Route) => {
     const request = route.request()
     const url = new URL(request.url())
     const path = url.pathname.replace('/api/v1', '')
     const method = request.method()
 
+    if (method === 'GET' && path === '/auth/me') {
+      return authenticated
+        ? route.fulfill({ json: signedInAccount })
+        : route.fulfill({
+            status: 401,
+            json: problem(401, 'AUTH_REQUIRED', '需要登录'),
+          })
+    }
+    if (method === 'POST' && path === '/auth/login') {
+      authenticated = true
+      signedInAccount = mockAccount
+      return route.fulfill({ json: signedInAccount })
+    }
+    if (method === 'POST' && path === '/auth/register') {
+      const payload = request.postDataJSON() as {
+        email: string
+        display_name: string
+        invite_code?: string
+      }
+      const invitation = invitations.find((item) => item.id === 'invitation-e2e-1')
+      if (payload.invite_code !== registrationInviteCode || invitation?.status !== 'available') {
+        return route.fulfill({
+          status: 403,
+          json: problem(403, 'AUTH_FORBIDDEN', '注册邀请无效'),
+        })
+      }
+      authenticated = true
+      signedInAccount = {
+        ...mockAccount,
+        email: payload.email,
+        display_name: payload.display_name,
+        role: 'user',
+      }
+      invitations = invitations.map((item) =>
+        item.id === invitation.id
+          ? {
+              ...item,
+              status: 'used',
+              used_by_account_id: signedInAccount.id,
+              used_at: '2026-07-24T08:00:00Z',
+            }
+          : item,
+      )
+      return route.fulfill({
+        status: 201,
+        json: signedInAccount,
+      })
+    }
+    if (method === 'POST' && path === '/auth/logout') {
+      authenticated = false
+      return route.fulfill({ status: 204 })
+    }
+    if (method === 'GET' && path === '/admin/users') {
+      if (!authenticated || accountRole !== 'admin') {
+        return route.fulfill({
+          status: 403,
+          json: problem(403, 'FORBIDDEN', '权限不足'),
+        })
+      }
+      return route.fulfill({ json: { items: adminAccounts } })
+    }
+    const adminUserMatch = path.match(/^\/admin\/users\/([^/]+)$/)
+    if (method === 'PATCH' && adminUserMatch !== null) {
+      if (!authenticated || accountRole !== 'admin') {
+        return route.fulfill({
+          status: 403,
+          json: problem(403, 'FORBIDDEN', '权限不足'),
+        })
+      }
+      const accountId = decodeURIComponent(adminUserMatch[1]!)
+      const accountIndex = adminAccounts.findIndex((account) => account.id === accountId)
+      if (accountIndex === -1) {
+        return route.fulfill({
+          status: 404,
+          json: problem(404, 'RESOURCE_NOT_FOUND', '用户不存在'),
+        })
+      }
+      const payload = request.postDataJSON() as Partial<
+        Pick<MockAdminAccount, 'role' | 'status' | 'admin_note'>
+      >
+      const current = adminAccounts[accountIndex]!
+      if (
+        current.id === mockAccount.id &&
+        (payload.role !== undefined || payload.status !== undefined)
+      ) {
+        return route.fulfill({
+          status: 409,
+          json: problem(409, 'STATE_CONFLICT', '不能修改当前账号的角色或状态'),
+        })
+      }
+      const updated = { ...current, ...payload }
+      adminAccounts = adminAccounts.map((account) =>
+        account.id === updated.id ? updated : account,
+      )
+      return route.fulfill({ json: updated })
+    }
+    if (method === 'GET' && path === '/admin/invitations') {
+      if (!authenticated || accountRole !== 'admin') {
+        return route.fulfill({
+          status: 403,
+          json: problem(403, 'FORBIDDEN', '权限不足'),
+        })
+      }
+      return route.fulfill({ json: { items: invitations } })
+    }
+    if (method === 'POST' && path === '/admin/invitations') {
+      if (!authenticated || accountRole !== 'admin') {
+        return route.fulfill({
+          status: 403,
+          json: problem(403, 'FORBIDDEN', '权限不足'),
+        })
+      }
+      const payload = request.postDataJSON() as { expires_in_days: number }
+      invitationSequence += 1
+      const createdAt = new Date('2026-07-24T08:00:00Z')
+      const invitation: MockInvitation = {
+        id: `invitation-e2e-${invitationSequence}`,
+        created_by_account_id: mockAccount.id,
+        used_by_account_id: null,
+        status: 'available',
+        created_at: createdAt.toISOString(),
+        expires_at: new Date(
+          createdAt.getTime() + payload.expires_in_days * 24 * 60 * 60 * 1_000,
+        ).toISOString(),
+        used_at: null,
+        revoked_at: null,
+      }
+      invitations = [invitation, ...invitations]
+      return route.fulfill({
+        status: 201,
+        json: {
+          ...invitation,
+          code: `created-invite-code-${invitationSequence}-123456`,
+        },
+      })
+    }
+    const invitationMatch = path.match(/^\/admin\/invitations\/([^/]+)$/)
+    if (method === 'DELETE' && invitationMatch !== null) {
+      if (!authenticated || accountRole !== 'admin') {
+        return route.fulfill({
+          status: 403,
+          json: problem(403, 'FORBIDDEN', '权限不足'),
+        })
+      }
+      const invitationId = decodeURIComponent(invitationMatch[1]!)
+      invitations = invitations.map((invitation) =>
+        invitation.id === invitationId
+          ? {
+              ...invitation,
+              status: 'revoked',
+              revoked_at: '2026-07-24T08:05:00Z',
+            }
+          : invitation,
+      )
+      return route.fulfill({ status: 204 })
+    }
+    if (method === 'GET' && path === '/admin/diagnostics') {
+      if (!authenticated || accountRole !== 'admin') {
+        return route.fulfill({
+          status: 403,
+          json: problem(403, 'FORBIDDEN', '权限不足'),
+        })
+      }
+      return route.fulfill({
+        json: {
+          totals: {
+            accounts: 1,
+            active_sessions: authenticated ? 1 : 0,
+            courses: 1,
+            documents: documents.length,
+            notes: generatedNoteRecord ? 2 : 1,
+          },
+          runtime: {
+            app_mode: 'local',
+            database: 'postgresql',
+            demo_lab_enabled: true,
+          },
+        },
+      })
+    }
+    if (method === 'GET' && path === '/admin/documents') {
+      if (!authenticated || accountRole !== 'admin') {
+        return route.fulfill({
+          status: 403,
+          json: problem(403, 'FORBIDDEN', '权限不足'),
+        })
+      }
+      const reviewStatus = url.searchParams.get('review_status')
+      const items = documents
+        .filter((item) => reviewStatus === null || item.review_status === reviewStatus)
+        .map(adminDocument)
+      return route.fulfill({ json: { items } })
+    }
+    const adminDocumentContentMatch = path.match(/^\/admin\/documents\/([^/]+)\/content$/)
+    if (method === 'GET' && adminDocumentContentMatch !== null) {
+      if (!authenticated || accountRole !== 'admin') {
+        return route.fulfill({
+          status: 403,
+          json: problem(403, 'FORBIDDEN', '权限不足'),
+        })
+      }
+      const documentId = decodeURIComponent(adminDocumentContentMatch[1]!)
+      const current = documents.find((item) => item.id === documentId)
+      if (current === undefined) {
+        return route.fulfill({
+          status: 404,
+          json: problem(404, 'RESOURCE_NOT_FOUND', '资料不存在'),
+        })
+      }
+      return route.fulfill({
+        body: Buffer.from('%PDF-1.7\nmock review content'),
+        contentType: current.media_type,
+        headers: {
+          'Cache-Control': 'private, no-store',
+          'Content-Disposition': `inline; filename*=UTF-8''${encodeURIComponent(current.filename)}`,
+        },
+      })
+    }
+    const adminDocumentReviewMatch = path.match(/^\/admin\/documents\/([^/]+)\/review$/)
+    if (method === 'POST' && adminDocumentReviewMatch !== null) {
+      if (!authenticated || accountRole !== 'admin') {
+        return route.fulfill({
+          status: 403,
+          json: problem(403, 'FORBIDDEN', '权限不足'),
+        })
+      }
+      const documentId = decodeURIComponent(adminDocumentReviewMatch[1]!)
+      const current = documents.find((item) => item.id === documentId)
+      if (current === undefined) {
+        return route.fulfill({
+          status: 404,
+          json: problem(404, 'RESOURCE_NOT_FOUND', '资料不存在'),
+        })
+      }
+      const payload = request.postDataJSON() as {
+        review_status?: string
+        review_note?: string | null
+      }
+      const reviewNote = payload.review_note?.trim() || null
+      if (
+        !['approved', 'rejected'].includes(payload.review_status ?? '') ||
+        (payload.review_status === 'rejected' && reviewNote === null)
+      ) {
+        return route.fulfill({
+          status: 422,
+          json: problem(422, 'VALIDATION_ERROR', '审核决定无效'),
+        })
+      }
+      if (current.review_status !== 'pending' && current.review_status !== payload.review_status) {
+        return route.fulfill({
+          status: 409,
+          json: problem(409, 'STATE_CONFLICT', '资料已经完成审核'),
+        })
+      }
+      documents = documents.map((item) =>
+        item.id === documentId
+          ? {
+              ...item,
+              review_status: payload.review_status,
+              indexable: payload.review_status === 'approved' && item.corpus_role === 'corpus',
+              updated_at: '2026-07-24T08:10:00Z',
+            }
+          : item,
+      )
+      reviewMetadata.set(documentId, {
+        review_note: reviewNote,
+        reviewed_by_account_id: mockAccount.id,
+        reviewed_by_email: mockAccount.email,
+        reviewed_at: '2026-07-24T08:10:00Z',
+      })
+      return route.fulfill({
+        json: adminDocument(documents.find((item) => item.id === documentId)!),
+      })
+    }
+
     if (method === 'GET' && path === `/courses/${courseId}`) {
-      return route.fulfill({ json: { id: courseId, title: '操作系统', lifecycle: 'active' } })
+      return route.fulfill({
+        json: { id: courseId, title: '操作系统', lifecycle: 'active' },
+      })
+    }
+    if (method === 'GET' && path === '/courses') {
+      return route.fulfill({
+        json: [{ id: courseId, title: '操作系统', lifecycle: 'active' }],
+      })
     }
     if (method === 'GET' && path === '/capabilities') {
       const providerStatus = providerAvailable ? 'available' : 'not_configured'
       return route.fulfill({
         json: {
-          provider: { status: providerStatus, label: providerAvailable ? '可用' : '未配置' },
-          embedding: { status: providerStatus, label: providerAvailable ? '可用' : '未配置' },
+          provider: {
+            status: providerStatus,
+            label: providerAvailable ? '可用' : '未配置',
+          },
+          embedding: {
+            status: providerStatus,
+            label: providerAvailable ? '可用' : '未配置',
+          },
           native_parser: { status: 'available', label: '原生解析可用' },
-          ocr_parser: { status: 'worker_required', label: '需要本地 OCR Worker' },
+          ocr_parser: {
+            status: 'worker_required',
+            label: '需要本地 OCR Worker',
+          },
           demo_lab_enabled: true,
           note_workflow: {
-            enabled: false,
+            enabled: true,
             generation: {
-              status: 'unavailable',
-              label: '异步笔记生成功能未启用',
-              error_code: 'NOTE_WORKFLOW_DISABLED',
+              status: 'available',
+              label: '本地异步笔记生成可用',
             },
             export: {
               status: 'unavailable',
@@ -279,8 +807,14 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
             corpus_role: uploadDeclaration?.corpus_role,
             verified_sha256: uploadDeclaration?.sha256,
             status: 'uploading',
+            review_status: 'pending',
+            indexable: false,
           }),
-          upload: { id: 'upload-e2e', url: '/api/v1/uploads/upload-e2e', expires_at: '2099-01-01T00:00:00Z' },
+          upload: {
+            id: 'upload-e2e',
+            url: '/api/v1/uploads/upload-e2e',
+            expires_at: '2099-01-01T00:00:00Z',
+          },
         },
       })
     }
@@ -326,6 +860,8 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
         corpus_role: uploadDeclaration.corpus_role,
         verified_sha256: uploadedSha,
         status: 'queued',
+        review_status: 'pending',
+        indexable: false,
         parse_job_id: 'parse-job-upload',
         progress: { phase: 'queued', completed_pages: 0, total_pages: null },
       })
@@ -339,7 +875,11 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
         ...current,
         status: 'queued',
         parse_job_id: 'parse-job-retry',
-        progress: { phase: 'queued', completed_pages: 0, total_pages: current.page_count },
+        progress: {
+          phase: 'queued',
+          completed_pages: 0,
+          total_pages: current.page_count,
+        },
         error_code: null,
       }
       documents = documents.map((item) => (item.id === id ? retried : item))
@@ -348,10 +888,23 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
     if (method === 'DELETE' && path.startsWith('/documents/')) {
       const id = path.split('/')[2]
       documents = documents.filter((item) => item.id !== id)
-      return route.fulfill({ status: 202, json: { deletion_id: 'deletion-e2e', status: 'pending' } })
+      return route.fulfill({
+        status: 202,
+        json: { deletion_id: 'deletion-e2e', status: 'pending' },
+      })
     }
     if (method === 'GET' && path === '/deletions/deletion-e2e') {
-      return route.fulfill({ json: { id: 'deletion-e2e', target_id: 'document-ready', target_type: 'document', deletion_epoch: 1, status: 'completed', attempt_count: 1, completed_at: '2026-07-19T05:30:00Z' } })
+      return route.fulfill({
+        json: {
+          id: 'deletion-e2e',
+          target_id: 'document-ready',
+          target_type: 'document',
+          deletion_epoch: 1,
+          status: 'completed',
+          attempt_count: 1,
+          completed_at: '2026-07-19T05:30:00Z',
+        },
+      })
     }
     if (method === 'GET' && path === `/courses/${courseId}/conversations`) {
       const ordered = [...conversations].sort(
@@ -433,10 +986,7 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
       }
       return route.fulfill({ json: snapshot })
     }
-    if (
-      method === 'GET' &&
-      /^\/queries\/query-e2e-\d+\/citations\/citation-e2e$/.test(path)
-    ) {
+    if (method === 'GET' && /^\/queries\/query-e2e-\d+\/citations\/citation-e2e$/.test(path)) {
       const queryId = path.split('/')[2] ?? ''
       if (!queries.has(queryId)) {
         return route.fulfill({
@@ -464,8 +1014,33 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
     if (method === 'GET' && path === '/e2e/sources/citation-e2e.png') {
       return route.fulfill({ body: transparentPng, contentType: 'image/png' })
     }
+    if (method === 'POST' && path === `/courses/${courseId}/note-batches`) {
+      noteBatchPayload = request.postDataJSON() as typeof noteBatchPayload
+      noteBatchPolls = 0
+      return route.fulfill({ status: 202, json: noteBatchSnapshot('queued') })
+    }
+    if (method === 'GET' && /^\/note-batches\/[^/]+$/.test(path)) {
+      if (!noteBatchPayload) {
+        return route.fulfill({
+          status: 404,
+          json: problem(404, 'RESOURCE_NOT_FOUND', '批次不存在'),
+        })
+      }
+      noteBatchPolls += 1
+      const status = noteBatchPolls >= noteBatchPollsBeforeSuccess ? 'succeeded' : 'running'
+      if (status === 'succeeded') {
+        generatedNoteRecord = generatedNote(
+          noteBatchPayload.title?.trim() || '合并课程笔记',
+          noteBatchPayload.section_path?.length ? noteBatchPayload.section_path : ['未分类'],
+          noteBatchPayload.style,
+        )
+      }
+      return route.fulfill({ json: noteBatchSnapshot(status) })
+    }
     if (method === 'GET' && path === `/courses/${courseId}/notes`) {
-      return route.fulfill({ json: [note(notesVersion)] })
+      return route.fulfill({
+        json: [note(notesVersion), ...(generatedNoteRecord ? [generatedNoteRecord] : [])],
+      })
     }
     if (method === 'PATCH' && path === '/notes/note-e2e') {
       if (request.headers()['if-match'] !== '"1"') {
@@ -475,10 +1050,115 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
         })
       }
       notesVersion = 2
-      return route.fulfill({ status: 412, json: problem(412, 'VERSION_CONFLICT', '笔记版本冲突') })
+      return route.fulfill({
+        status: 412,
+        json: problem(412, 'VERSION_CONFLICT', '笔记版本冲突'),
+      })
     }
     if (method === 'POST' && path === '/notes/note-e2e/regenerate') {
       return route.fulfill({ json: note(notesVersion) })
+    }
+    if (method === 'GET' && path === `/courses/${courseId}/knowledge-graph`) {
+      return route.fulfill({
+        json: {
+          course_id: courseId,
+          tokenizer_version: 'jieba-v1',
+          active_document_count: 2,
+          included_document_count: 2,
+          source_chunk_count: 18,
+          node_limit: 64,
+          edge_limit: 160,
+          truncated: false,
+          nodes: [
+            {
+              id: `course:${courseId}`,
+              kind: 'course',
+              label: '操作系统',
+              document_id: null,
+              revision_id: null,
+              page_count: null,
+              frequency: null,
+              document_count: null,
+              occurrence_count: null,
+              occurrences: [],
+              occurrences_truncated: false,
+            },
+            {
+              id: 'document:document-ready',
+              kind: 'document',
+              label: '进程与线程.pdf',
+              document_id: 'document-ready',
+              revision_id: 'revision-active',
+              page_count: 24,
+              frequency: null,
+              document_count: null,
+              occurrence_count: null,
+              occurrences: [],
+              occurrences_truncated: false,
+            },
+            {
+              id: 'concept:process',
+              kind: 'concept',
+              label: '进程',
+              document_id: null,
+              revision_id: null,
+              page_count: null,
+              frequency: 9,
+              document_count: 1,
+              occurrence_count: 3,
+              occurrences: [
+                {
+                  document_id: 'document-ready',
+                  document_name: '进程与线程.pdf',
+                  revision_id: 'revision-active',
+                  chunk_id: 'chunk-process',
+                  page_ordinal: 6,
+                  chunk_ordinal: 2,
+                  count: 3,
+                  excerpt: '进程是资源分配的基本单位，线程是调度的基本单位。',
+                },
+              ],
+              occurrences_truncated: false,
+            },
+            {
+              id: 'concept:scheduling',
+              kind: 'concept',
+              label: '调度',
+              document_id: null,
+              revision_id: null,
+              page_count: null,
+              frequency: 6,
+              document_count: 1,
+              occurrence_count: 2,
+              occurrences: [],
+              occurrences_truncated: false,
+            },
+          ],
+          edges: [
+            {
+              id: 'edge:contains:document-ready',
+              source: `course:${courseId}`,
+              target: 'document:document-ready',
+              kind: 'contains',
+              weight: 1,
+            },
+            {
+              id: 'edge:mentions:process',
+              source: 'document:document-ready',
+              target: 'concept:process',
+              kind: 'mentions',
+              weight: 9,
+            },
+            {
+              id: 'edge:co-occurs:process:scheduling',
+              source: 'concept:process',
+              target: 'concept:scheduling',
+              kind: 'co_occurs',
+              weight: 4,
+            },
+          ],
+        },
+      })
     }
     if (method === 'GET' && path === `/courses/${courseId}/lab/trace`) {
       return route.fulfill({
@@ -491,7 +1171,12 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
           embedding_model: 'BAAI/bge-m3',
           candidates: [
             { chunk_id: '91f2c9a31bb0', route: 'dense', rank: 1, score: 0.92 },
-            { chunk_id: '288b62dff910', route: 'lexical', rank: 2, score: 0.81 },
+            {
+              chunk_id: '288b62dff910',
+              route: 'lexical',
+              rank: 2,
+              score: 0.81,
+            },
             { chunk_id: '7901f8f1894d', route: 'rrf', rank: 1, score: 0.031 },
           ],
           citation_validation: 'passed',
@@ -501,6 +1186,9 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
         },
       })
     }
-    return route.fulfill({ status: 404, json: problem(404, 'RESOURCE_NOT_FOUND', `未模拟 ${method} ${path}`) })
+    return route.fulfill({
+      status: 404,
+      json: problem(404, 'RESOURCE_NOT_FOUND', `未模拟 ${method} ${path}`),
+    })
   })
 }

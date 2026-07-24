@@ -88,6 +88,7 @@ def test_note_problem_codes_are_stable_and_actionable() -> None:
         "NOTE_REQUEST_LIMIT_EXCEEDED",
         "NOTE_SOURCE_CHANGED",
         "NOTE_VERSION_NOT_FOUND",
+        "NOTE_WORKFLOW_DISABLED",
     }
 
     assert {code.value for code in ProblemCode if code.name.startswith("NOTE_")} == expected

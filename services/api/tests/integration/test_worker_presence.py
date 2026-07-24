@@ -86,9 +86,12 @@ async def test_capabilities_follow_recent_authenticated_worker_claims(
     assert before.json()["native_parser"]["status"] == "worker_required"
     note_workflow = before.json()["note_workflow"]
     assert note_workflow["enabled"] is True
-    for capability in ("generation", "export", "eta"):
-        assert note_workflow[capability]["status"] == "available"
-        assert note_workflow[capability]["error_code"] is None
+    assert note_workflow["generation"]["status"] == "available"
+    assert note_workflow["generation"]["error_code"] is None
+    assert note_workflow["export"]["status"] == "unavailable"
+    assert note_workflow["export"]["error_code"] == "NOTE_EXPORT_UNAVAILABLE"
+    assert note_workflow["eta"]["status"] == "unavailable"
+    assert note_workflow["eta"]["error_code"] == "NOTE_ETA_UNAVAILABLE"
     assert claimed.status_code == 200
     assert claimed.json()["lease"] is None
     assert online.json()["native_parser"]["status"] == "available"

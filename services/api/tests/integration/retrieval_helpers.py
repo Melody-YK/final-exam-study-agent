@@ -28,6 +28,7 @@ async def seed_document_revision(
     text_chunks: Sequence[str],
     active: bool,
     preview: bool,
+    review_status: str = "approved",
     document_id: str | None = None,
     revision_ordinal: int = 1,
 ) -> SeededRevision:
@@ -60,6 +61,7 @@ async def seed_document_revision(
                 corpus_role="corpus",
                 verified_sha256=digest,
                 status="ready" if active and not preview else "parsed_index_blocked",
+                review_status=review_status,
                 deletion_epoch=0,
             )
         )

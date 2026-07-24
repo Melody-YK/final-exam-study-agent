@@ -56,7 +56,7 @@ async def test_head_creates_conversation_query_note_and_dependency_schema(
     finally:
         await engine.dispose()
 
-    assert version == "20260722_0008"
+    assert version == "20260724_0012"
     assert tables >= ANSWERING_TABLES
     assert constraints == {
         "ck_query_runs_status",

@@ -34,6 +34,7 @@ export function documentRecord(overrides: Partial<DocumentRecord> = {}): Documen
     corpus_role: 'corpus',
     verified_sha256: 'a'.repeat(64),
     status: 'ready',
+    review_status: 'approved',
     preview_revision_id: null,
     active_revision_id: 'revision-1',
     deletion_epoch: 0,
@@ -63,7 +64,13 @@ export function answeredSnapshot(overrides: Partial<QuerySnapshot> = {}): QueryS
     query_id: 'query-1',
     status: 'answered',
     answer_markdown: '进程是资源分配的基本单位。',
-    claims: [{ id: 'claim-1', text: '进程拥有独立地址空间。', citation_ids: [citation.id] }],
+    claims: [
+      {
+        id: 'claim-1',
+        text: '进程拥有独立地址空间。',
+        citation_ids: [citation.id],
+      },
+    ],
     citations: [citation],
     refusal: null,
   }

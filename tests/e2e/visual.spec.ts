@@ -125,12 +125,12 @@ test('primary views stay nonblank and free of overflow or control overlap', asyn
   await page.getByRole('button', { name: '关闭' }).click()
 
   await page.getByRole('link', { name: '笔记' }).click()
-  await expect(page.getByLabel('笔记正文')).toBeVisible()
+  await expect(page.getByLabel('笔记阅读视图')).toBeVisible()
   await verifyView(page, testInfo, 'notes')
 
-  await page.getByRole('link', { name: 'Lab' }).click()
-  await expect(page.getByRole('heading', { name: '工程链路' })).toBeVisible()
-  await verifyView(page, testInfo, 'lab')
+  await page.getByRole('link', { name: '知识图谱' }).click()
+  await expect(page.getByRole('heading', { name: '课程知识图谱' })).toBeVisible()
+  await verifyView(page, testInfo, 'knowledge-graph')
 
   await page.getByRole('link', { name: '资料' }).click()
   await page.getByRole('button', { name: '删除资料' }).first().click()
