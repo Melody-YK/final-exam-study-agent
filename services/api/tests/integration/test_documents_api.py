@@ -115,8 +115,9 @@ async def test_local_course_upload_dedup_and_delete_flow(
         assert complete_response.status_code == 202
         document = complete_response.json()
         assert document["status"] == "queued"
+        assert document["review_status"] == "pending"
         assert document["corpus_role"] == "corpus"
-        assert document["indexable"] is True
+        assert document["indexable"] is False
 
         complete_replay = await client.post(
             f"/api/v1/documents/{document['id']}/upload:complete",

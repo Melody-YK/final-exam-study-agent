@@ -8,6 +8,8 @@ from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
+LOCAL_PRINCIPAL_SUBJECT = "local-user"
+
 
 class AuthenticationMethod(StrEnum):
     LOCAL = "local"
@@ -84,7 +86,7 @@ class LocalPrincipalProvider:
     """Single-user identity provider restricted to literal loopback IPs."""
 
     _principal = Principal(
-        subject="local-user",
+        subject=LOCAL_PRINCIPAL_SUBJECT,
         authentication_method=AuthenticationMethod.LOCAL,
     )
 

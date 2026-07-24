@@ -13,8 +13,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased
 
 from study_agent.api.errors import ApiProblem, ProblemCode
-from study_agent.config import Settings
-from study_agent.identity.principal import Principal, PrincipalProvider
+from study_agent.config import AppMode, Settings
+from study_agent.identity.principal import Principal
+from study_agent.identity.session import get_request_principal
 from study_agent.infrastructure.db.models import (
     AnswerDependencyModel,
     CourseModel,
@@ -31,6 +32,7 @@ from study_agent.infrastructure.db.models import (
     UserModel,
 )
 from study_agent.infrastructure.db.session import Database
+from study_agent.modules.courses.documents import DocumentReviewStatus
 from study_agent.modules.courses.manifest import CorpusRole, ManifestPolicy
 from study_agent.modules.idempotency import IdempotencyService
 from study_agent.modules.jobs.presence import WorkerPresenceRegistry
@@ -49,6 +51,7 @@ class WorkspaceDocumentResponse(BaseModel):
     corpus_role: CorpusRole
     verified_sha256: str
     status: str
+    review_status: DocumentReviewStatus
     preview_revision_id: str | None
     active_revision_id: str | None
     deletion_epoch: int
@@ -127,18 +130,8 @@ class LabTraceResponse(BaseModel):
     usage: LabUsageResponse | None = None
 
 
-def _principal(request: Request) -> Principal:
-    if request.client is None:
-        raise ApiProblem(status=401, code=ProblemCode.AUTH_REQUIRED, title="需要身份验证")
-    try:
-        provider = cast(PrincipalProvider, request.app.state.principal_provider)
-        return provider.resolve(request.client.host)
-    except PermissionError as exc:
-        raise ApiProblem(
-            status=401,
-            code=ProblemCode.AUTH_REQUIRED,
-            title="需要身份验证",
-        ) from exc
+async def _principal(request: Request) -> Principal:
+    return await get_request_principal(request)
 
 
 def _database(request: Request) -> Database:
@@ -170,25 +163,29 @@ async def get_runtime_capabilities(request: Request) -> RuntimeCapabilitiesRespo
     embedding_status: Literal["available", "not_configured"] = (
         "available" if settings.embedding_configured else "not_configured"
     )
-    generation_ready = settings.note_workflow_configured
+    demo_generation_ready = settings.demo_lab_enabled and settings.app_mode in {
+        AppMode.LOCAL,
+        AppMode.TEST,
+    }
+    generation_ready = demo_generation_ready
     generation_capability = CapabilityResponse(
         status="available" if generation_ready else "unavailable",
         label=(
-            "异步笔记生成已就绪" if generation_ready else "异步笔记生成功能未启用或缺少受信 Runner"
+            "本地来源派生笔记演示已就绪"
+            if generation_ready
+            else "异步笔记生成功能未启用或缺少受信 Runner"
         ),
-        error_code=None if generation_ready else "NOTE_WORKFLOW_DISABLED",
+        error_code=None if generation_ready else ProblemCode.NOTE_WORKFLOW_DISABLED,
     )
-    export_ready = settings.note_docx_configured
     export_capability = CapabilityResponse(
-        status="available" if export_ready else "unavailable",
-        label="DOCX 导出已就绪" if export_ready else "DOCX 导出未启用或缺少 Renderer",
-        error_code=None if export_ready else "NOTE_EXPORT_UNAVAILABLE",
+        status="unavailable",
+        label="当前演示未提供 DOCX 导出",
+        error_code="NOTE_EXPORT_UNAVAILABLE",
     )
-    eta_ready = settings.note_numeric_eta_enabled and generation_ready
     eta_capability = CapabilityResponse(
-        status="available" if eta_ready else "unavailable",
-        label="数值 ETA 已启用" if eta_ready else "样本不足时仅显示阶段耗时",
-        error_code=None if eta_ready else "NOTE_ETA_UNAVAILABLE",
+        status="unavailable",
+        label="当前演示仅显示阶段耗时",
+        error_code="NOTE_ETA_UNAVAILABLE",
     )
     return RuntimeCapabilitiesResponse(
         provider=CapabilityResponse(
@@ -223,7 +220,7 @@ async def get_runtime_capabilities(request: Request) -> RuntimeCapabilitiesRespo
         ),
         demo_lab_enabled=settings.demo_lab_enabled,
         note_workflow=NoteWorkflowCapabilityResponse(
-            enabled=settings.note_async_workflow_enabled,
+            enabled=generation_ready,
             generation=generation_capability,
             export=export_capability,
             eta=eta_capability,
@@ -239,7 +236,7 @@ async def list_course_documents(
     course_id: str,
     request: Request,
 ) -> list[WorkspaceDocumentResponse]:
-    principal = _principal(request)
+    principal = await _principal(request)
     database = _database(request)
     revision = aliased(DocumentRevisionModel)
     latest_job_id = (
@@ -296,10 +293,14 @@ async def list_course_documents(
             corpus_role=CorpusRole(document.corpus_role),
             verified_sha256=document.verified_sha256,
             status=document.status,
+            review_status=document.review_status,
             preview_revision_id=document.preview_revision_id,
             active_revision_id=document.active_revision_id,
             deletion_epoch=document.deletion_epoch,
-            indexable=ManifestPolicy.is_indexable(CorpusRole(document.corpus_role)),
+            indexable=(
+                document.review_status == "approved"
+                and ManifestPolicy.is_indexable(CorpusRole(document.corpus_role))
+            ),
             page_count=page_count,
             parse_job_id=None if job is None else job.id,
             progress={} if job is None else dict(job.progress),
@@ -325,7 +326,7 @@ async def retry_document_parse(
         Header(alias="Idempotency-Key", min_length=1, max_length=255),
     ],
 ) -> WorkspaceDocumentResponse:
-    principal = _principal(request)
+    principal = await _principal(request)
     database = _database(request)
     settings = _settings(request)
     idempotency = IdempotencyService()
@@ -346,8 +347,8 @@ async def retry_document_parse(
             request_hash=request_hash,
         )
         if replay is not None:
-            still_visible = await session.scalar(
-                select(DocumentModel.id)
+            visible_review_status = await session.scalar(
+                select(DocumentModel.review_status)
                 .join(CourseModel, CourseModel.id == DocumentModel.course_id)
                 .join(UserModel, UserModel.id == CourseModel.user_id)
                 .where(
@@ -358,11 +359,17 @@ async def retry_document_parse(
                     UserModel.authentication_method == principal.authentication_method.value,
                 )
             )
-            if still_visible is None:
+            if visible_review_status is None:
                 raise ApiProblem(
                     status=404,
                     code=ProblemCode.RESOURCE_NOT_FOUND,
                     title="资料不存在",
+                )
+            if visible_review_status != "approved":
+                raise ApiProblem(
+                    status=409,
+                    code=ProblemCode.STATE_CONFLICT,
+                    title="资料尚未通过审核",
                 )
             return WorkspaceDocumentResponse.model_validate(replay.response_body)
 
@@ -384,6 +391,12 @@ async def retry_document_parse(
                 status=404,
                 code=ProblemCode.RESOURCE_NOT_FOUND,
                 title="资料不存在",
+            )
+        if document.review_status != "approved":
+            raise ApiProblem(
+                status=409,
+                code=ProblemCode.STATE_CONFLICT,
+                title="资料尚未通过审核",
             )
         latest_job = await session.scalar(
             select(ParseJobModel)
@@ -456,10 +469,14 @@ async def retry_document_parse(
             corpus_role=CorpusRole(document.corpus_role),
             verified_sha256=document.verified_sha256,
             status=document.status,
+            review_status=document.review_status,
             preview_revision_id=document.preview_revision_id,
             active_revision_id=document.active_revision_id,
             deletion_epoch=document.deletion_epoch,
-            indexable=ManifestPolicy.is_indexable(CorpusRole(document.corpus_role)),
+            indexable=(
+                document.review_status == "approved"
+                and ManifestPolicy.is_indexable(CorpusRole(document.corpus_role))
+            ),
             page_count=None,
             parse_job_id=job.id,
             progress=dict(job.progress),
@@ -559,7 +576,7 @@ async def get_latest_lab_trace(course_id: str, request: Request) -> LabTraceResp
             code=ProblemCode.RESOURCE_NOT_FOUND,
             title="工程 Lab 未启用",
         )
-    principal = _principal(request)
+    principal = await _principal(request)
     database = _database(request)
     async with database.session(principal) as session:
         row = (

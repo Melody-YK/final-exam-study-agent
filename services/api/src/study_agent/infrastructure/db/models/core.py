@@ -178,6 +178,29 @@ class DocumentModel(TimestampMixin, Base):
         ),
         UniqueConstraint("id", "course_id", "user_id", name="uq_documents_id_course_user"),
         CheckConstraint("deletion_epoch >= 0", name="ck_documents_deletion_epoch_nonnegative"),
+        CheckConstraint(
+            "review_status IN ('pending', 'approved', 'rejected')",
+            name="ck_documents_review_status",
+        ),
+        CheckConstraint(
+            "review_note IS NULL OR (review_note = btrim(review_note) "
+            "AND length(review_note) BETWEEN 1 AND 500)",
+            name="ck_documents_review_note",
+        ),
+        CheckConstraint(
+            "(reviewed_by_account_id IS NULL) = (reviewed_at IS NULL)",
+            name="ck_documents_review_actor_time",
+        ),
+        CheckConstraint(
+            "(review_status NOT IN ('pending', 'approved', 'rejected')) OR "
+            "(review_status = 'pending' AND reviewed_by_account_id IS NULL "
+            "AND reviewed_at IS NULL AND review_note IS NULL) OR "
+            "(review_status = 'approved' AND (review_note IS NULL "
+            "OR reviewed_by_account_id IS NOT NULL)) OR "
+            "(review_status = 'rejected' AND reviewed_by_account_id IS NOT NULL "
+            "AND reviewed_at IS NOT NULL AND review_note IS NOT NULL)",
+            name="ck_documents_review_state",
+        ),
         Index(
             "uq_documents_visible_content_role",
             "course_id",
@@ -187,6 +210,13 @@ class DocumentModel(TimestampMixin, Base):
             postgresql_where=text("deleted_at IS NULL"),
         ),
         Index("ix_documents_course_visible", "course_id", "deleted_at"),
+        Index(
+            "ix_documents_review_queue",
+            "review_status",
+            "created_at",
+            "id",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
@@ -202,6 +232,14 @@ class DocumentModel(TimestampMixin, Base):
     corpus_role: Mapped[str] = mapped_column(String(32), nullable=False)
     verified_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(64), nullable=False, default="uploaded")
+    review_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending", server_default=text("'pending'")
+    )
+    review_note: Mapped[str | None] = mapped_column(Text)
+    reviewed_by_account_id: Mapped[str | None] = mapped_column(
+        ForeignKey("accounts.id", ondelete="RESTRICT")
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     preview_revision_id: Mapped[str | None] = mapped_column(String(36))
     active_revision_id: Mapped[str | None] = mapped_column(String(36))
     deletion_epoch: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

@@ -109,6 +109,7 @@ class Settings(BaseSettings):
     note_runner_enabled: bool = False
     note_runner_poll_seconds: float = Field(default=1.0, gt=0, le=60)
     note_runner_lease_seconds: int = Field(default=60, ge=5, le=900)
+    note_demo_phase_delay_seconds: float = Field(default=0.35, ge=0, le=5)
     note_generation_max_attempts: int = Field(default=3, ge=1, le=20)
     note_batch_max_documents: int = Field(default=20, ge=1, le=500)
     note_batch_max_coverage_units: int = Field(default=2_000, ge=1, le=100_000)

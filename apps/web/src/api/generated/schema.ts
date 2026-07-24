@@ -4,6 +4,211 @@
  */
 
 export interface paths {
+    "/api/v1/admin/diagnostics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Diagnostics */
+        get: operations["diagnostics_api_v1_admin_diagnostics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/documents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Admin Documents */
+        get: operations["list_admin_documents_api_v1_admin_documents_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/documents/{document_id}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Admin Document Content */
+        get: operations["get_admin_document_content_api_v1_admin_documents__document_id__content_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/documents/{document_id}/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Review Admin Document */
+        post: operations["review_admin_document_api_v1_admin_documents__document_id__review_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/invitations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Invitations */
+        get: operations["list_invitations_api_v1_admin_invitations_get"];
+        put?: never;
+        /** Create Invitation */
+        post: operations["create_invitation_api_v1_admin_invitations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/invitations/{invitation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke Invitation */
+        delete: operations["revoke_invitation_api_v1_admin_invitations__invitation_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Users */
+        get: operations["list_users_api_v1_admin_users_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/users/{account_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update User */
+        patch: operations["update_user_api_v1_admin_users__account_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/auth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Login */
+        post: operations["login_api_v1_auth_login_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Logout */
+        post: operations["logout_api_v1_auth_logout_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Me */
+        get: operations["me_api_v1_auth_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register */
+        post: operations["register_api_v1_auth_register_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/capabilities": {
         parameters: {
             query?: never;
@@ -45,7 +250,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** List Courses */
+        get: operations["list_courses_api_v1_courses_get"];
         put?: never;
         /** Create Course */
         post: operations["create_course_api_v1_courses_post"];
@@ -108,6 +314,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/courses/{course_id}/knowledge-graph": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Course Knowledge Graph */
+        get: operations["get_course_knowledge_graph_api_v1_courses__course_id__knowledge_graph_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/courses/{course_id}/lab/trace": {
         parameters: {
             query?: never;
@@ -119,6 +342,23 @@ export interface paths {
         get: operations["get_latest_lab_trace_api_v1_courses__course_id__lab_trace_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/courses/{course_id}/note-batches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Note Batch */
+        post: operations["create_note_batch_api_v1_courses__course_id__note_batches_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -224,6 +464,23 @@ export interface paths {
         put?: never;
         /** Complete Document Upload */
         post: operations["complete_document_upload_api_v1_documents__document_id__upload_complete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/note-batches/{batch_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Note Batch */
+        get: operations["get_note_batch_api_v1_note_batches__batch_id__get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -541,6 +798,157 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AccountResponse */
+        AccountResponse: {
+            /** Display Name */
+            display_name: string;
+            /** Email */
+            email: string;
+            /** Id */
+            id: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "admin" | "user";
+        };
+        /** AdminAccountResponse */
+        AdminAccountResponse: {
+            /** Admin Note */
+            admin_note: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Display Name */
+            display_name: string;
+            /** Email */
+            email: string;
+            /** Id */
+            id: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "admin" | "user";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "active" | "suspended";
+        };
+        /** AdminAccountUpdateRequest */
+        AdminAccountUpdateRequest: {
+            /** Admin Note */
+            admin_note?: string | null;
+            /** Role */
+            role?: ("admin" | "user") | null;
+            /** Status */
+            status?: ("active" | "suspended") | null;
+        };
+        /** AdminDiagnosticsResponse */
+        AdminDiagnosticsResponse: {
+            runtime: components["schemas"]["AdminRuntimeResponse"];
+            totals: components["schemas"]["AdminTotalsResponse"];
+        };
+        /** AdminDocumentResponse */
+        AdminDocumentResponse: {
+            /** Corpus Role */
+            corpus_role: string;
+            /** Course Id */
+            course_id: string;
+            /** Course Title */
+            course_title: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Filename */
+            filename: string;
+            /** Id */
+            id: string;
+            /** Media Type */
+            media_type: string;
+            /** Owner Account Id */
+            owner_account_id: string | null;
+            /** Owner Display Name */
+            owner_display_name: string | null;
+            /** Owner Email */
+            owner_email: string | null;
+            /** Owner Subject */
+            owner_subject: string;
+            /** Page Count */
+            page_count?: number | null;
+            /** Review Note */
+            review_note: string | null;
+            review_status: components["schemas"]["DocumentReviewStatus"];
+            /** Reviewed At */
+            reviewed_at: string | null;
+            /** Reviewed By Account Id */
+            reviewed_by_account_id: string | null;
+            /** Reviewed By Email */
+            reviewed_by_email: string | null;
+            /** Size Bytes */
+            size_bytes: number;
+            /** Status */
+            status: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** AdminDocumentReviewRequest */
+        AdminDocumentReviewRequest: {
+            /** Review Note */
+            review_note?: string | null;
+            review_status: components["schemas"]["DocumentReviewDecision"];
+        };
+        /** AdminDocumentsResponse */
+        AdminDocumentsResponse: {
+            /** Items */
+            items: components["schemas"]["AdminDocumentResponse"][];
+        };
+        /** AdminInvitationsResponse */
+        AdminInvitationsResponse: {
+            /** Items */
+            items: components["schemas"]["InvitationResponse"][];
+        };
+        /** AdminRuntimeResponse */
+        AdminRuntimeResponse: {
+            /**
+             * App Mode
+             * @enum {string}
+             */
+            app_mode: "local" | "test" | "production";
+            /**
+             * Database
+             * @constant
+             */
+            database: "postgresql";
+            /** Demo Lab Enabled */
+            demo_lab_enabled: boolean;
+        };
+        /** AdminTotalsResponse */
+        AdminTotalsResponse: {
+            /** Accounts */
+            accounts: number;
+            /** Active Sessions */
+            active_sessions: number;
+            /** Courses */
+            courses: number;
+            /** Documents */
+            documents: number;
+            /** Notes */
+            notes: number;
+        };
+        /** AdminUsersResponse */
+        AdminUsersResponse: {
+            /** Items */
+            items: components["schemas"]["AdminAccountResponse"][];
+        };
         /**
          * AnswerStatus
          * @enum {string}
@@ -677,6 +1085,39 @@ export interface components {
             /** Title */
             title: string;
         };
+        /** CoverageUnitSnapshot */
+        CoverageUnitSnapshot: {
+            /** Id */
+            id: string;
+            /** Input Id */
+            input_id: string;
+            /** Locator */
+            locator: string;
+            /** Ordinal */
+            ordinal: number;
+            /** Reason Code */
+            reason_code?: string | null;
+            status: components["schemas"]["CoverageUnitStatus"];
+            unit_type: components["schemas"]["CoverageUnitType"];
+        };
+        /**
+         * CoverageUnitStatus
+         * @enum {string}
+         */
+        CoverageUnitStatus: "pending" | "covered" | "skipped" | "failed";
+        /**
+         * CoverageUnitType
+         * @enum {string}
+         */
+        CoverageUnitType: "slide" | "pdf_section" | "pdf_page_window";
+        /** CreateInvitationRequest */
+        CreateInvitationRequest: {
+            /**
+             * Expires In Days
+             * @default 7
+             */
+            expires_in_days: number;
+        };
         /** DeletionAccepted */
         DeletionAccepted: {
             /** Deletion Id */
@@ -735,16 +1176,44 @@ export interface components {
             media_type: string;
             /** Preview Revision Id */
             preview_revision_id: string | null;
+            review_status: components["schemas"]["DocumentReviewStatus"];
             /** Status */
             status: string;
             /** Verified Sha256 */
             verified_sha256: string;
         };
+        /** @enum {string} */
+        DocumentReviewDecision: "approved" | "rejected";
+        /** @enum {string} */
+        DocumentReviewStatus: "pending" | "approved" | "rejected";
         /** DocumentUploadCreated */
         DocumentUploadCreated: {
             document: components["schemas"]["DocumentResponse"];
             upload: components["schemas"]["UploadSessionResponse"];
         };
+        /**
+         * EtaConfidence
+         * @enum {string}
+         */
+        EtaConfidence: "low" | "medium" | "high";
+        /** EtaRange */
+        EtaRange: {
+            /**
+             * As Of
+             * Format: date-time
+             */
+            as_of: string;
+            confidence: components["schemas"]["EtaConfidence"];
+            /** Lower Seconds */
+            lower_seconds: number;
+            /** Upper Seconds */
+            upper_seconds: number;
+        };
+        /**
+         * EtaUnavailableReason
+         * @enum {string}
+         */
+        EtaUnavailableReason: "not_started" | "terminal" | "insufficient_history" | "retrying" | "provider_changed" | "outlier";
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -766,6 +1235,64 @@ export interface components {
             status: "ok";
             /** Version */
             version: string;
+        };
+        /** InvitationCreateResponse */
+        InvitationCreateResponse: {
+            /** Code */
+            code: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By Account Id */
+            created_by_account_id: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Id */
+            id: string;
+            /** Revoked At */
+            revoked_at: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "available" | "used" | "revoked" | "expired";
+            /** Used At */
+            used_at: string | null;
+            /** Used By Account Id */
+            used_by_account_id: string | null;
+        };
+        /** InvitationResponse */
+        InvitationResponse: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By Account Id */
+            created_by_account_id: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Id */
+            id: string;
+            /** Revoked At */
+            revoked_at: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "available" | "used" | "revoked" | "expired";
+            /** Used At */
+            used_at: string | null;
+            /** Used By Account Id */
+            used_by_account_id: string | null;
         };
         /** JobArtifactReceipt */
         JobArtifactReceipt: {
@@ -992,6 +1519,97 @@ export interface components {
          * @enum {string}
          */
         JobStatus: "queued" | "leased" | "parsing" | "result_submitted" | "validating" | "indexing" | "retry_wait" | "succeeded" | "partial_failed" | "failed" | "cancelled";
+        /**
+         * KnowledgeGraphEdgeKind
+         * @enum {string}
+         */
+        KnowledgeGraphEdgeKind: "contains" | "mentions" | "co_occurs";
+        /** KnowledgeGraphEdgeResponse */
+        KnowledgeGraphEdgeResponse: {
+            /** Id */
+            id: string;
+            kind: components["schemas"]["KnowledgeGraphEdgeKind"];
+            /** Source */
+            source: string;
+            /** Target */
+            target: string;
+            /** Weight */
+            weight: number;
+        };
+        /**
+         * KnowledgeGraphNodeKind
+         * @enum {string}
+         */
+        KnowledgeGraphNodeKind: "course" | "document" | "concept";
+        /** KnowledgeGraphNodeResponse */
+        KnowledgeGraphNodeResponse: {
+            /** Document Count */
+            document_count?: number | null;
+            /** Document Id */
+            document_id?: string | null;
+            /** Frequency */
+            frequency?: number | null;
+            /** Id */
+            id: string;
+            kind: components["schemas"]["KnowledgeGraphNodeKind"];
+            /** Label */
+            label: string;
+            /** Occurrence Count */
+            occurrence_count?: number | null;
+            /** Occurrences */
+            occurrences?: components["schemas"]["KnowledgeGraphOccurrenceResponse"][];
+            /**
+             * Occurrences Truncated
+             * @default false
+             */
+            occurrences_truncated: boolean;
+            /** Page Count */
+            page_count?: number | null;
+            /** Revision Id */
+            revision_id?: string | null;
+        };
+        /** KnowledgeGraphOccurrenceResponse */
+        KnowledgeGraphOccurrenceResponse: {
+            /** Chunk Id */
+            chunk_id: string;
+            /** Chunk Ordinal */
+            chunk_ordinal: number;
+            /** Count */
+            count: number;
+            /** Document Id */
+            document_id: string;
+            /** Document Name */
+            document_name: string;
+            /** Excerpt */
+            excerpt: string;
+            /** Page Ordinal */
+            page_ordinal: number;
+            /** Revision Id */
+            revision_id: string;
+        };
+        /** KnowledgeGraphResponse */
+        KnowledgeGraphResponse: {
+            /** Active Document Count */
+            active_document_count: number;
+            /** Course Id */
+            course_id: string;
+            /** Edge Limit */
+            edge_limit: number;
+            /** Edges */
+            edges: components["schemas"]["KnowledgeGraphEdgeResponse"][];
+            /** Included Document Count */
+            included_document_count: number;
+            /** Node Limit */
+            node_limit: number;
+            /** Nodes */
+            nodes: components["schemas"]["KnowledgeGraphNodeResponse"][];
+            /** Source Chunk Count */
+            source_chunk_count: number;
+            /** Tokenizer Version */
+            tokenizer_version: string;
+            /** Truncated */
+            truncated: boolean;
+        };
         /** LabCandidateResponse */
         LabCandidateResponse: {
             /** Chunk Id */
@@ -1041,6 +1659,115 @@ export interface components {
             /** Output Tokens */
             output_tokens?: number | null;
         };
+        /**
+         * LocalDemoNoteBatchSnapshot
+         * @description Public snapshot shape supported by the local merged/create demo route.
+         */
+        LocalDemoNoteBatchSnapshot: {
+            /**
+             * Command Kind
+             * @default create
+             * @constant
+             */
+            command_kind: "create";
+            /** Completed At */
+            completed_at?: string | null;
+            /** Completed Items */
+            completed_items: number;
+            /** Course Id */
+            course_id: string;
+            /** Coverage Units */
+            coverage_units?: components["schemas"]["CoverageUnitSnapshot"][];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Id */
+            id: string;
+            /** Inputs */
+            inputs: components["schemas"]["NoteInputSnapshot"][];
+            /** Items */
+            items: components["schemas"]["NoteItemSnapshot"][];
+            /** Last Event Sequence */
+            last_event_sequence: number;
+            /**
+             * Mode
+             * @default merged
+             * @constant
+             */
+            mode: "merged";
+            /** Retry Of Batch Id */
+            retry_of_batch_id?: string | null;
+            /**
+             * Schema Version
+             * @default 1.0
+             * @constant
+             */
+            schema_version: "1.0";
+            /** Section Path */
+            section_path?: string[];
+            /** Started At */
+            started_at?: string | null;
+            status: components["schemas"]["NoteBatchStatus"];
+            /** @default exam_focus */
+            style: components["schemas"]["NoteBatchStyle"];
+            /** Target Note Id */
+            target_note_id?: string | null;
+            /** Target Note Version */
+            target_note_version?: number | null;
+            /** Target Note Version Sha256 */
+            target_note_version_sha256?: string | null;
+            /** Title */
+            title?: string | null;
+            /** Title Prefix */
+            title_prefix?: string | null;
+            /** Total Items */
+            total_items: number;
+        };
+        /** LoginRequest */
+        LoginRequest: {
+            /** Email */
+            email: string;
+            /**
+             * Password
+             * Format: password
+             */
+            password: string;
+        };
+        /** MergedNoteBatchRequest */
+        MergedNoteBatchRequest: {
+            /** Document Ids */
+            document_ids: string[];
+            /**
+             * Mode
+             * @default merged
+             * @constant
+             */
+            mode: "merged";
+            /**
+             * Schema Version
+             * @default 1.0
+             * @constant
+             */
+            schema_version: "1.0";
+            /** Section Path */
+            section_path?: string[] | null;
+            /** @default exam_focus */
+            style: components["schemas"]["NoteBatchStyle"];
+            /** Title */
+            title?: string | null;
+        };
+        /**
+         * NoteBatchStatus
+         * @enum {string}
+         */
+        NoteBatchStatus: "queued" | "running" | "partial_success" | "succeeded" | "failed" | "cancelling" | "cancelled";
+        /**
+         * NoteBatchStyle
+         * @enum {string}
+         */
+        NoteBatchStyle: "exam_focus" | "outline" | "complete";
         /** NoteCreate */
         NoteCreate: {
             /** Section Path */
@@ -1048,6 +1775,58 @@ export interface components {
             /** Title */
             title: string;
         };
+        /**
+         * NoteGenerationPhase
+         * @enum {string}
+         */
+        NoteGenerationPhase: "validating_inputs" | "segmenting" | "retrieving" | "outlining" | "generating" | "validating_output" | "saving";
+        /** NoteInputSnapshot */
+        NoteInputSnapshot: {
+            /** Content Sha256 */
+            content_sha256: string;
+            /** Deletion Epoch */
+            deletion_epoch: number;
+            /** Document Id */
+            document_id: string;
+            /** Document Name */
+            document_name: string;
+            /** Id */
+            id: string;
+            /** Index Manifest At Submit */
+            index_manifest_at_submit: string;
+            /** Media Type */
+            media_type: string;
+            /** Ordinal */
+            ordinal: number;
+            /** Revision Id */
+            revision_id: string;
+        };
+        /** NoteItemSnapshot */
+        NoteItemSnapshot: {
+            /** Attempt */
+            attempt: number;
+            /** Elapsed Seconds */
+            elapsed_seconds: number;
+            eta?: components["schemas"]["EtaRange"] | null;
+            eta_unavailable_reason?: components["schemas"]["EtaUnavailableReason"] | null;
+            /** Failure Code */
+            failure_code?: string | null;
+            /** Id */
+            id: string;
+            /** Input Ids */
+            input_ids: string[];
+            /** Note Id */
+            note_id?: string | null;
+            phase?: components["schemas"]["NoteGenerationPhase"] | null;
+            /** Retryable In New Batch */
+            retryable_in_new_batch: boolean;
+            status: components["schemas"]["NoteItemStatus"];
+        };
+        /**
+         * NoteItemStatus
+         * @enum {string}
+         */
+        NoteItemStatus: "queued" | "leased" | "running" | "retry_wait" | "succeeded" | "failed" | "cancelling" | "cancelled";
         /** NotePatch */
         NotePatch: {
             /** Body Markdown */
@@ -1228,6 +2007,20 @@ export interface components {
             code: string;
             /** Message */
             message: string;
+        };
+        /** RegisterRequest */
+        RegisterRequest: {
+            /** Display Name */
+            display_name: string;
+            /** Email */
+            email: string;
+            /** Invite Code */
+            invite_code?: string | null;
+            /**
+             * Password
+             * Format: password
+             */
+            password: string;
         };
         /** RuntimeCapabilitiesResponse */
         RuntimeCapabilitiesResponse: {
@@ -1419,6 +2212,7 @@ export interface components {
             progress: {
                 [key: string]: unknown;
             };
+            review_status: components["schemas"]["DocumentReviewStatus"];
             /** Status */
             status: string;
             /**
@@ -1438,6 +2232,364 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    diagnostics_api_v1_admin_diagnostics_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminDiagnosticsResponse"];
+                };
+            };
+        };
+    };
+    list_admin_documents_api_v1_admin_documents_get: {
+        parameters: {
+            query?: {
+                review_status?: components["schemas"]["DocumentReviewStatus"] | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminDocumentsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_admin_document_content_api_v1_admin_documents__document_id__content_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    review_admin_document_api_v1_admin_documents__document_id__review_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminDocumentReviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminDocumentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_invitations_api_v1_admin_invitations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminInvitationsResponse"];
+                };
+            };
+        };
+    };
+    create_invitation_api_v1_admin_invitations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateInvitationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvitationCreateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_invitation_api_v1_admin_invitations__invitation_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                invitation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_users_api_v1_admin_users_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminUsersResponse"];
+                };
+            };
+        };
+    };
+    update_user_api_v1_admin_users__account_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminAccountUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAccountResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    login_api_v1_auth_login_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    logout_api_v1_auth_logout_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    me_api_v1_auth_me_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountResponse"];
+                };
+            };
+        };
+    };
+    register_api_v1_auth_register_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_runtime_capabilities_api_v1_capabilities_get: {
         parameters: {
             query?: never;
@@ -1487,6 +2639,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_courses_api_v1_courses_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CourseResponse"][];
                 };
             };
         };
@@ -1689,6 +2861,40 @@ export interface operations {
             };
         };
     };
+    get_course_knowledge_graph_api_v1_courses__course_id__knowledge_graph_get: {
+        parameters: {
+            query?: {
+                node_limit?: number;
+                edge_limit?: number;
+            };
+            header?: never;
+            path: {
+                course_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeGraphResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_latest_lab_trace_api_v1_courses__course_id__lab_trace_get: {
         parameters: {
             query?: never;
@@ -1707,6 +2913,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LabTraceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_note_batch_api_v1_courses__course_id__note_batches_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path: {
+                course_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MergedNoteBatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LocalDemoNoteBatchSnapshot"];
                 };
             };
             /** @description Validation Error */
@@ -2010,6 +3253,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DocumentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_note_batch_api_v1_note_batches__batch_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                batch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LocalDemoNoteBatchSnapshot"];
                 };
             };
             /** @description Validation Error */

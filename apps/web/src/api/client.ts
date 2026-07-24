@@ -1,10 +1,21 @@
 import type {
+  AdminAccount,
+  AdminAccountUpdate,
+  AdminDiagnostics,
+  AdminDocument,
+  AdminDocumentReviewRequest,
+  AdminDocuments,
+  AdminInvitationCreate,
+  AdminInvitations,
+  AdminUserList,
+  AuthUser,
   CitationSource,
   ConversationCreate,
   ConversationRecord,
   CorpusRole,
   Course,
   CourseCreate,
+  CreateInvitationRequest,
   DeletionAccepted,
   DeletionRecord,
   DocumentCreate,
@@ -12,6 +23,9 @@ import type {
   DocumentUploadCreated,
   EventEnvelope,
   LabTrace,
+  LoginRequest,
+  MergedNoteBatchRequest,
+  NoteBatchSnapshot,
   NoteCreate,
   NotePatch,
   NoteRecord,
@@ -19,6 +33,7 @@ import type {
   ProblemDetails,
   QueryCreate,
   QuerySnapshot,
+  RegisterRequest,
   RuntimeCapabilities,
   UploadCompleteRequest,
 } from './types'
@@ -78,6 +93,7 @@ function fallbackProblem(response: Response): ProblemDetails {
 
 async function responseJson<T>(response: Response): Promise<T> {
   if (response.ok) {
+    if (response.status === 204) return undefined as T
     return (await response.json()) as T
   }
   let problem = fallbackProblem(response)
@@ -99,9 +115,7 @@ function jsonBody<T>(body: T): string {
 
 export async function sha256File(file: File): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer())
-  return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, '0')).join(
-    '',
-  )
+  return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, '0')).join('')
 }
 
 export class StudyApiClient {
@@ -112,12 +126,23 @@ export class StudyApiClient {
     if (init?.body !== undefined && !(init.body instanceof Blob) && !headers.has('Content-Type')) {
       headers.set('Content-Type', 'application/json')
     }
-    const response = await fetch(`${this.baseUrl}${path}`, { ...init, headers })
+    const response = await fetch(`${this.baseUrl}${path}`, {
+      ...init,
+      credentials: 'include',
+      headers,
+    })
     return responseJson<T>(response)
   }
 
   createCourse(title: string): Promise<Course> {
-    return this.request('/courses', { method: 'POST', body: jsonBody<CourseCreate>({ title }) })
+    return this.request('/courses', {
+      method: 'POST',
+      body: jsonBody<CourseCreate>({ title }),
+    })
+  }
+
+  listCourses(): Promise<Course[]> {
+    return this.request('/courses')
   }
 
   getCourse(courseId: string): Promise<Course> {
@@ -163,7 +188,9 @@ export class StudyApiClient {
         method: 'POST',
         signal,
         headers: { 'Idempotency-Key': idempotencyKey('upload-complete') },
-        body: jsonBody<UploadCompleteRequest>({ upload_session_id: created.upload.id }),
+        body: jsonBody<UploadCompleteRequest>({
+          upload_session_id: created.upload.id,
+        }),
       },
     )
     onProgress?.(100)
@@ -197,6 +224,86 @@ export class StudyApiClient {
     return this.request('/capabilities')
   }
 
+  async currentUser(): Promise<AuthUser | null> {
+    try {
+      return await this.request('/auth/me')
+    } catch (error) {
+      if (error instanceof ApiError && error.problem.status === 401) return null
+      throw error
+    }
+  }
+
+  register(input: RegisterRequest): Promise<AuthUser> {
+    return this.request('/auth/register', {
+      method: 'POST',
+      body: jsonBody(input),
+    })
+  }
+
+  login(input: LoginRequest): Promise<AuthUser> {
+    return this.request('/auth/login', {
+      method: 'POST',
+      body: jsonBody(input),
+    })
+  }
+
+  logout(): Promise<void> {
+    return this.request('/auth/logout', { method: 'POST' })
+  }
+
+  listAdminUsers(): Promise<AdminUserList> {
+    return this.request('/admin/users')
+  }
+
+  updateAdminUser(accountId: string, input: AdminAccountUpdate): Promise<AdminAccount> {
+    return this.request(`/admin/users/${accountId}`, {
+      method: 'PATCH',
+      body: jsonBody(input),
+    })
+  }
+
+  listAdminInvitations(): Promise<AdminInvitations> {
+    return this.request('/admin/invitations')
+  }
+
+  createAdminInvitation(expiresInDays = 7): Promise<AdminInvitationCreate> {
+    return this.request('/admin/invitations', {
+      method: 'POST',
+      body: jsonBody<CreateInvitationRequest>({
+        expires_in_days: expiresInDays,
+      }),
+    })
+  }
+
+  revokeAdminInvitation(invitationId: string): Promise<void> {
+    return this.request(`/admin/invitations/${invitationId}`, {
+      method: 'DELETE',
+    })
+  }
+
+  adminDiagnostics(): Promise<AdminDiagnostics> {
+    return this.request('/admin/diagnostics')
+  }
+
+  listAdminDocuments(reviewStatus?: AdminDocument['review_status']): Promise<AdminDocuments> {
+    const query = reviewStatus ? `?review_status=${encodeURIComponent(reviewStatus)}` : ''
+    return this.request(`/admin/documents${query}`)
+  }
+
+  reviewAdminDocument(
+    documentId: string,
+    input: AdminDocumentReviewRequest,
+  ): Promise<AdminDocument> {
+    return this.request(`/admin/documents/${encodeURIComponent(documentId)}/review`, {
+      method: 'POST',
+      body: jsonBody(input),
+    })
+  }
+
+  adminDocumentContentUrl(documentId: string): string {
+    return `${this.baseUrl}/admin/documents/${encodeURIComponent(documentId)}/content`
+  }
+
   createConversation(courseId: string, title?: string): Promise<ConversationRecord> {
     return this.request(`/courses/${courseId}/conversations`, {
       method: 'POST',
@@ -212,11 +319,7 @@ export class StudyApiClient {
     return this.request(`/conversations/${conversationId}/queries?limit=${limit}`)
   }
 
-  createQuery(
-    courseId: string,
-    question: string,
-    conversationId?: string,
-  ): Promise<QuerySnapshot> {
+  createQuery(courseId: string, question: string, conversationId?: string): Promise<QuerySnapshot> {
     return this.request(`/courses/${courseId}/queries`, {
       method: 'POST',
       body: jsonBody<QueryCreate>({
@@ -247,6 +350,24 @@ export class StudyApiClient {
       method: 'POST',
       body: jsonBody<NoteCreate>({ section_path: sectionPath, title }),
     })
+  }
+
+  createNoteBatch(
+    courseId: string,
+    input: MergedNoteBatchRequest,
+    commandKey?: string,
+  ): Promise<NoteBatchSnapshot> {
+    return this.request(`/courses/${courseId}/note-batches`, {
+      method: 'POST',
+      headers: {
+        'Idempotency-Key': commandKey ?? idempotencyKey('note-batch-create'),
+      },
+      body: jsonBody(input),
+    })
+  }
+
+  getNoteBatch(batchId: string): Promise<NoteBatchSnapshot> {
+    return this.request(`/note-batches/${batchId}`)
   }
 
   updateNote(noteId: string, bodyMarkdown: string, version: number): Promise<NoteRecord> {

@@ -102,6 +102,7 @@ class ActivationService:
                     DocumentModel.user_id == user_id,
                     DocumentModel.deleted_at.is_(None),
                     DocumentModel.corpus_role == "corpus",
+                    DocumentModel.review_status == "approved",
                 )
                 .with_for_update(of=DocumentModel)
             ),
@@ -140,6 +141,7 @@ class ActivationService:
                     DocumentModel.course_id == course_id,
                     DocumentModel.deleted_at.is_(None),
                     DocumentModel.corpus_role == "corpus",
+                    DocumentModel.review_status == "approved",
                 )
                 .order_by(DocumentModel.id)
                 .with_for_update(of=DocumentModel)

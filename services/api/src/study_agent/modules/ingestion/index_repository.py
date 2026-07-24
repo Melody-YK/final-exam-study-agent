@@ -31,6 +31,43 @@ from study_agent.modules.retrieval.bm25_index import BuiltLexicalIndex, LexicalD
 from study_agent.providers.protocols import EmbeddingContract
 
 
+async def enqueue_approved_document_preview(
+    session: AsyncSession,
+    document: DocumentModel,
+    *,
+    requested_provider: str,
+    requested_model: str,
+    now: datetime,
+    contract_version: str = "1",
+) -> None:
+    """Idempotently enqueue an approved, parsed document preview for indexing."""
+    if (
+        document.review_status != "approved"
+        or document.preview_revision_id is None
+        or document.deleted_at is not None
+        or document.corpus_role != "corpus"
+        or document.status not in {"parsed_index_blocked", "indexing"}
+    ):
+        return
+    await session.execute(
+        insert(IndexJobModel)
+        .values(
+            id=new_id(),
+            user_id=document.user_id,
+            course_id=document.course_id,
+            document_id=document.id,
+            revision_id=document.preview_revision_id,
+            requested_provider=requested_provider,
+            requested_model=requested_model,
+            contract_version=contract_version,
+            status="pending",
+            attempt_count=0,
+            available_at=now,
+        )
+        .on_conflict_do_nothing(constraint="uq_index_jobs_revision_model")
+    )
+
+
 class PostgresIndexRepository:
     def __init__(
         self,
@@ -63,6 +100,14 @@ class PostgresIndexRepository:
                 IndexJobModel | None,
                 await session.scalar(
                     select(IndexJobModel)
+                    .join(
+                        DocumentModel,
+                        and_(
+                            DocumentModel.id == IndexJobModel.document_id,
+                            DocumentModel.user_id == IndexJobModel.user_id,
+                            DocumentModel.course_id == IndexJobModel.course_id,
+                        ),
+                    )
                     .where(
                         or_(
                             and_(
@@ -74,7 +119,10 @@ class PostgresIndexRepository:
                                 IndexJobModel.lease_expires_at.is_not(None),
                                 IndexJobModel.lease_expires_at <= now,
                             ),
-                        )
+                        ),
+                        DocumentModel.review_status == "approved",
+                        DocumentModel.deleted_at.is_(None),
+                        DocumentModel.corpus_role == "corpus",
                     )
                     .order_by(
                         IndexJobModel.available_at, IndexJobModel.created_at, IndexJobModel.id
@@ -85,17 +133,23 @@ class PostgresIndexRepository:
             )
             if job is None:
                 return None
+            document = await session.get(DocumentModel, job.document_id, with_for_update=True)
+            if document is None or document.review_status != "approved":
+                return None
+            if (
+                document.deleted_at is not None
+                or document.corpus_role != "corpus"
+                or document.preview_revision_id != job.revision_id
+            ):
+                job.status = "failed"
+                job.failure_code = "INDEX_STALE_PREVIEW"
+                job.lease_expires_at = None
+                return None
             job.status = "running"
             job.attempt_count += 1
             job.runner_id = self._runner_id
             job.lease_expires_at = now + self._lease
             job.failure_code = None
-            document = await session.get(DocumentModel, job.document_id)
-            if document is None or document.preview_revision_id != job.revision_id:
-                job.status = "failed"
-                job.failure_code = "INDEX_STALE_PREVIEW"
-                job.lease_expires_at = None
-                return None
             document.status = "indexing"
             return self._work(job)
 
@@ -210,6 +264,7 @@ class PostgresIndexRepository:
                         DocumentModel.course_id == work.course_id,
                         DocumentModel.deleted_at.is_(None),
                         DocumentModel.corpus_role == "corpus",
+                        DocumentModel.review_status == "approved",
                     )
                     .order_by(DocumentModel.id)
                 )
@@ -300,11 +355,22 @@ class PostgresIndexRepository:
             jobs = list(
                 await session.scalars(
                     select(IndexJobModel)
+                    .join(
+                        DocumentModel,
+                        and_(
+                            DocumentModel.id == IndexJobModel.document_id,
+                            DocumentModel.user_id == IndexJobModel.user_id,
+                            DocumentModel.course_id == IndexJobModel.course_id,
+                        ),
+                    )
                     .where(
                         IndexJobModel.status == "index_blocked_provider",
                         IndexJobModel.requested_provider == self._requested_provider,
                         IndexJobModel.requested_model == self._requested_model,
                         IndexJobModel.contract_version == self._contract_version,
+                        DocumentModel.review_status == "approved",
+                        DocumentModel.deleted_at.is_(None),
+                        DocumentModel.corpus_role == "corpus",
                     )
                     .with_for_update(skip_locked=True, of=IndexJobModel)
                 )
@@ -317,40 +383,26 @@ class PostgresIndexRepository:
             return len(jobs)
 
     async def _enqueue_previews(self, session: AsyncSession, now: datetime) -> None:
-        previews = (
-            await session.execute(
-                select(
-                    DocumentModel.user_id,
-                    DocumentModel.course_id,
-                    DocumentModel.id,
-                    DocumentModel.preview_revision_id,
-                ).where(
+        previews = list(
+            await session.scalars(
+                select(DocumentModel).where(
                     DocumentModel.preview_revision_id.is_not(None),
                     DocumentModel.deleted_at.is_(None),
                     DocumentModel.corpus_role == "corpus",
+                    DocumentModel.review_status == "approved",
                     DocumentModel.status.in_(("parsed_index_blocked", "indexing")),
                 )
             )
-        ).all()
-        for user_id, course_id, document_id, revision_id in previews:
-            statement = (
-                insert(IndexJobModel)
-                .values(
-                    id=new_id(),
-                    user_id=user_id,
-                    course_id=course_id,
-                    document_id=document_id,
-                    revision_id=revision_id,
-                    requested_provider=self._requested_provider,
-                    requested_model=self._requested_model,
-                    contract_version=self._contract_version,
-                    status="pending",
-                    attempt_count=0,
-                    available_at=now,
-                )
-                .on_conflict_do_nothing(constraint="uq_index_jobs_revision_model")
+        )
+        for document in previews:
+            await enqueue_approved_document_preview(
+                session,
+                document,
+                requested_provider=self._requested_provider,
+                requested_model=self._requested_model,
+                contract_version=self._contract_version,
+                now=now,
             )
-            await session.execute(statement)
 
     async def _locked_running(
         self,

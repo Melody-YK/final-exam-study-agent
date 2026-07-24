@@ -4,19 +4,9 @@ from pathlib import Path
 from study_agent.openapi import build_openapi_document
 
 FORBIDDEN_PUBLIC_SCHEMA_PREFIXES = (
-    "CoverageUnit",
-    "EtaConfidence",
-    "EtaRange",
-    "EtaUnavailableReason",
-    "MergedNoteBatch",
     "NoteAst",
-    "NoteBatch",
     "NoteContentAst",
-    "NoteCoverage",
     "NoteExport",
-    "NoteGeneration",
-    "NoteInput",
-    "NoteItem",
     "NoteSourceOverlay",
     "NoteVersion",
     "PerDocumentNoteBatch",
@@ -38,7 +28,7 @@ def test_openapi_document_is_stable_and_contains_health_contract() -> None:
     assert "api_key" not in json.dumps(document).lower()
 
 
-def test_query_conversation_contract_is_present_without_note_workflow_routes() -> None:
+def test_query_conversation_and_note_batch_contracts_are_present() -> None:
     document = build_openapi_document()
     paths = document["paths"]
     schemas = document["components"]["schemas"]
@@ -53,8 +43,46 @@ def test_query_conversation_contract_is_present_without_note_workflow_routes() -
     assert "conversation_id" not in query_create.get("required", [])
     assert "conversation_id" in schemas["QueryResponse"]["required"]
 
-    excluded_route_fragment = "-".join(("note", "batches"))
-    assert all(excluded_route_fragment not in path for path in paths)
+    create_batch = paths["/api/v1/courses/{course_id}/note-batches"]["post"]
+    assert create_batch["responses"]["202"]["description"]
+    assert "Idempotency-Key" in {
+        parameter["name"] for parameter in create_batch["parameters"] if parameter["in"] == "header"
+    }
+    request_schema = create_batch["requestBody"]["content"]["application/json"]["schema"]
+    assert request_schema["$ref"].endswith("/MergedNoteBatchRequest")
+    assert "PerDocumentNoteBatchRequest" not in schemas
+    assert "NoteBatchSnapshot" not in schemas
+
+    get_batch = paths["/api/v1/note-batches/{batch_id}"]["get"]
+    create_response = create_batch["responses"]["202"]["content"]["application/json"]["schema"]
+    get_response = get_batch["responses"]["200"]["content"]["application/json"]["schema"]
+    assert (
+        create_response
+        == get_response
+        == {"$ref": "#/components/schemas/LocalDemoNoteBatchSnapshot"}
+    )
+
+    demo_snapshot = schemas["LocalDemoNoteBatchSnapshot"]
+    assert demo_snapshot["properties"]["mode"]["const"] == "merged"
+    assert demo_snapshot["properties"]["command_kind"]["const"] == "create"
+    assert schemas["NoteBatchStatus"]["enum"] == [
+        "queued",
+        "running",
+        "partial_success",
+        "succeeded",
+        "failed",
+        "cancelling",
+        "cancelled",
+    ]
+    assert schemas["NoteGenerationPhase"]["enum"] == [
+        "validating_inputs",
+        "segmenting",
+        "retrieving",
+        "outlining",
+        "generating",
+        "validating_output",
+        "saving",
+    ]
     _assert_dormant_note_workflow_schemas_are_absent(schemas)
 
 
@@ -78,7 +106,8 @@ def test_note_workflow_capability_preserves_legacy_notes_and_hides_dormant_contr
     response_schema = legacy_create["responses"]["201"]["content"]["application/json"]["schema"]
     assert response_schema["$ref"].endswith("/NoteResponse")
     assert "/api/v1/notes/{note_id}/versions/{version}" not in paths
-    assert all("note-batches" not in path for path in paths)
+    assert "/api/v1/courses/{course_id}/note-batches" in paths
+    assert "/api/v1/note-batches/{batch_id}" in paths
 
     _assert_dormant_note_workflow_schemas_are_absent(schemas)
 

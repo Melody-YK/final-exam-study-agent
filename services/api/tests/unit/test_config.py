@@ -144,6 +144,7 @@ def test_note_workflow_is_disabled_by_default_and_exposes_safe_limits() -> None:
     assert settings.note_docx_renderer_enabled is False
     assert settings.note_workflow_configured is False
     assert settings.note_docx_configured is False
+    assert settings.note_demo_phase_delay_seconds == 0.35
     assert settings.note_batch_max_documents > 0
     assert settings.note_batch_max_coverage_units >= settings.note_batch_max_documents
 
@@ -199,6 +200,16 @@ def test_note_coverage_unit_limit_must_cover_document_limit() -> None:
             app_mode=AppMode.TEST,
             note_batch_max_documents=21,
             note_batch_max_coverage_units=20,
+        )
+
+
+@pytest.mark.parametrize("delay", [-0.01, 5.01])
+def test_note_demo_phase_delay_is_bounded(delay: float) -> None:
+    with pytest.raises(ValidationError):
+        Settings(
+            _env_file=None,
+            app_mode=AppMode.TEST,
+            note_demo_phase_delay_seconds=delay,
         )
 
 

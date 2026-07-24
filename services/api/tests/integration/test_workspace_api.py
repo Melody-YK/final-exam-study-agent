@@ -83,6 +83,63 @@ async def _upload_document(client: AsyncClient, course_id: str) -> dict[str, obj
 
 
 @pytest.mark.integration
+@pytest.mark.parametrize(
+    ("demo_lab_enabled", "expected_generation_enabled"),
+    [(False, False), (True, True)],
+)
+async def test_note_demo_capability_respects_the_local_demo_gate(
+    test_database_url: str,
+    tmp_path: Path,
+    demo_lab_enabled: bool,
+    expected_generation_enabled: bool,
+) -> None:
+    await upgrade_database(test_database_url)
+    database = Database(test_database_url)
+    settings = Settings(
+        _env_file=None,
+        app_mode=AppMode.TEST,
+        database_url=SecretStr(test_database_url),
+        local_storage_root=tmp_path,
+        lexical_index_root=tmp_path / "lexical",
+        demo_lab_enabled=demo_lab_enabled,
+        embedding_api_key=SecretStr("configured-embedding"),
+        deepseek_api_key=SecretStr("configured-chat"),
+        note_async_workflow_enabled=True,
+        note_runner_enabled=True,
+        note_numeric_eta_enabled=True,
+        note_docx_export_enabled=True,
+        note_export_runner_enabled=True,
+        note_docx_renderer_enabled=True,
+    )
+    assert settings.note_workflow_configured is True
+    assert settings.note_docx_configured is True
+    app = create_app(settings=settings, database=database, storage=LocalStorage(tmp_path))
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as client:
+            response = await client.get("/api/v1/capabilities")
+        assert response.status_code == 200
+        note_workflow = response.json()["note_workflow"]
+        assert note_workflow["enabled"] is expected_generation_enabled
+        assert note_workflow["generation"]["status"] == (
+            "available" if expected_generation_enabled else "unavailable"
+        )
+        assert note_workflow["generation"]["error_code"] == (
+            None if expected_generation_enabled else "NOTE_WORKFLOW_DISABLED"
+        )
+        assert note_workflow["eta"]["status"] == "unavailable"
+        assert note_workflow["eta"]["error_code"] == "NOTE_ETA_UNAVAILABLE"
+        assert "阶段耗时" in note_workflow["eta"]["label"]
+        assert note_workflow["export"]["status"] == "unavailable"
+        assert note_workflow["export"]["error_code"] == "NOTE_EXPORT_UNAVAILABLE"
+        assert "未提供" in note_workflow["export"]["label"]
+    finally:
+        await database.dispose()
+
+
+@pytest.mark.integration
 async def test_workspace_lists_status_and_retries_only_requested_pages_idempotently(
     test_database_url: str,
     tmp_path: Path,
@@ -110,18 +167,29 @@ async def test_workspace_lists_status_and_retries_only_requested_pages_idempoten
         assert capability_payload["provider"]["status"] == "not_configured"
         assert capability_payload["ocr_parser"]["status"] == "worker_required"
         note_workflow = capability_payload["note_workflow"]
-        assert note_workflow["enabled"] is False
-        assert note_workflow["generation"]["status"] == "unavailable"
-        assert note_workflow["generation"]["error_code"] == "NOTE_WORKFLOW_DISABLED"
+        assert note_workflow["enabled"] is True
+        assert note_workflow["generation"]["status"] == "available"
+        assert note_workflow["generation"]["error_code"] is None
+        assert "来源派生" in note_workflow["generation"]["label"]
         assert note_workflow["export"]["status"] == "unavailable"
         assert note_workflow["export"]["error_code"] == "NOTE_EXPORT_UNAVAILABLE"
         assert note_workflow["eta"]["status"] == "unavailable"
         assert note_workflow["eta"]["error_code"] == "NOTE_ETA_UNAVAILABLE"
         assert before.status_code == 200
         assert before.json()[0]["status"] == "queued"
+        assert before.json()[0]["review_status"] == "pending"
+        assert before.json()[0]["indexable"] is False
         assert before.json()[0]["parse_job_id"]
         assert before.json()[0]["progress"] == {}
         assert before.json()[0]["active_revision_id"] is None
+
+        pending_retry = await client.post(
+            f"/api/v1/documents/{document['id']}/parse-jobs",
+            json={"failed_pages": [2]},
+            headers={"Idempotency-Key": "retry-before-review"},
+        )
+        assert pending_retry.status_code == 409
+        assert pending_retry.json()["code"] == "STATE_CONFLICT"
 
         principal = LocalPrincipalProvider().resolve("127.0.0.1")
         async with database.session(principal) as session:
@@ -134,6 +202,7 @@ async def test_workspace_lists_status_and_retries_only_requested_pages_idempoten
             job.failed_pages = [2]
             job.retryable = False
             persisted_document.status = "failed"
+            persisted_document.review_status = "approved"
 
         retried = await client.post(
             f"/api/v1/documents/{document['id']}/parse-jobs",

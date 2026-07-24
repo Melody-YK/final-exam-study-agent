@@ -11,7 +11,8 @@ from pydantic import BaseModel
 from starlette.responses import RedirectResponse, StreamingResponse
 
 from study_agent.api.errors import ApiProblem, ProblemCode
-from study_agent.identity.principal import Principal, PrincipalProvider
+from study_agent.identity.principal import Principal
+from study_agent.identity.session import get_request_principal
 from study_agent.infrastructure.db.session import Database
 from study_agent.modules.answering.source_tokens import LocalReadTokenSigner
 from study_agent.modules.answering.sources import (
@@ -41,18 +42,8 @@ class CitationSourceResponse(BaseModel):
     read_url_expires_at: datetime
 
 
-def _principal(request: Request) -> Principal:
-    if request.client is None:
-        raise ApiProblem(status=401, code=ProblemCode.AUTH_REQUIRED, title="需要身份验证")
-    provider = cast(PrincipalProvider, request.app.state.principal_provider)
-    try:
-        return provider.resolve(request.client.host)
-    except PermissionError as exc:
-        raise ApiProblem(
-            status=401,
-            code=ProblemCode.AUTH_REQUIRED,
-            title="需要身份验证",
-        ) from exc
+async def _principal(request: Request) -> Principal:
+    return await get_request_principal(request)
 
 
 def _response(source: CitationSource, *, read_url: str | None = None) -> CitationSourceResponse:
@@ -131,7 +122,7 @@ async def get_citation_source(
         source = await CitationSourceService(
             cast(Database, request.app.state.database),
             storage,
-        ).get(_principal(request), query_id, citation_id)
+        ).get(await _principal(request), query_id, citation_id)
     except CitationPreviewUnavailable as exc:
         raise ApiProblem(
             status=409,
@@ -180,7 +171,7 @@ async def get_citation_content(
         source = await CitationSourceService(
             cast(Database, request.app.state.database),
             storage,
-        ).get(_principal(request), query_id, citation_id)
+        ).get(await _principal(request), query_id, citation_id)
     except CitationPreviewUnavailable as exc:
         raise ApiProblem(
             status=409,

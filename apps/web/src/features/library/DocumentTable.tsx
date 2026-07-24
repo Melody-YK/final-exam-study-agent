@@ -1,11 +1,4 @@
-import {
-  FileImage,
-  FileText,
-  Presentation,
-  RefreshCw,
-  RotateCcw,
-  Trash2,
-} from 'lucide-react'
+import { FileImage, FileText, Presentation, RefreshCw, RotateCcw, Trash2 } from 'lucide-react'
 
 import type { DocumentRecord } from '../../api/types'
 import { IconButton } from '../../components/ui/IconButton'
@@ -33,6 +26,12 @@ const statusLabels: Record<string, { label: string; tone: StatusTone }> = {
   ready: { label: '可问答', tone: 'success' },
   deleted: { label: '清理中', tone: 'neutral' },
   deleting: { label: '清理中', tone: 'neutral' },
+}
+
+const reviewLabels: Record<string, { label: string; tone: StatusTone }> = {
+  pending: { label: '待管理员审核', tone: 'warning' },
+  approved: { label: '已通过', tone: 'success' },
+  rejected: { label: '未通过', tone: 'danger' },
 }
 
 interface DocumentTableProps {
@@ -65,8 +64,7 @@ function readableProgress(progress: DocumentRecord['progress']): {
   const totalPages = progress.total_pages
   if (typeof totalPages !== 'number' || totalPages <= 0) return null
   return {
-    completedPages:
-      typeof completedPages === 'number' && completedPages >= 0 ? completedPages : 0,
+    completedPages: typeof completedPages === 'number' && completedPages >= 0 ? completedPages : 0,
     totalPages,
   }
 }
@@ -95,6 +93,7 @@ export function DocumentTable({
             <th scope="col">资料</th>
             <th scope="col">角色</th>
             <th scope="col">状态</th>
+            <th scope="col">审核</th>
             <th scope="col">版本</th>
             <th scope="col">页数</th>
             <th className="table-actions" scope="col">
@@ -110,9 +109,13 @@ export function DocumentTable({
               label: document.status,
               tone: 'neutral' as const,
             }
-            const canRetry = ['partial_failed', 'failed', 'retry_wait'].includes(
-              document.status,
-            )
+            const review = reviewLabels[document.review_status] ?? {
+              label: document.review_status,
+              tone: 'neutral' as const,
+            }
+            const canRetry =
+              document.review_status === 'approved' &&
+              ['partial_failed', 'failed', 'retry_wait'].includes(document.status)
             const progress = readableProgress(document.progress)
             return (
               <tr key={document.id}>
@@ -139,7 +142,12 @@ export function DocumentTable({
                       {progress.completedPages}/{progress.totalPages} 页
                     </small>
                   ) : null}
-                  {document.error_code ? <small className="table-error">{document.error_code}</small> : null}
+                  {document.error_code ? (
+                    <small className="table-error">{document.error_code}</small>
+                  ) : null}
+                </td>
+                <td data-label="审核">
+                  <StatusBadge tone={review.tone}>{review.label}</StatusBadge>
                 </td>
                 <td data-label="版本">
                   <span className="revision-state">{revisionLabel(document)}</span>
@@ -153,7 +161,11 @@ export function DocumentTable({
                       onClick={() => onRetry(document)}
                       size="small"
                     >
-                      {document.failed_pages?.length ? <RotateCcw aria-hidden="true" size={16} /> : <RefreshCw aria-hidden="true" size={16} />}
+                      {document.failed_pages?.length ? (
+                        <RotateCcw aria-hidden="true" size={16} />
+                      ) : (
+                        <RefreshCw aria-hidden="true" size={16} />
+                      )}
                     </IconButton>
                   ) : null}
                   <IconButton

@@ -118,6 +118,7 @@ class PostgresEvidenceRepository:
                 CourseModel.deleted_at.is_(None),
                 DocumentModel.deleted_at.is_(None),
                 DocumentModel.corpus_role == "corpus",
+                DocumentModel.review_status == "approved",
                 UserModel.subject == principal.subject,
                 UserModel.authentication_method == principal.authentication_method.value,
             )

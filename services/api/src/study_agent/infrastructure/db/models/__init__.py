@@ -7,6 +7,11 @@ from study_agent.infrastructure.db.models.answers import (
     QueryRunModel,
     RetrievalSnapshotModel,
 )
+from study_agent.infrastructure.db.models.auth import (
+    AccountModel,
+    AccountSessionModel,
+    RegistrationInvitationModel,
+)
 from study_agent.infrastructure.db.models.core import (
     CourseModel,
     DeletionJobModel,
@@ -31,6 +36,27 @@ from study_agent.infrastructure.db.models.jobs import (
     PageCheckpointModel,
     ParseJobModel,
 )
+from study_agent.infrastructure.db.models.note_versions import (
+    NoteContentVersionModel,
+    NoteSourceStateOverlayModel,
+    NoteVersionCoverageModel,
+    NoteVersionCoverageUnitModel,
+    NoteVersionSourceLinkModel,
+    NoteVersionSourcePayloadModel,
+    NoteVersionSourceSnapshotModel,
+)
+from study_agent.infrastructure.db.models.note_workflow import (
+    NoteCommandDedupModel,
+    NoteCoverageUnitModel,
+    NoteCoverageUnitResultModel,
+    NoteGenerationAttemptModel,
+    NoteGenerationBatchModel,
+    NoteGenerationEventModel,
+    NoteGenerationInputModel,
+    NoteGenerationItemModel,
+    NoteGenerationOutputModel,
+    NoteItemInputModel,
+)
 from study_agent.infrastructure.db.models.notes import NoteModel, NoteSourceModel
 from study_agent.infrastructure.db.models.retrieval import (
     ChunkEmbeddingModel,
@@ -43,6 +69,8 @@ from study_agent.infrastructure.db.models.retrieval import (
 ChunkModel = RevisionChunkModel
 
 __all__ = [
+    "AccountModel",
+    "AccountSessionModel",
     "AnswerDependencyModel",
     "ChunkEmbeddingModel",
     "ChunkModel",
@@ -57,14 +85,32 @@ __all__ = [
     "JobArtifactModel",
     "JobEventModel",
     "LexicalManifestModel",
+    "NoteCommandDedupModel",
+    "NoteContentVersionModel",
+    "NoteCoverageUnitModel",
+    "NoteCoverageUnitResultModel",
+    "NoteGenerationAttemptModel",
+    "NoteGenerationBatchModel",
+    "NoteGenerationEventModel",
+    "NoteGenerationInputModel",
+    "NoteGenerationItemModel",
+    "NoteGenerationOutputModel",
+    "NoteItemInputModel",
     "NoteModel",
     "NoteSourceModel",
+    "NoteSourceStateOverlayModel",
+    "NoteVersionCoverageModel",
+    "NoteVersionCoverageUnitModel",
+    "NoteVersionSourceLinkModel",
+    "NoteVersionSourcePayloadModel",
+    "NoteVersionSourceSnapshotModel",
     "OutboxEventModel",
     "PageCheckpointModel",
     "ParseAttemptResultModel",
     "ParseJobModel",
     "QueryEventModel",
     "QueryRunModel",
+    "RegistrationInvitationModel",
     "RetrievalSnapshotModel",
     "RetrievalTraceModel",
     "RevisionAssetModel",

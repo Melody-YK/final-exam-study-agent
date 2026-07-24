@@ -1,5 +1,6 @@
 import resource
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -10,6 +11,7 @@ from services.api.tests.integration.retrieval_helpers import seed_document_revis
 from study_agent.identity.principal import AuthenticationMethod, Principal
 from study_agent.infrastructure.db.migrations import upgrade_database
 from study_agent.infrastructure.db.models import (
+    AccountModel,
     ChunkEmbeddingModel,
     CourseModel,
     DocumentModel,
@@ -45,6 +47,47 @@ class InjectedTestEmbedding:
 
     async def embed_query(self, text: str) -> list[float]:
         return [1.0, 1.0]
+
+
+@pytest.mark.integration
+async def test_pending_preview_is_not_enqueued_or_claimed_until_approved(
+    test_database_url: str,
+) -> None:
+    await upgrade_database(test_database_url)
+    database = Database(test_database_url)
+    principal = Principal(
+        subject="index-review-owner",
+        authentication_method=AuthenticationMethod.LOCAL,
+    )
+    course = await CourseRepository(database).create(principal, "审核门禁")
+    async with database.session(principal) as session:
+        preview = await seed_document_revision(
+            session,
+            user_id=course.user_id,
+            course_id=course.id,
+            text_chunks=["待审核资料"],
+            active=False,
+            preview=True,
+            review_status="pending",
+        )
+    repository = PostgresIndexRepository(
+        database,
+        runner_id="review-gate-runner",
+        requested_provider="test",
+        requested_model="tiny",
+    )
+
+    assert await repository.claim() is None
+    async with database.session(principal) as session:
+        assert await session.scalar(select(func.count()).select_from(IndexJobModel)) == 0
+        document = await session.get(DocumentModel, preview.document_id)
+        assert document is not None
+        document.review_status = "approved"
+
+    work = await repository.claim()
+    assert work is not None
+    assert work.document_id == preview.document_id
+    await database.dispose()
 
 
 @pytest.mark.integration
@@ -164,6 +207,42 @@ async def test_index_job_blocks_without_provider_then_resumes_and_activates(
         assert trace.reranker_fallback_code == "disabled"
     assert evidence_set.evidence
     assert evidence_set.evidence[0].course_id == course.id
+    async with database.session(principal) as session:
+        document = await session.get(DocumentModel, preview.document_id)
+        assert document is not None
+        assert document.status == "ready"
+        reviewer = AccountModel(
+            id=str(uuid4()),
+            user_id=course.user_id,
+            email="retrieval-reviewer@example.com",
+            display_name="Retrieval reviewer",
+            role="admin",
+            status="active",
+            password_hash="test-only",
+        )
+        session.add(reviewer)
+        await session.flush()
+        document.review_status = "rejected"
+        document.review_note = "文件不适合作为复习资料"
+        document.reviewed_by_account_id = reviewer.id
+        document.reviewed_at = datetime.now(UTC)
+
+    review_filtered_lexical = await lexical.retrieve(
+        principal,
+        course.id,
+        "虚拟内存",
+        limit=10,
+    )
+    review_filtered_hybrid = await hybrid.retrieve(
+        principal,
+        course.id,
+        "虚拟内存",
+        query_vector=[1.0, 2.0],
+        model=model_identity,
+        limit=2,
+    )
+    assert review_filtered_lexical.hits == ()
+    assert review_filtered_hybrid.evidence == ()
     await database.dispose()
 
 
@@ -296,6 +375,22 @@ async def test_activation_failure_preserves_old_active_and_rollback_is_atomic(
                 embedding=[0.0, 1.0],
             )
         )
+        document.review_status = "pending"
+    with pytest.raises(ActivationError, match="scope"):
+        async with database.worker_session("activation-test") as session:
+            await activation.activate(
+                session,
+                user_id=course.user_id,
+                course_id=course.id,
+                document_id=candidate.document_id,
+                revision_id=candidate.revision_id,
+                model=model_identity,
+                lexical_manifest_id=new_manifest.id,
+            )
+    async with database.session(principal) as session:
+        document = await session.get(DocumentModel, old.document_id)
+        assert document is not None
+        document.review_status = "approved"
     async with database.worker_session("activation-test") as session:
         await activation.activate(
             session,

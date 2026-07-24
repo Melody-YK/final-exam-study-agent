@@ -102,3 +102,19 @@ class CourseRepository:
                 )
             )
             return None if model is None else _course_from_model(model)
+
+    async def list_for_principal(self, principal: Principal) -> list[Course]:
+        async with self._database.session(principal) as session:
+            models = list(
+                await session.scalars(
+                    select(CourseModel)
+                    .join(UserModel, UserModel.id == CourseModel.user_id)
+                    .where(
+                        CourseModel.deleted_at.is_(None),
+                        UserModel.subject == principal.subject,
+                        UserModel.authentication_method == principal.authentication_method.value,
+                    )
+                    .order_by(CourseModel.updated_at.desc(), CourseModel.id)
+                )
+            )
+            return [_course_from_model(model) for model in models]

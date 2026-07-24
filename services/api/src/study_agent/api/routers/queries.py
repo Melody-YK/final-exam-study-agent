@@ -12,7 +12,8 @@ from starlette.responses import StreamingResponse
 
 from study_agent.api.errors import ApiProblem, ProblemCode
 from study_agent.config import Settings
-from study_agent.identity.principal import Principal, PrincipalProvider
+from study_agent.identity.principal import Principal
+from study_agent.identity.session import get_request_principal
 from study_agent.infrastructure.db.session import Database
 from study_agent.modules.answering.events import QueryEventReader
 from study_agent.modules.answering.queries import (
@@ -77,18 +78,8 @@ class QueryResponse(BaseModel):
     completed_at: datetime | None
 
 
-def _principal(request: Request) -> Principal:
-    if request.client is None:
-        raise ApiProblem(status=401, code=ProblemCode.AUTH_REQUIRED, title="需要身份验证")
-    provider = cast(PrincipalProvider, request.app.state.principal_provider)
-    try:
-        return provider.resolve(request.client.host)
-    except PermissionError as exc:
-        raise ApiProblem(
-            status=401,
-            code=ProblemCode.AUTH_REQUIRED,
-            title="需要身份验证",
-        ) from exc
+async def _principal(request: Request) -> Principal:
+    return await get_request_principal(request)
 
 
 def _repository(request: Request) -> QueryRepository:
@@ -156,7 +147,7 @@ async def create_conversation(
 ) -> ConversationResponse:
     try:
         conversation = await _repository(request).create_conversation(
-            _principal(request),
+            await _principal(request),
             course_id,
             payload.title,
         )
@@ -186,7 +177,7 @@ async def list_conversations(
 ) -> list[ConversationResponse]:
     try:
         conversations = await _repository(request).list_conversations(
-            _principal(request),
+            await _principal(request),
             course_id,
             limit=limit,
         )
@@ -209,7 +200,7 @@ async def list_conversation_queries(
     limit: Annotated[int, Query(ge=1, le=100)] = 100,
 ) -> list[QueryResponse]:
     snapshots = await _repository(request).list_for_conversation(
-        _principal(request),
+        await _principal(request),
         conversation_id,
         limit=limit,
     )
@@ -243,7 +234,7 @@ async def create_query(
         document_ids = frozenset(payload.document_ids)
     try:
         snapshot = await _service(request).execute(
-            _principal(request),
+            await _principal(request),
             course_id,
             payload.question,
             document_ids=document_ids,
@@ -266,7 +257,7 @@ async def list_queries(
 ) -> list[QueryResponse]:
     try:
         snapshots = await _repository(request).list_for_course(
-            _principal(request),
+            await _principal(request),
             course_id,
             limit=limit,
         )
@@ -281,7 +272,7 @@ async def list_queries(
 
 @router.get("/queries/{query_id}", response_model=QueryResponse)
 async def get_query(query_id: str, request: Request) -> QueryResponse:
-    snapshot = await _repository(request).get(_principal(request), query_id)
+    snapshot = await _repository(request).get(await _principal(request), query_id)
     if snapshot is None:
         raise ApiProblem(
             status=404,
@@ -312,7 +303,7 @@ async def stream_query_events(
             code=ProblemCode.INVALID_REQUEST,
             title="Last-Event-ID 无效",
         )
-    principal = _principal(request)
+    principal = await _principal(request)
     reader = QueryEventReader(
         cast(Database, request.app.state.database),
         cast(Clock, request.app.state.clock),
