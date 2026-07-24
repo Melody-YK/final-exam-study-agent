@@ -55,6 +55,31 @@ class Database:
             yield session
 
     @asynccontextmanager
+    async def system_transaction(self, actor_id: str) -> AsyncIterator[AsyncSession]:
+        """Open a narrowly named pre-authentication system boundary."""
+
+        normalized_actor_id = actor_id.strip()
+        if not normalized_actor_id or len(normalized_actor_id) > 128:
+            raise ValueError("actor_id must be between 1 and 128 characters")
+
+        async with self._session_factory.begin() as session:
+            session.info["system_actor_id"] = normalized_actor_id
+            await session.execute(
+                select(
+                    func.set_config("study_agent.actor_type", "system", True),
+                    func.set_config("study_agent.system_actor_id", normalized_actor_id, True),
+                )
+            )
+            yield session
+
+    @asynccontextmanager
+    async def system_session(self, actor_id: str) -> AsyncIterator[AsyncSession]:
+        """Alias used by authentication before a Principal exists."""
+
+        async with self.system_transaction(actor_id) as session:
+            yield session
+
+    @asynccontextmanager
     async def worker_transaction(self, worker_id: str) -> AsyncIterator[AsyncSession]:
         normalized_worker_id = worker_id.strip()
         if not normalized_worker_id or len(normalized_worker_id) > 128:

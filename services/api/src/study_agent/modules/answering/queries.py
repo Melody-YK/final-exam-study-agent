@@ -155,6 +155,9 @@ class QueryRepository:
                             DocumentModel.course_id == course.id,
                             DocumentModel.deleted_at.is_(None),
                             DocumentModel.corpus_role == "corpus",
+                            DocumentModel.status == "ready",
+                            DocumentModel.review_status == "approved",
+                            DocumentModel.active_revision_id.is_not(None),
                         )
                     )
                 )
@@ -712,6 +715,7 @@ class QueryRepository:
             dependency.available
             and document is not None
             and document.deleted_at is None
+            and document.review_status == "approved"
             and document.deletion_epoch == dependency.document_deletion_epoch
             and document.active_revision_id == dependency.revision_id
             and chunk is not None
@@ -945,6 +949,7 @@ class QueryRepository:
                         tuple(item.evidence.chunk_id for item in retrieved.candidates)
                     ),
                     DocumentModel.deleted_at.is_(None),
+                    DocumentModel.review_status == "approved",
                 )
                 .with_for_update(of=DocumentModel)
             )

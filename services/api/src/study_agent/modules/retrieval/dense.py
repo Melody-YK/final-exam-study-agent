@@ -107,6 +107,7 @@ class DenseRetriever:
                 CourseModel.deleted_at.is_(None),
                 DocumentModel.deleted_at.is_(None),
                 DocumentModel.corpus_role == "corpus",
+                DocumentModel.review_status == "approved",
                 ChunkEmbeddingModel.embedding_model_id == model.id,
                 ChunkEmbeddingModel.dimensions == model.dimensions,
                 ChunkEmbeddingModel.course_id == course_id,

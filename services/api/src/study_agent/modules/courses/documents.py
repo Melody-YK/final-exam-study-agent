@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol, cast
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -32,6 +32,8 @@ from study_agent.modules.jobs.service import cancel_document_jobs, enqueue_parse
 from study_agent.providers.protocols import Clock, ObjectMetadata, ObjectScope, UploadTarget
 from study_agent.storage.local import StorageUploadTooLarge
 
+type DocumentReviewStatus = Literal["pending", "approved", "rejected"]
+
 
 @dataclass(frozen=True, slots=True)
 class Document:
@@ -42,13 +44,14 @@ class Document:
     corpus_role: CorpusRole
     verified_sha256: str
     status: str
+    review_status: DocumentReviewStatus
     preview_revision_id: str | None
     active_revision_id: str | None
     deletion_epoch: int
 
     @property
     def indexable(self) -> bool:
-        return ManifestPolicy.is_indexable(self.corpus_role)
+        return self.review_status == "approved" and ManifestPolicy.is_indexable(self.corpus_role)
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +117,7 @@ def _document_from_model(model: DocumentModel) -> Document:
         corpus_role=CorpusRole(model.corpus_role),
         verified_sha256=model.verified_sha256,
         status=model.status,
+        review_status=cast(DocumentReviewStatus, model.review_status),
         preview_revision_id=model.preview_revision_id,
         active_revision_id=model.active_revision_id,
         deletion_epoch=model.deletion_epoch,
@@ -129,6 +133,7 @@ def _document_payload(document: Document) -> dict[str, Any]:
         "corpus_role": document.corpus_role.value,
         "verified_sha256": document.verified_sha256,
         "status": document.status,
+        "review_status": document.review_status,
         "preview_revision_id": document.preview_revision_id,
         "active_revision_id": document.active_revision_id,
         "deletion_epoch": document.deletion_epoch,
@@ -144,6 +149,7 @@ def _document_from_payload(payload: dict[str, Any]) -> Document:
         corpus_role=CorpusRole(str(payload["corpus_role"])),
         verified_sha256=str(payload["verified_sha256"]),
         status=str(payload["status"]),
+        review_status=cast(DocumentReviewStatus, str(payload.get("review_status", "approved"))),
         preview_revision_id=(
             None
             if payload.get("preview_revision_id") is None
@@ -244,6 +250,7 @@ class DocumentService:
                     corpus_role=role.value,
                     verified_sha256=upload.sha256,
                     status="uploading",
+                    review_status="pending",
                     deletion_epoch=0,
                 )
                 session.add(model)

@@ -72,6 +72,10 @@ class NoteGenerationBatchModel(Base):
             "mode IN ('merged', 'per_document')", name="ck_note_generation_batches_mode"
         ),
         CheckConstraint(
+            "style IN ('exam_focus', 'outline', 'complete')",
+            name="ck_note_generation_batches_style",
+        ),
+        CheckConstraint(
             "jsonb_typeof(section_path) = 'array' AND jsonb_array_length(section_path) >= 1",
             name="ck_note_generation_batches_section_path",
         ),
@@ -138,6 +142,7 @@ class NoteGenerationBatchModel(Base):
     course_id: Mapped[str] = mapped_column(String(36), nullable=False)
     command_kind: Mapped[str] = mapped_column(String(32), nullable=False, default="create")
     mode: Mapped[str] = mapped_column(String(32), nullable=False)
+    style: Mapped[str] = mapped_column(String(32), nullable=False, default="exam_focus")
     retry_of_batch_id: Mapped[str | None] = mapped_column(String(36))
     title: Mapped[str | None] = mapped_column(String(255))
     title_prefix: Mapped[str | None] = mapped_column(String(255))

@@ -6,11 +6,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from study_agent.api.errors import ApiProblem, ProblemCode
 from study_agent.config import Settings
-from study_agent.identity.principal import CourseScope, Principal, PrincipalProvider
+from study_agent.identity.principal import CourseScope, Principal
+from study_agent.identity.session import get_request_principal
 from study_agent.infrastructure.db.session import Database
 from study_agent.modules.courses.documents import (
     DeletionSnapshot,
     Document,
+    DocumentReviewStatus,
     DocumentService,
     UploadReceipt,
 )
@@ -47,6 +49,7 @@ class DocumentResponse(BaseModel):
     corpus_role: CorpusRole
     verified_sha256: str
     status: str
+    review_status: DocumentReviewStatus
     preview_revision_id: str | None
     active_revision_id: str | None
     deletion_epoch: int
@@ -102,22 +105,8 @@ class DeletionResponse(BaseModel):
     completed_at: datetime | None
 
 
-def _principal(request: Request) -> Principal:
-    if request.client is None:
-        raise ApiProblem(
-            status=401,
-            code=ProblemCode.AUTH_REQUIRED,
-            title="需要身份验证",
-        )
-    try:
-        provider = cast(PrincipalProvider, request.app.state.principal_provider)
-        return provider.resolve(request.client.host)
-    except PermissionError as exc:
-        raise ApiProblem(
-            status=401,
-            code=ProblemCode.AUTH_REQUIRED,
-            title="需要身份验证",
-        ) from exc
+async def _principal(request: Request) -> Principal:
+    return await get_request_principal(request)
 
 
 def _database(request: Request) -> Database:
@@ -160,6 +149,7 @@ def _document_response(document: Document) -> DocumentResponse:
         corpus_role=document.corpus_role,
         verified_sha256=document.verified_sha256,
         status=document.status,
+        review_status=document.review_status,
         preview_revision_id=document.preview_revision_id,
         active_revision_id=document.active_revision_id,
         deletion_epoch=document.deletion_epoch,
@@ -227,13 +217,23 @@ def _upload_problem(exc: UploadRejected) -> ApiProblem:
 
 @router.post("/courses", response_model=CourseResponse, status_code=status.HTTP_201_CREATED)
 async def create_course(payload: CourseCreate, request: Request) -> CourseResponse:
-    course = await CourseRepository(_database(request)).create(_principal(request), payload.title)
+    course = await CourseRepository(_database(request)).create(
+        await _principal(request), payload.title
+    )
     return _course_response(course)
+
+
+@router.get("/courses", response_model=list[CourseResponse])
+async def list_courses(request: Request) -> list[CourseResponse]:
+    courses = await CourseRepository(_database(request)).list_for_principal(
+        await _principal(request)
+    )
+    return [_course_response(course) for course in courses]
 
 
 @router.get("/courses/{course_id}", response_model=CourseResponse)
 async def get_course(course_id: str, request: Request) -> CourseResponse:
-    principal = _principal(request)
+    principal = await _principal(request)
     course = await CourseRepository(_database(request)).get(
         CourseScope(principal=principal, course_id=course_id)
     )
@@ -267,7 +267,7 @@ async def create_document_upload(
     except UploadRejected as exc:
         raise _upload_problem(exc) from exc
 
-    principal = _principal(request)
+    principal = await _principal(request)
     upload_session = await _document_service(request).create_upload(
         CourseScope(principal=principal, course_id=course_id),
         validated,
@@ -286,7 +286,7 @@ async def create_document_upload(
 @router.put("/uploads/{upload_session_id}", response_model=UploadReceiptResponse)
 async def put_upload(upload_session_id: str, request: Request) -> UploadReceiptResponse:
     receipt = await _document_service(request).upload_stream(
-        _principal(request),
+        await _principal(request),
         upload_session_id,
         request.stream(),
         request.headers.get("content-type", ""),
@@ -310,7 +310,7 @@ async def complete_document_upload(
 ) -> DocumentResponse:
     try:
         document = await _document_service(request).complete_upload(
-            _principal(request),
+            await _principal(request),
             document_id,
             payload.upload_session_id,
             idempotency_key,
@@ -323,7 +323,7 @@ async def complete_document_upload(
 
 @router.get("/documents/{document_id}", response_model=DocumentResponse)
 async def get_document(document_id: str, request: Request) -> DocumentResponse:
-    document = await _document_service(request).get(_principal(request), document_id)
+    document = await _document_service(request).get(await _principal(request), document_id)
     if document is None:
         raise ApiProblem(
             status=404,
@@ -346,7 +346,7 @@ async def delete_document(
         Header(alias="Idempotency-Key", min_length=1, max_length=255),
     ],
 ) -> DeletionAccepted:
-    principal = _principal(request)
+    principal = await _principal(request)
     deletion_id = await _document_service(request).delete(principal, document_id, idempotency_key)
     await DeletionCleanupService(
         _database(request),
@@ -358,7 +358,7 @@ async def delete_document(
 
 @router.get("/deletions/{deletion_id}", response_model=DeletionResponse)
 async def get_deletion(deletion_id: str, request: Request) -> DeletionResponse:
-    deletion = await _document_service(request).get_deletion(_principal(request), deletion_id)
+    deletion = await _document_service(request).get_deletion(await _principal(request), deletion_id)
     if deletion is None:
         raise ApiProblem(
             status=404,

@@ -16,6 +16,12 @@ class NoteBatchMode(StrEnum):
     PER_DOCUMENT = "per_document"
 
 
+class NoteBatchStyle(StrEnum):
+    EXAM_FOCUS = "exam_focus"
+    OUTLINE = "outline"
+    COMPLETE = "complete"
+
+
 class NoteBatchCommandKind(StrEnum):
     CREATE = "create"
     RETRY_FAILED = "retry_failed"
@@ -140,6 +146,7 @@ class _CreateNoteBatchRequest(ContractModel):
     schema_version: Literal["1.0"] = "1.0"
     document_ids: list[NonEmptyString] = Field(min_length=1)
     section_path: list[NonEmptyString] | None = Field(default=None, max_length=32)
+    style: NoteBatchStyle = NoteBatchStyle.EXAM_FOCUS
 
     @field_validator("document_ids")
     @classmethod
@@ -276,6 +283,7 @@ class NoteBatchSnapshot(ContractModel):
     retry_of_batch_id: NonEmptyString | None = None
     course_id: NonEmptyString
     mode: NoteBatchMode
+    style: NoteBatchStyle = NoteBatchStyle.EXAM_FOCUS
     title: str | None = None
     title_prefix: str | None = None
     section_path: list[NonEmptyString] = Field(default_factory=lambda: ["未分类"])

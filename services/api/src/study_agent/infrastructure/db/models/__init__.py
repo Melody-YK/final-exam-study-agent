@@ -7,6 +7,11 @@ from study_agent.infrastructure.db.models.answers import (
     QueryRunModel,
     RetrievalSnapshotModel,
 )
+from study_agent.infrastructure.db.models.auth import (
+    AccountModel,
+    AccountSessionModel,
+    RegistrationInvitationModel,
+)
 from study_agent.infrastructure.db.models.core import (
     CourseModel,
     DeletionJobModel,
@@ -64,6 +69,8 @@ from study_agent.infrastructure.db.models.retrieval import (
 ChunkModel = RevisionChunkModel
 
 __all__ = [
+    "AccountModel",
+    "AccountSessionModel",
     "AnswerDependencyModel",
     "ChunkEmbeddingModel",
     "ChunkModel",
@@ -103,6 +110,7 @@ __all__ = [
     "ParseJobModel",
     "QueryEventModel",
     "QueryRunModel",
+    "RegistrationInvitationModel",
     "RetrievalSnapshotModel",
     "RetrievalTraceModel",
     "RevisionAssetModel",

@@ -178,6 +178,7 @@ class PostgresQueryEvidence:
                     .where(
                         RevisionChunkModel.id.in_(chunk_ids),
                         DocumentModel.deleted_at.is_(None),
+                        DocumentModel.review_status == "approved",
                         CourseModel.deleted_at.is_(None),
                         UserModel.subject == principal.subject,
                         UserModel.authentication_method == principal.authentication_method.value,
@@ -296,6 +297,7 @@ class PostgresQueryEvidence:
                     .where(
                         RevisionChunkModel.id.in_(chunk_ids),
                         DocumentModel.deleted_at.is_(None),
+                        DocumentModel.review_status == "approved",
                         CourseModel.deleted_at.is_(None),
                         UserModel.subject == principal.subject,
                         UserModel.authentication_method == principal.authentication_method.value,

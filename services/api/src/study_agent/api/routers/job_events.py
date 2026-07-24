@@ -9,7 +9,8 @@ from starlette.responses import StreamingResponse
 
 from study_agent.api.errors import ApiProblem, ProblemCode
 from study_agent.config import Settings
-from study_agent.identity.principal import Principal, PrincipalProvider
+from study_agent.identity.principal import Principal
+from study_agent.identity.session import get_request_principal
 from study_agent.infrastructure.db.session import Database
 from study_agent.modules.jobs.events import JobEventReader
 from study_agent.modules.jobs.lease import LeasePolicy
@@ -23,14 +24,8 @@ from study_contracts import JobEventEnvelope, JobSnapshot
 router = APIRouter(prefix="/api/v1", tags=["job-events"])
 
 
-def _principal(request: Request) -> Principal:
-    if request.client is None:
-        raise ApiProblem(status=401, code=ProblemCode.AUTH_REQUIRED, title="需要身份验证")
-    provider = cast(PrincipalProvider, request.app.state.principal_provider)
-    try:
-        return provider.resolve(request.client.host)
-    except PermissionError as exc:
-        raise ApiProblem(status=401, code=ProblemCode.AUTH_REQUIRED, title="需要身份验证") from exc
+async def _principal(request: Request) -> Principal:
+    return await get_request_principal(request)
 
 
 def _service(request: Request) -> JobService:
@@ -56,7 +51,7 @@ def _event_reader(request: Request) -> JobEventReader:
 
 @router.get("/parse-jobs/{job_id}", response_model=JobSnapshot)
 async def get_job_snapshot(job_id: str, request: Request) -> JobSnapshot:
-    snapshot = await _service(request).public_snapshot(_principal(request), job_id)
+    snapshot = await _service(request).public_snapshot(await _principal(request), job_id)
     if snapshot is None:
         raise ApiProblem(
             status=404,
@@ -88,7 +83,7 @@ async def stream_job_events(
             title="Last-Event-ID 无效",
         )
 
-    principal = _principal(request)
+    principal = await _principal(request)
     reader = _event_reader(request)
     initial = await reader.events_after(principal, job_id, after_sequence)
     if initial is None:

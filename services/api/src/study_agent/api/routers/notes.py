@@ -11,7 +11,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from study_agent.api.errors import ApiProblem, ProblemCode
 from study_agent.config import Settings
-from study_agent.identity.principal import Principal, PrincipalProvider
+from study_agent.identity.principal import Principal
+from study_agent.identity.session import get_request_principal
 from study_agent.infrastructure.db.session import Database
 from study_agent.modules.answering.retrieval import QueryEvidence
 from study_agent.modules.notes.service import (
@@ -75,18 +76,8 @@ class NoteResponse(BaseModel):
     updated_at: datetime
 
 
-def _principal(request: Request) -> Principal:
-    if request.client is None:
-        raise ApiProblem(status=401, code=ProblemCode.AUTH_REQUIRED, title="需要身份验证")
-    provider = cast(PrincipalProvider, request.app.state.principal_provider)
-    try:
-        return provider.resolve(request.client.host)
-    except PermissionError as exc:
-        raise ApiProblem(
-            status=401,
-            code=ProblemCode.AUTH_REQUIRED,
-            title="需要身份验证",
-        ) from exc
+async def _principal(request: Request) -> Principal:
+    return await get_request_principal(request)
 
 
 def _repository(request: Request) -> NoteRepository:
@@ -186,7 +177,7 @@ async def create_note(
 ) -> NoteResponse:
     try:
         snapshot = await _service(request).create(
-            _principal(request),
+            await _principal(request),
             course_id,
             tuple(item.strip() for item in payload.section_path),
             payload.title,
@@ -205,7 +196,7 @@ async def create_note(
 
 @router.get("/notes/{note_id}", response_model=NoteResponse)
 async def get_note(note_id: str, request: Request, response: Response) -> NoteResponse:
-    snapshot = await _repository(request).get(_principal(request), note_id)
+    snapshot = await _repository(request).get(await _principal(request), note_id)
     if snapshot is None:
         raise ApiProblem(
             status=404,
@@ -220,7 +211,7 @@ async def get_note(note_id: str, request: Request, response: Response) -> NoteRe
 async def list_notes(course_id: str, request: Request) -> list[NoteResponse]:
     try:
         snapshots = await _repository(request).list_for_course(
-            _principal(request),
+            await _principal(request),
             course_id,
         )
     except LookupError as exc:
@@ -242,7 +233,7 @@ async def update_note(
 ) -> NoteResponse:
     try:
         snapshot = await _repository(request).update(
-            _principal(request),
+            await _principal(request),
             note_id,
             expected_version=_version(if_match),
             title=payload.title,
@@ -268,7 +259,7 @@ async def update_note(
 @router.post("/notes/{note_id}/regenerate", response_model=NoteResponse)
 async def regenerate_note(note_id: str, request: Request, response: Response) -> NoteResponse:
     try:
-        snapshot = await _service(request).regenerate(_principal(request), note_id)
+        snapshot = await _service(request).regenerate(await _principal(request), note_id)
     except NoteGenerationError as exc:
         raise _generation_problem(exc) from exc
     except NoteVersionConflict as exc:

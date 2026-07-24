@@ -1,6 +1,7 @@
 """Identity boundary exports."""
 
 from study_agent.identity.principal import (
+    LOCAL_PRINCIPAL_SUBJECT,
     AuthAdapter,
     AuthenticationMethod,
     AuthRequired,
@@ -11,6 +12,7 @@ from study_agent.identity.principal import (
 )
 
 __all__ = [
+    "LOCAL_PRINCIPAL_SUBJECT",
     "AuthAdapter",
     "AuthRequired",
     "AuthenticationMethod",

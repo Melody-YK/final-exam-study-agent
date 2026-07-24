@@ -1,4 +1,6 @@
 import re
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from ipaddress import ip_address
 from urllib.parse import urlsplit
 
@@ -17,8 +19,12 @@ from study_agent.api.errors import (
 )
 from study_agent.api.health import router as health_router
 from study_agent.api.rate_limit import SlidingWindowLimiter
+from study_agent.api.routers.admin_documents import router as admin_documents_router
+from study_agent.api.routers.auth import router as auth_router
 from study_agent.api.routers.courses import router as courses_router
 from study_agent.api.routers.job_events import router as job_events_router
+from study_agent.api.routers.knowledge_graph import router as knowledge_graph_router
+from study_agent.api.routers.note_batches import router as note_batches_router
 from study_agent.api.routers.notes import router as notes_router
 from study_agent.api.routers.queries import router as queries_router
 from study_agent.api.routers.sources import router as sources_router
@@ -35,6 +41,7 @@ from study_agent.modules.answering.source_tokens import LocalReadTokenSigner
 from study_agent.modules.jobs.clock import SystemClock
 from study_agent.modules.jobs.presence import WorkerPresenceRegistry
 from study_agent.modules.jobs.waiter import AsyncioClaimWaiter, ClaimWaiter
+from study_agent.modules.notes.demo_runner import DemoNoteRunner
 from study_agent.modules.retrieval.bm25_index import Bm25IndexStore
 from study_agent.modules.retrieval.dense import DenseRetriever
 from study_agent.modules.retrieval.hybrid import HybridRetriever, PostgresEvidenceRepository
@@ -253,6 +260,7 @@ def create_app(
     query_evidence: QueryEvidence | None = None,
     worker_presence: WorkerPresenceRegistry | None = None,
     local_read_signer: LocalReadTokenSigner | None = None,
+    note_runner: DemoNoteRunner | None = None,
 ) -> FastAPI:
     # Rebuild from raw field values so every Settings validator runs again.
     resolved_settings = Settings() if settings is None else Settings.model_validate(dict(settings))
@@ -262,6 +270,12 @@ def create_app(
         )
     resolved_database = database or Database(resolved_settings.database_url.get_secret_value())
     resolved_storage = storage or LocalStorage(resolved_settings.local_storage_root)
+    resolved_clock = clock or SystemClock()
+    resolved_note_runner = note_runner or DemoNoteRunner(
+        resolved_database,
+        resolved_settings,
+        resolved_clock,
+    )
     resolved_registry = provider_registry or build_provider_registry(resolved_settings)
     resolved_query_evidence = query_evidence
     if resolved_query_evidence is None:
@@ -284,22 +298,33 @@ def create_app(
             resolved_registry,
             hybrid,
         )
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        await resolved_note_runner.recover_pending()
+        try:
+            yield
+        finally:
+            await resolved_note_runner.shutdown()
+
     application = FastAPI(
         title="期末复习智能体 API",
         version=__version__,
         docs_url="/api/docs",
         redoc_url=None,
+        lifespan=lifespan,
     )
     application.state.settings = resolved_settings
     application.state.database = resolved_database
     application.state.storage = resolved_storage
     application.state.principal_provider = principal_provider or LocalPrincipalProvider()
-    application.state.clock = clock or SystemClock()
+    application.state.clock = resolved_clock
     application.state.claim_waiter = claim_waiter or AsyncioClaimWaiter()
     application.state.provider_registry = resolved_registry
     application.state.query_evidence = resolved_query_evidence
     application.state.worker_presence = worker_presence or WorkerPresenceRegistry()
     application.state.local_read_signer = local_read_signer or LocalReadTokenSigner()
+    application.state.note_runner = resolved_note_runner
     application.state.abuse_limiter = SlidingWindowLimiter()
     application.middleware("http")(add_trace_id)
     application.middleware("http")(enforce_http_security)
@@ -309,8 +334,12 @@ def create_app(
         request_validation_handler,  # type: ignore[arg-type]
     )
     application.include_router(health_router)
+    application.include_router(admin_documents_router)
+    application.include_router(auth_router)
     application.include_router(courses_router)
     application.include_router(job_events_router)
+    application.include_router(knowledge_graph_router)
+    application.include_router(note_batches_router)
     application.include_router(notes_router)
     application.include_router(queries_router)
     application.include_router(sources_router)

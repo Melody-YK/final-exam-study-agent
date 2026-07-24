@@ -290,6 +290,7 @@ class NoteRepository:
             current = (
                 document is not None
                 and document.deleted_at is None
+                and document.review_status == "approved"
                 and document.deletion_epoch == source.document_deletion_epoch
                 and document.active_revision_id == source.revision_id
             )
@@ -363,6 +364,7 @@ class NoteRepository:
                         tuple(item.evidence.chunk_id for item in retrieved.candidates)
                     ),
                     DocumentModel.deleted_at.is_(None),
+                    DocumentModel.review_status == "approved",
                 )
                 .with_for_update(of=DocumentModel)
             )

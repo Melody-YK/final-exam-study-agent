@@ -1,6 +1,478 @@
 {
   "components": {
     "schemas": {
+      "AccountResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "admin",
+              "user"
+            ],
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "display_name",
+          "role"
+        ],
+        "title": "AccountResponse",
+        "type": "object"
+      },
+      "AdminAccountResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "admin_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Admin Note"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "admin",
+              "user"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "suspended"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "display_name",
+          "role",
+          "status",
+          "admin_note",
+          "created_at"
+        ],
+        "title": "AdminAccountResponse",
+        "type": "object"
+      },
+      "AdminAccountUpdateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "admin_note": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Admin Note"
+          },
+          "role": {
+            "anyOf": [
+              {
+                "enum": [
+                  "admin",
+                  "user"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "active",
+                  "suspended"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          }
+        },
+        "title": "AdminAccountUpdateRequest",
+        "type": "object"
+      },
+      "AdminDiagnosticsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "runtime": {
+            "$ref": "#/components/schemas/AdminRuntimeResponse"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/AdminTotalsResponse"
+          }
+        },
+        "required": [
+          "totals",
+          "runtime"
+        ],
+        "title": "AdminDiagnosticsResponse",
+        "type": "object"
+      },
+      "AdminDocumentResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "corpus_role": {
+            "title": "Corpus Role",
+            "type": "string"
+          },
+          "course_id": {
+            "title": "Course Id",
+            "type": "string"
+          },
+          "course_title": {
+            "title": "Course Title",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "media_type": {
+            "title": "Media Type",
+            "type": "string"
+          },
+          "owner_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Account Id"
+          },
+          "owner_display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Display Name"
+          },
+          "owner_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Email"
+          },
+          "owner_subject": {
+            "title": "Owner Subject",
+            "type": "string"
+          },
+          "page_count": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Count"
+          },
+          "review_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Note"
+          },
+          "review_status": {
+            "$ref": "#/components/schemas/DocumentReviewStatus"
+          },
+          "reviewed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed At"
+          },
+          "reviewed_by_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By Account Id"
+          },
+          "reviewed_by_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By Email"
+          },
+          "size_bytes": {
+            "minimum": 0.0,
+            "title": "Size Bytes",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "course_id",
+          "course_title",
+          "owner_account_id",
+          "owner_email",
+          "owner_display_name",
+          "owner_subject",
+          "filename",
+          "media_type",
+          "size_bytes",
+          "corpus_role",
+          "status",
+          "review_status",
+          "review_note",
+          "reviewed_by_account_id",
+          "reviewed_by_email",
+          "reviewed_at",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "AdminDocumentResponse",
+        "type": "object"
+      },
+      "AdminDocumentReviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "review_note": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Note"
+          },
+          "review_status": {
+            "$ref": "#/components/schemas/DocumentReviewDecision"
+          }
+        },
+        "required": [
+          "review_status"
+        ],
+        "title": "AdminDocumentReviewRequest",
+        "type": "object"
+      },
+      "AdminDocumentsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AdminDocumentResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "AdminDocumentsResponse",
+        "type": "object"
+      },
+      "AdminInvitationsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/InvitationResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "AdminInvitationsResponse",
+        "type": "object"
+      },
+      "AdminRuntimeResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "app_mode": {
+            "enum": [
+              "local",
+              "test",
+              "production"
+            ],
+            "title": "App Mode",
+            "type": "string"
+          },
+          "database": {
+            "const": "postgresql",
+            "title": "Database",
+            "type": "string"
+          },
+          "demo_lab_enabled": {
+            "title": "Demo Lab Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "app_mode",
+          "database",
+          "demo_lab_enabled"
+        ],
+        "title": "AdminRuntimeResponse",
+        "type": "object"
+      },
+      "AdminTotalsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "accounts": {
+            "minimum": 0.0,
+            "title": "Accounts",
+            "type": "integer"
+          },
+          "active_sessions": {
+            "minimum": 0.0,
+            "title": "Active Sessions",
+            "type": "integer"
+          },
+          "courses": {
+            "minimum": 0.0,
+            "title": "Courses",
+            "type": "integer"
+          },
+          "documents": {
+            "minimum": 0.0,
+            "title": "Documents",
+            "type": "integer"
+          },
+          "notes": {
+            "minimum": 0.0,
+            "title": "Notes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "accounts",
+          "active_sessions",
+          "courses",
+          "documents",
+          "notes"
+        ],
+        "title": "AdminTotalsResponse",
+        "type": "object"
+      },
+      "AdminUsersResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AdminAccountResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "AdminUsersResponse",
+        "type": "object"
+      },
       "AnswerStatus": {
         "enum": [
           "answered",
@@ -374,6 +846,92 @@
         "title": "CourseResponse",
         "type": "object"
       },
+      "CoverageUnitSnapshot": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "input_id": {
+            "minLength": 1,
+            "title": "Input Id",
+            "type": "string"
+          },
+          "locator": {
+            "minLength": 1,
+            "title": "Locator",
+            "type": "string"
+          },
+          "ordinal": {
+            "minimum": 1.0,
+            "title": "Ordinal",
+            "type": "integer"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z][a-z0-9_]*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CoverageUnitStatus"
+          },
+          "unit_type": {
+            "$ref": "#/components/schemas/CoverageUnitType"
+          }
+        },
+        "required": [
+          "id",
+          "input_id",
+          "ordinal",
+          "unit_type",
+          "locator",
+          "status"
+        ],
+        "title": "CoverageUnitSnapshot",
+        "type": "object"
+      },
+      "CoverageUnitStatus": {
+        "enum": [
+          "pending",
+          "covered",
+          "skipped",
+          "failed"
+        ],
+        "title": "CoverageUnitStatus",
+        "type": "string"
+      },
+      "CoverageUnitType": {
+        "enum": [
+          "slide",
+          "pdf_section",
+          "pdf_page_window"
+        ],
+        "title": "CoverageUnitType",
+        "type": "string"
+      },
+      "CreateInvitationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expires_in_days": {
+            "default": 7,
+            "maximum": 30.0,
+            "minimum": 1.0,
+            "title": "Expires In Days",
+            "type": "integer"
+          }
+        },
+        "title": "CreateInvitationRequest",
+        "type": "object"
+      },
       "DeletionAccepted": {
         "properties": {
           "deletion_id": {
@@ -534,6 +1092,9 @@
             ],
             "title": "Preview Revision Id"
           },
+          "review_status": {
+            "$ref": "#/components/schemas/DocumentReviewStatus"
+          },
           "status": {
             "title": "Status",
             "type": "string"
@@ -551,6 +1112,7 @@
           "corpus_role",
           "verified_sha256",
           "status",
+          "review_status",
           "preview_revision_id",
           "active_revision_id",
           "deletion_epoch",
@@ -558,6 +1120,21 @@
         ],
         "title": "DocumentResponse",
         "type": "object"
+      },
+      "DocumentReviewDecision": {
+        "enum": [
+          "approved",
+          "rejected"
+        ],
+        "type": "string"
+      },
+      "DocumentReviewStatus": {
+        "enum": [
+          "pending",
+          "approved",
+          "rejected"
+        ],
+        "type": "string"
       },
       "DocumentUploadCreated": {
         "properties": {
@@ -574,6 +1151,58 @@
         ],
         "title": "DocumentUploadCreated",
         "type": "object"
+      },
+      "EtaConfidence": {
+        "enum": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "title": "EtaConfidence",
+        "type": "string"
+      },
+      "EtaRange": {
+        "additionalProperties": false,
+        "properties": {
+          "as_of": {
+            "format": "date-time",
+            "title": "As Of",
+            "type": "string"
+          },
+          "confidence": {
+            "$ref": "#/components/schemas/EtaConfidence"
+          },
+          "lower_seconds": {
+            "minimum": 0.0,
+            "title": "Lower Seconds",
+            "type": "integer"
+          },
+          "upper_seconds": {
+            "minimum": 0.0,
+            "title": "Upper Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "lower_seconds",
+          "upper_seconds",
+          "confidence",
+          "as_of"
+        ],
+        "title": "EtaRange",
+        "type": "object"
+      },
+      "EtaUnavailableReason": {
+        "enum": [
+          "not_started",
+          "terminal",
+          "insufficient_history",
+          "retrying",
+          "provider_changed",
+          "outlier"
+        ],
+        "title": "EtaUnavailableReason",
+        "type": "string"
       },
       "HTTPValidationError": {
         "properties": {
@@ -611,6 +1240,173 @@
           "version"
         ],
         "title": "HealthResponse",
+        "type": "object"
+      },
+      "InvitationCreateResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "maxLength": 512,
+            "minLength": 16,
+            "title": "Code",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by_account_id": {
+            "title": "Created By Account Id",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "status": {
+            "enum": [
+              "available",
+              "used",
+              "revoked",
+              "expired"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "used_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Used At"
+          },
+          "used_by_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Used By Account Id"
+          }
+        },
+        "required": [
+          "id",
+          "created_by_account_id",
+          "used_by_account_id",
+          "status",
+          "created_at",
+          "expires_at",
+          "used_at",
+          "revoked_at",
+          "code"
+        ],
+        "title": "InvitationCreateResponse",
+        "type": "object"
+      },
+      "InvitationResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by_account_id": {
+            "title": "Created By Account Id",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "status": {
+            "enum": [
+              "available",
+              "used",
+              "revoked",
+              "expired"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "used_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Used At"
+          },
+          "used_by_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Used By Account Id"
+          }
+        },
+        "required": [
+          "id",
+          "created_by_account_id",
+          "used_by_account_id",
+          "status",
+          "created_at",
+          "expires_at",
+          "used_at",
+          "revoked_at"
+        ],
+        "title": "InvitationResponse",
         "type": "object"
       },
       "JobArtifactReceipt": {
@@ -1146,6 +1942,299 @@
         "title": "JobStatus",
         "type": "string"
       },
+      "KnowledgeGraphEdgeKind": {
+        "enum": [
+          "contains",
+          "mentions",
+          "co_occurs"
+        ],
+        "title": "KnowledgeGraphEdgeKind",
+        "type": "string"
+      },
+      "KnowledgeGraphEdgeResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/KnowledgeGraphEdgeKind"
+          },
+          "source": {
+            "minLength": 1,
+            "title": "Source",
+            "type": "string"
+          },
+          "target": {
+            "minLength": 1,
+            "title": "Target",
+            "type": "string"
+          },
+          "weight": {
+            "minimum": 1.0,
+            "title": "Weight",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "source",
+          "target",
+          "kind",
+          "weight"
+        ],
+        "title": "KnowledgeGraphEdgeResponse",
+        "type": "object"
+      },
+      "KnowledgeGraphNodeKind": {
+        "enum": [
+          "course",
+          "document",
+          "concept"
+        ],
+        "title": "KnowledgeGraphNodeKind",
+        "type": "string"
+      },
+      "KnowledgeGraphNodeResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "document_count": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Count"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id"
+          },
+          "frequency": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frequency"
+          },
+          "id": {
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/KnowledgeGraphNodeKind"
+          },
+          "label": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "occurrence_count": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurrence Count"
+          },
+          "occurrences": {
+            "items": {
+              "$ref": "#/components/schemas/KnowledgeGraphOccurrenceResponse"
+            },
+            "title": "Occurrences",
+            "type": "array"
+          },
+          "occurrences_truncated": {
+            "default": false,
+            "title": "Occurrences Truncated",
+            "type": "boolean"
+          },
+          "page_count": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Count"
+          },
+          "revision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision Id"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "label"
+        ],
+        "title": "KnowledgeGraphNodeResponse",
+        "type": "object"
+      },
+      "KnowledgeGraphOccurrenceResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "chunk_id": {
+            "minLength": 1,
+            "title": "Chunk Id",
+            "type": "string"
+          },
+          "chunk_ordinal": {
+            "minimum": 1.0,
+            "title": "Chunk Ordinal",
+            "type": "integer"
+          },
+          "count": {
+            "minimum": 1.0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "document_id": {
+            "minLength": 1,
+            "title": "Document Id",
+            "type": "string"
+          },
+          "document_name": {
+            "minLength": 1,
+            "title": "Document Name",
+            "type": "string"
+          },
+          "excerpt": {
+            "maxLength": 182,
+            "minLength": 1,
+            "title": "Excerpt",
+            "type": "string"
+          },
+          "page_ordinal": {
+            "minimum": 1.0,
+            "title": "Page Ordinal",
+            "type": "integer"
+          },
+          "revision_id": {
+            "minLength": 1,
+            "title": "Revision Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "document_id",
+          "document_name",
+          "revision_id",
+          "chunk_id",
+          "page_ordinal",
+          "chunk_ordinal",
+          "count",
+          "excerpt"
+        ],
+        "title": "KnowledgeGraphOccurrenceResponse",
+        "type": "object"
+      },
+      "KnowledgeGraphResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "active_document_count": {
+            "minimum": 0.0,
+            "title": "Active Document Count",
+            "type": "integer"
+          },
+          "course_id": {
+            "minLength": 1,
+            "title": "Course Id",
+            "type": "string"
+          },
+          "edge_limit": {
+            "minimum": 1.0,
+            "title": "Edge Limit",
+            "type": "integer"
+          },
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/KnowledgeGraphEdgeResponse"
+            },
+            "title": "Edges",
+            "type": "array"
+          },
+          "included_document_count": {
+            "minimum": 0.0,
+            "title": "Included Document Count",
+            "type": "integer"
+          },
+          "node_limit": {
+            "minimum": 3.0,
+            "title": "Node Limit",
+            "type": "integer"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/KnowledgeGraphNodeResponse"
+            },
+            "title": "Nodes",
+            "type": "array"
+          },
+          "source_chunk_count": {
+            "minimum": 0.0,
+            "title": "Source Chunk Count",
+            "type": "integer"
+          },
+          "tokenizer_version": {
+            "minLength": 1,
+            "title": "Tokenizer Version",
+            "type": "string"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "course_id",
+          "tokenizer_version",
+          "active_document_count",
+          "included_document_count",
+          "source_chunk_count",
+          "node_limit",
+          "edge_limit",
+          "truncated",
+          "nodes",
+          "edges"
+        ],
+        "title": "KnowledgeGraphResponse",
+        "type": "object"
+      },
       "LabCandidateResponse": {
         "properties": {
           "chunk_id": {
@@ -1329,6 +2418,313 @@
         "title": "LabUsageResponse",
         "type": "object"
       },
+      "LocalDemoNoteBatchSnapshot": {
+        "additionalProperties": false,
+        "description": "Public snapshot shape supported by the local merged/create demo route.",
+        "properties": {
+          "command_kind": {
+            "const": "create",
+            "default": "create",
+            "title": "Command Kind",
+            "type": "string"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "completed_items": {
+            "minimum": 0.0,
+            "title": "Completed Items",
+            "type": "integer"
+          },
+          "course_id": {
+            "minLength": 1,
+            "title": "Course Id",
+            "type": "string"
+          },
+          "coverage_units": {
+            "items": {
+              "$ref": "#/components/schemas/CoverageUnitSnapshot"
+            },
+            "title": "Coverage Units",
+            "type": "array"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "inputs": {
+            "items": {
+              "$ref": "#/components/schemas/NoteInputSnapshot"
+            },
+            "title": "Inputs",
+            "type": "array"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/NoteItemSnapshot"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "last_event_sequence": {
+            "minimum": 0.0,
+            "title": "Last Event Sequence",
+            "type": "integer"
+          },
+          "mode": {
+            "const": "merged",
+            "default": "merged",
+            "title": "Mode",
+            "type": "string"
+          },
+          "retry_of_batch_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry Of Batch Id"
+          },
+          "schema_version": {
+            "const": "1.0",
+            "default": "1.0",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "section_path": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "title": "Section Path",
+            "type": "array"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "$ref": "#/components/schemas/NoteBatchStatus"
+          },
+          "style": {
+            "$ref": "#/components/schemas/NoteBatchStyle",
+            "default": "exam_focus"
+          },
+          "target_note_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Note Id"
+          },
+          "target_note_version": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Note Version"
+          },
+          "target_note_version_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Note Version Sha256"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "title_prefix": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title Prefix"
+          },
+          "total_items": {
+            "minimum": 1.0,
+            "title": "Total Items",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "course_id",
+          "status",
+          "completed_items",
+          "total_items",
+          "inputs",
+          "items",
+          "last_event_sequence",
+          "created_at"
+        ],
+        "title": "LocalDemoNoteBatchSnapshot",
+        "type": "object"
+      },
+      "LoginRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "maxLength": 320,
+            "minLength": 3,
+            "title": "Email",
+            "type": "string"
+          },
+          "password": {
+            "format": "password",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Password",
+            "type": "string",
+            "writeOnly": true
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ],
+        "title": "LoginRequest",
+        "type": "object"
+      },
+      "MergedNoteBatchRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "document_ids": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Document Ids",
+            "type": "array"
+          },
+          "mode": {
+            "const": "merged",
+            "default": "merged",
+            "title": "Mode",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "1.0",
+            "default": "1.0",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "section_path": {
+            "anyOf": [
+              {
+                "items": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 32,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Section Path"
+          },
+          "style": {
+            "$ref": "#/components/schemas/NoteBatchStyle",
+            "default": "exam_focus"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "document_ids"
+        ],
+        "title": "MergedNoteBatchRequest",
+        "type": "object"
+      },
+      "NoteBatchStatus": {
+        "enum": [
+          "queued",
+          "running",
+          "partial_success",
+          "succeeded",
+          "failed",
+          "cancelling",
+          "cancelled"
+        ],
+        "title": "NoteBatchStatus",
+        "type": "string"
+      },
+      "NoteBatchStyle": {
+        "enum": [
+          "exam_focus",
+          "outline",
+          "complete"
+        ],
+        "title": "NoteBatchStyle",
+        "type": "string"
+      },
       "NoteCreate": {
         "additionalProperties": false,
         "properties": {
@@ -1354,6 +2750,195 @@
         ],
         "title": "NoteCreate",
         "type": "object"
+      },
+      "NoteGenerationPhase": {
+        "enum": [
+          "validating_inputs",
+          "segmenting",
+          "retrieving",
+          "outlining",
+          "generating",
+          "validating_output",
+          "saving"
+        ],
+        "title": "NoteGenerationPhase",
+        "type": "string"
+      },
+      "NoteInputSnapshot": {
+        "additionalProperties": false,
+        "properties": {
+          "content_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Sha256",
+            "type": "string"
+          },
+          "deletion_epoch": {
+            "minimum": 0.0,
+            "title": "Deletion Epoch",
+            "type": "integer"
+          },
+          "document_id": {
+            "minLength": 1,
+            "title": "Document Id",
+            "type": "string"
+          },
+          "document_name": {
+            "minLength": 1,
+            "title": "Document Name",
+            "type": "string"
+          },
+          "id": {
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "index_manifest_at_submit": {
+            "minLength": 1,
+            "title": "Index Manifest At Submit",
+            "type": "string"
+          },
+          "media_type": {
+            "minLength": 1,
+            "title": "Media Type",
+            "type": "string"
+          },
+          "ordinal": {
+            "minimum": 1.0,
+            "title": "Ordinal",
+            "type": "integer"
+          },
+          "revision_id": {
+            "minLength": 1,
+            "title": "Revision Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "ordinal",
+          "document_id",
+          "revision_id",
+          "deletion_epoch",
+          "document_name",
+          "media_type",
+          "content_sha256",
+          "index_manifest_at_submit"
+        ],
+        "title": "NoteInputSnapshot",
+        "type": "object"
+      },
+      "NoteItemSnapshot": {
+        "additionalProperties": false,
+        "properties": {
+          "attempt": {
+            "minimum": 0.0,
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "elapsed_seconds": {
+            "minimum": 0.0,
+            "title": "Elapsed Seconds",
+            "type": "integer"
+          },
+          "eta": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EtaRange"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "eta_unavailable_reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EtaUnavailableReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "failure_code": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Z][A-Z0-9_]*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Code"
+          },
+          "id": {
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "input_ids": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "title": "Input Ids",
+            "type": "array"
+          },
+          "note_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note Id"
+          },
+          "phase": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NoteGenerationPhase"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "retryable_in_new_batch": {
+            "title": "Retryable In New Batch",
+            "type": "boolean"
+          },
+          "status": {
+            "$ref": "#/components/schemas/NoteItemStatus"
+          }
+        },
+        "required": [
+          "id",
+          "input_ids",
+          "status",
+          "elapsed_seconds",
+          "attempt",
+          "retryable_in_new_batch"
+        ],
+        "title": "NoteItemSnapshot",
+        "type": "object"
+      },
+      "NoteItemStatus": {
+        "enum": [
+          "queued",
+          "leased",
+          "running",
+          "retry_wait",
+          "succeeded",
+          "failed",
+          "cancelling",
+          "cancelled"
+        ],
+        "title": "NoteItemStatus",
+        "type": "string"
       },
       "NotePatch": {
         "additionalProperties": false,
@@ -1895,6 +3480,53 @@
         "title": "Refusal",
         "type": "object"
       },
+      "RegisterRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "display_name": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Display Name",
+            "type": "string"
+          },
+          "email": {
+            "maxLength": 320,
+            "minLength": 3,
+            "title": "Email",
+            "type": "string"
+          },
+          "invite_code": {
+            "anyOf": [
+              {
+                "format": "password",
+                "maxLength": 512,
+                "minLength": 16,
+                "type": "string",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invite Code"
+          },
+          "password": {
+            "format": "password",
+            "maxLength": 256,
+            "minLength": 8,
+            "title": "Password",
+            "type": "string",
+            "writeOnly": true
+          }
+        },
+        "required": [
+          "email",
+          "password",
+          "display_name"
+        ],
+        "title": "RegisterRequest",
+        "type": "object"
+      },
       "RuntimeCapabilitiesResponse": {
         "properties": {
           "demo_lab_enabled": {
@@ -2376,6 +4008,9 @@
             "title": "Progress",
             "type": "object"
           },
+          "review_status": {
+            "$ref": "#/components/schemas/DocumentReviewStatus"
+          },
           "status": {
             "title": "Status",
             "type": "string"
@@ -2398,6 +4033,7 @@
           "corpus_role",
           "verified_sha256",
           "status",
+          "review_status",
           "preview_revision_id",
           "active_revision_id",
           "deletion_epoch",
@@ -2420,6 +4056,453 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/admin/diagnostics": {
+      "get": {
+        "operationId": "diagnostics_api_v1_admin_diagnostics_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminDiagnosticsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Diagnostics",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/admin/documents": {
+      "get": {
+        "operationId": "list_admin_documents_api_v1_admin_documents_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "review_status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/DocumentReviewStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Review Status"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminDocumentsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Admin Documents",
+        "tags": [
+          "admin-documents"
+        ]
+      }
+    },
+    "/api/v1/admin/documents/{document_id}/content": {
+      "get": {
+        "operationId": "get_admin_document_content_api_v1_admin_documents__document_id__content_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "title": "Document Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Admin Document Content",
+        "tags": [
+          "admin-documents"
+        ]
+      }
+    },
+    "/api/v1/admin/documents/{document_id}/review": {
+      "post": {
+        "operationId": "review_admin_document_api_v1_admin_documents__document_id__review_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "title": "Document Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminDocumentReviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminDocumentResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Review Admin Document",
+        "tags": [
+          "admin-documents"
+        ]
+      }
+    },
+    "/api/v1/admin/invitations": {
+      "get": {
+        "operationId": "list_invitations_api_v1_admin_invitations_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminInvitationsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Invitations",
+        "tags": [
+          "auth"
+        ]
+      },
+      "post": {
+        "operationId": "create_invitation_api_v1_admin_invitations_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInvitationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitationCreateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Invitation",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/admin/invitations/{invitation_id}": {
+      "delete": {
+        "operationId": "revoke_invitation_api_v1_admin_invitations__invitation_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "invitation_id",
+            "required": true,
+            "schema": {
+              "title": "Invitation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke Invitation",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/admin/users": {
+      "get": {
+        "operationId": "list_users_api_v1_admin_users_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUsersResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Users",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/admin/users/{account_id}": {
+      "patch": {
+        "operationId": "update_user_api_v1_admin_users__account_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminAccountUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminAccountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update User",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "operationId": "login_api_v1_auth_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Login",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "operationId": "logout_api_v1_auth_logout_post",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Logout",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/me": {
+      "get": {
+        "operationId": "me_api_v1_auth_me_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Me",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/register": {
+      "post": {
+        "operationId": "register_api_v1_auth_register_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Register",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
     "/api/v1/capabilities": {
       "get": {
         "operationId": "get_runtime_capabilities_api_v1_capabilities_get",
@@ -2500,6 +4583,29 @@
       }
     },
     "/api/v1/courses": {
+      "get": {
+        "operationId": "list_courses_api_v1_courses_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CourseResponse"
+                  },
+                  "title": "Response List Courses Api V1 Courses Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Courses",
+        "tags": [
+          "courses"
+        ]
+      },
       "post": {
         "operationId": "create_course_api_v1_courses_post",
         "requestBody": {
@@ -2786,6 +4892,72 @@
         ]
       }
     },
+    "/api/v1/courses/{course_id}/knowledge-graph": {
+      "get": {
+        "operationId": "get_course_knowledge_graph_api_v1_courses__course_id__knowledge_graph_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "course_id",
+            "required": true,
+            "schema": {
+              "title": "Course Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "node_limit",
+            "required": false,
+            "schema": {
+              "default": 64,
+              "maximum": 100,
+              "minimum": 3,
+              "title": "Node Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "edge_limit",
+            "required": false,
+            "schema": {
+              "default": 160,
+              "maximum": 300,
+              "minimum": 1,
+              "title": "Edge Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeGraphResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Course Knowledge Graph",
+        "tags": [
+          "knowledge-graph"
+        ]
+      }
+    },
     "/api/v1/courses/{course_id}/lab/trace": {
       "get": {
         "operationId": "get_latest_lab_trace_api_v1_courses__course_id__lab_trace_get",
@@ -2825,6 +4997,69 @@
         "summary": "Get Latest Lab Trace",
         "tags": [
           "workspace"
+        ]
+      }
+    },
+    "/api/v1/courses/{course_id}/note-batches": {
+      "post": {
+        "operationId": "create_note_batch_api_v1_courses__course_id__note_batches_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "course_id",
+            "required": true,
+            "schema": {
+              "title": "Course Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 512,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MergedNoteBatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocalDemoNoteBatchSnapshot"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Note Batch",
+        "tags": [
+          "note-batches"
         ]
       }
     },
@@ -3290,6 +5525,48 @@
         "summary": "Complete Document Upload",
         "tags": [
           "courses"
+        ]
+      }
+    },
+    "/api/v1/note-batches/{batch_id}": {
+      "get": {
+        "operationId": "get_note_batch_api_v1_note_batches__batch_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "batch_id",
+            "required": true,
+            "schema": {
+              "title": "Batch Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocalDemoNoteBatchSnapshot"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Note Batch",
+        "tags": [
+          "note-batches"
         ]
       }
     },
