@@ -84,9 +84,44 @@ export type NoteSource = Schema<'NoteSourceResponse'>
 export type NoteRecord = Schema<'NoteResponse'>
 export type NoteCreate = Schema<'NoteCreate'>
 export type NotePatch = Schema<'NotePatch'>
+export type NoteBatchStyle = Schema<'NoteBatchStyle'>
+type GeneratedMergedNoteBatchRequest = Schema<'MergedNoteBatchRequest'>
+export type MergedNoteBatchRequest = Omit<GeneratedMergedNoteBatchRequest, 'style'> & {
+  style: NoteBatchStyle
+}
+export type NoteBatchStatus = Schema<'NoteBatchStatus'>
+export type NoteGenerationPhase = Schema<'NoteGenerationPhase'>
+export type NoteItemSnapshot = Schema<'NoteItemSnapshot'>
+type GeneratedNoteBatchSnapshot = Schema<'LocalDemoNoteBatchSnapshot'>
+export type NoteBatchSnapshot = Omit<GeneratedNoteBatchSnapshot, 'style'> & {
+  style: NoteBatchStyle
+}
 
 export type RetrievalCandidate = Schema<'LabCandidateResponse'>
 export type LabTrace = Schema<'LabTraceResponse'>
+
+export type AuthUser = Schema<'AccountResponse'>
+export type AccountRole = AuthUser['role']
+export type RegisterRequest = Schema<'RegisterRequest'>
+export type LoginRequest = Schema<'LoginRequest'>
+export type AdminUserList = Schema<'AdminUsersResponse'>
+export type AdminAccount = Schema<'AdminAccountResponse'>
+export type AdminAccountUpdate = Schema<'AdminAccountUpdateRequest'>
+export type AdminInvitation = Schema<'InvitationResponse'>
+export type AdminInvitationCreate = Schema<'InvitationCreateResponse'>
+export type AdminInvitations = Schema<'AdminInvitationsResponse'>
+export type CreateInvitationRequest = Schema<'CreateInvitationRequest'>
+export type AdminDiagnostics = Schema<'AdminDiagnosticsResponse'>
+export type AdminDocument = Schema<'AdminDocumentResponse'>
+export type AdminDocuments = Schema<'AdminDocumentsResponse'>
+export type AdminDocumentReviewRequest = Schema<'AdminDocumentReviewRequest'>
+
+export type KnowledgeGraphOccurrence = Schema<'KnowledgeGraphOccurrenceResponse'>
+export type KnowledgeGraphNode = Schema<'KnowledgeGraphNodeResponse'>
+export type KnowledgeGraphNodeKind = KnowledgeGraphNode['kind']
+export type KnowledgeGraphEdge = Schema<'KnowledgeGraphEdgeResponse'>
+export type KnowledgeGraphEdgeKind = KnowledgeGraphEdge['kind']
+export type KnowledgeGraphResponse = Schema<'KnowledgeGraphResponse'>
 
 export interface EventEnvelope<T = Record<string, unknown>> {
   stream_version: '1'

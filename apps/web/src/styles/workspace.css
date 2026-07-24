@@ -76,6 +76,33 @@
   color: var(--accent);
 }
 
+.topbar-account,
+.topbar-admin-link {
+  align-items: center;
+  display: inline-flex;
+  font-size: 12px;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.topbar-account {
+  color: var(--text-muted);
+}
+
+.topbar-admin-link {
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  color: var(--accent);
+  font-weight: 750;
+  min-height: 32px;
+  padding: 5px 9px;
+  text-decoration: none;
+}
+
+.topbar-admin-link:hover {
+  background: var(--surface-muted);
+}
+
 .workspace-layout {
   display: grid;
   grid-template-columns: 224px minmax(0, 1fr);
@@ -851,6 +878,58 @@
   overflow: hidden;
 }
 
+.note-batch-progress {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  margin-bottom: 14px;
+  padding: 14px;
+}
+
+.note-batch-progress > header {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.note-batch-progress h3 {
+  font-size: 15px;
+}
+
+.note-batch-progress__facts {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin-top: 12px;
+}
+
+.note-batch-progress__facts > div {
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 9px 10px;
+}
+
+.note-batch-progress__facts span {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.note-batch-progress__facts strong {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.note-batch-progress__failure {
+  color: var(--red);
+  font-size: 12px;
+  margin-top: 10px;
+}
+
 .note-tree,
 .note-sources {
   background: var(--surface-subtle);
@@ -937,7 +1016,35 @@
 
 .note-editor__header > div:last-child {
   display: flex;
+  flex-wrap: wrap;
   gap: 7px;
+  justify-content: flex-end;
+}
+
+.note-mode-switch {
+  display: inline-flex;
+  gap: 0;
+}
+
+.note-mode-switch .button {
+  border-radius: 0;
+}
+
+.note-mode-switch .button:first-child {
+  border-radius: 5px 0 0 5px;
+}
+
+.note-mode-switch .button:last-child {
+  border-left-width: 0;
+  border-radius: 0 5px 5px 0;
+}
+
+.note-mode-switch .button.is-active {
+  background: var(--surface-muted);
+  border-color: var(--accent);
+  color: var(--accent);
+  position: relative;
+  z-index: 1;
 }
 
 .note-editor {
@@ -950,6 +1057,73 @@
   padding: 16px 8px;
   resize: none;
   width: 100%;
+}
+
+.note-preview {
+  border-top: 1px solid var(--border);
+  flex: 1;
+  line-height: 1.7;
+  margin-top: 12px;
+  min-height: 420px;
+  overflow: auto;
+  padding: 16px 8px;
+  overflow-wrap: anywhere;
+}
+
+.note-preview h1,
+.note-preview h2,
+.note-preview h3,
+.note-preview h4,
+.note-preview h5,
+.note-preview h6 {
+  line-height: 1.35;
+  margin: 0 0 12px;
+}
+
+.note-preview p,
+.note-preview ul,
+.note-preview ol,
+.note-preview blockquote,
+.note-preview pre {
+  margin: 0 0 12px;
+}
+
+.note-preview ul,
+.note-preview ol {
+  padding-left: 22px;
+}
+
+.note-preview blockquote {
+  border-left: 3px solid var(--border-strong);
+  color: var(--text-muted);
+  padding-left: 12px;
+}
+
+.note-preview pre {
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 10px;
+}
+
+.note-preview code {
+  overflow-wrap: anywhere;
+}
+
+.note-preview a {
+  color: var(--blue);
+  overflow-wrap: anywhere;
+}
+
+.note-draft-indicator {
+  align-items: center;
+  color: var(--amber);
+  display: flex;
+  font-size: 12px;
+  gap: 5px;
+  margin-top: 8px;
 }
 
 .conflict-banner {
@@ -1022,6 +1196,176 @@
 
 .source-state--unavailable {
   color: var(--red);
+}
+
+.note-batch-documents {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 0;
+  min-width: 0;
+  padding: 10px;
+}
+
+.note-batch-documents legend {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 750;
+  padding: 0 5px;
+}
+
+.note-batch-documents__meta {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  gap: 6px 12px;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.note-batch-documents__list {
+  display: grid;
+  gap: 6px;
+}
+
+.note-batch-document {
+  align-items: center;
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px;
+}
+
+.note-batch-document:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-muted);
+}
+
+.note-batch-document input {
+  height: 16px;
+  margin: 0;
+  width: 16px;
+}
+
+.note-batch-document__check {
+  align-items: center;
+  background: var(--accent);
+  border-radius: 3px;
+  color: #fff;
+  display: inline-flex;
+  flex: 0 0 18px;
+  height: 18px;
+  justify-content: center;
+  margin-left: -27px;
+  opacity: 0;
+  pointer-events: none;
+  width: 18px;
+}
+
+.note-batch-document input:checked + .note-batch-document__check {
+  opacity: 1;
+}
+
+.note-batch-document__details {
+  display: grid;
+  min-width: 0;
+}
+
+.note-batch-document__details strong,
+.note-batch-document__details small {
+  overflow-wrap: anywhere;
+}
+
+.note-batch-document__details small {
+  color: var(--text-muted);
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+.note-batch-mode {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.field__label {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.note-batch-mode__selected {
+  align-items: center;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  color: var(--accent);
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 700;
+  gap: 5px;
+  padding: 6px 8px;
+}
+
+.note-style-picker {
+  border: 0;
+  margin: 16px 0 0;
+  min-width: 0;
+  padding: 0;
+}
+
+.note-style-picker legend {
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 7px;
+  padding: 0;
+}
+
+.note-style-picker__options {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.note-style-option {
+  align-items: flex-start;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+  display: flex;
+  gap: 7px;
+  min-width: 0;
+  padding: 8px;
+}
+
+.note-style-option:has(input:checked) {
+  background: var(--surface-muted);
+  border-color: var(--accent);
+}
+
+.note-style-option input {
+  flex: 0 0 auto;
+  margin: 2px 0 0;
+}
+
+.note-style-option span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.note-style-option strong {
+  font-size: 12px;
+}
+
+.note-style-option small {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
 }
 
 .lab-layout {

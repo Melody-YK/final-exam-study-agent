@@ -1,14 +1,15 @@
 import { useQuery } from '@tanstack/react-query'
-import { ChevronDown, CloudOff, LogOut, Wifi } from 'lucide-react'
-import { Routes, Route } from 'react-router-dom'
+import { ChevronDown, CloudOff, LogOut, ShieldCheck, UserRound, Wifi } from 'lucide-react'
+import { Link, Routes, Route, useNavigate } from 'react-router-dom'
 
 import { studyApi } from '../api/client'
 import { IconButton } from '../components/ui/IconButton'
-import { DemoLabPage } from '../features/demo-lab/DemoLabPage'
+import { KnowledgeGraphPage } from '../features/knowledge-graph/KnowledgeGraphPage'
 import { LibraryPage } from '../features/library/LibraryPage'
 import { NotesPage } from '../features/notes/NotesPage'
 import { QAPage } from '../features/qa/QAPage'
 import { MobileNav } from './MobileNav'
+import { useAuth } from './auth'
 import { WorkspaceContext } from './WorkspaceContext'
 import { WorkspaceNavigation } from './navigation'
 
@@ -18,6 +19,8 @@ interface WorkspaceShellProps {
 }
 
 export function WorkspaceShell({ courseId, onLeaveCourse }: WorkspaceShellProps) {
+  const { user, logout } = useAuth()
+  const navigate = useNavigate()
   const courseQuery = useQuery({
     queryKey: ['course', courseId],
     queryFn: () => studyApi.getCourse(courseId),
@@ -28,6 +31,12 @@ export function WorkspaceShell({ courseId, onLeaveCourse }: WorkspaceShellProps)
     retry: false,
   })
   const providerAvailable = capabilitiesQuery.data?.provider.status === 'available'
+
+  const signOut = async () => {
+    onLeaveCourse()
+    await logout()
+    navigate('/login', { replace: true })
+  }
 
   return (
     <WorkspaceContext.Provider
@@ -58,7 +67,17 @@ export function WorkspaceShell({ courseId, onLeaveCourse }: WorkspaceShellProps)
               {providerAvailable ? <Wifi aria-hidden="true" size={15} /> : <CloudOff aria-hidden="true" size={15} />}
               {providerAvailable ? 'Provider 可用' : '仅资料模式'}
             </span>
-            <IconButton label="退出当前课程" onClick={onLeaveCourse} size="small">
+            <span className="topbar-account">
+              <UserRound aria-hidden="true" size={15} />
+              {user?.display_name}
+            </span>
+            {user?.role === 'admin' ? (
+              <Link className="topbar-admin-link" to="/admin">
+                <ShieldCheck aria-hidden="true" size={16} />
+                管理端
+              </Link>
+            ) : null}
+            <IconButton label="退出登录" onClick={() => void signOut()} size="small">
               <LogOut aria-hidden="true" size={17} />
             </IconButton>
           </div>
@@ -71,7 +90,8 @@ export function WorkspaceShell({ courseId, onLeaveCourse }: WorkspaceShellProps)
             </button>
             <WorkspaceNavigation />
             <div className="workspace-sidebar__meta">
-              <span>本地单用户</span>
+              <span>{user?.email}</span>
+              <span>{user?.role === 'admin' ? '管理员账号' : '学习账号'}</span>
               <span>API 驱动</span>
             </div>
           </aside>
@@ -89,7 +109,7 @@ export function WorkspaceShell({ courseId, onLeaveCourse }: WorkspaceShellProps)
                 <Route element={<LibraryPage />} path="/" />
                 <Route element={<QAPage />} path="/qa" />
                 <Route element={<NotesPage />} path="/notes" />
-                <Route element={<DemoLabPage />} path="/lab" />
+                <Route element={<KnowledgeGraphPage />} path="/graph" />
               </Routes>
             )}
           </main>

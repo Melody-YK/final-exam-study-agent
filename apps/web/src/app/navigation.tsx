@@ -1,11 +1,11 @@
-import { BookOpen, FileSearch, FlaskConical, Library, MessageSquareText } from 'lucide-react'
+import { BookOpen, FileSearch, Library, MessageSquareText, Network } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
 
 const destinations = [
   { to: '/', label: '资料', icon: Library, end: true },
   { to: '/qa', label: '问答', icon: MessageSquareText, end: false },
   { to: '/notes', label: '笔记', icon: BookOpen, end: false },
-  { to: '/lab', label: 'Lab', icon: FlaskConical, end: false },
+  { to: '/graph', label: '知识图谱', icon: Network, end: false },
 ] as const
 
 interface WorkspaceNavigationProps {

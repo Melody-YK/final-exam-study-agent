@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 
 import { App } from './app/App'
 import './styles/base.css'
+import './styles/auth-admin.css'
 import './styles/workspace.css'
 import './styles/responsive.css'
 
