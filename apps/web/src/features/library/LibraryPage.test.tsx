@@ -7,6 +7,12 @@ import { documentRecord, problem } from '../../test/fixtures'
 import { availableCapabilities, renderInWorkspace } from '../../test/render'
 import { LibraryPage } from './LibraryPage'
 
+async function expectReadinessCount(label: string, count: number) {
+  expect(
+    await screen.findByRole('listitem', { name: `${label} ${count}` }),
+  ).toBeInTheDocument()
+}
+
 describe('LibraryPage', () => {
   it('renders document states and supports retry and deletion cleanup', async () => {
     const documents = [
@@ -111,6 +117,145 @@ describe('LibraryPage', () => {
     expect(screen.getByText('需要本地 OCR Worker')).toBeInTheDocument()
   })
 
+  it('derives study readiness from every required predicate with review precedence', async () => {
+    vi.spyOn(studyApi, 'listDocuments').mockResolvedValue([
+      documentRecord({ id: 'ready' }),
+      documentRecord({ id: 'processing', status: 'processing' }),
+      documentRecord({ id: 'missing-revision', active_revision_id: null }),
+      documentRecord({ id: 'not-indexable', indexable: false }),
+      documentRecord({
+        id: 'pending-failure',
+        status: 'partial_failed',
+        review_status: 'pending',
+      }),
+      documentRecord({ id: 'approved-failure', status: 'failed' }),
+      documentRecord({ id: 'retry-wait', status: 'retry_wait' }),
+      documentRecord({ id: 'rejected', review_status: 'rejected' }),
+    ])
+
+    renderInWorkspace(<LibraryPage />)
+
+    expect(await screen.findByRole('region', { name: '学习就绪入口' })).toBeInTheDocument()
+    await expectReadinessCount('可学习', 1)
+    await expectReadinessCount('待审核', 1)
+    await expectReadinessCount('准备中', 3)
+    await expectReadinessCount('需要处理', 3)
+  })
+
+  it('links ready PDF and modern PPTX sources to every available study workflow', async () => {
+    vi.spyOn(studyApi, 'listDocuments').mockResolvedValue([
+      documentRecord({ id: 'pdf-source' }),
+      documentRecord({
+        id: 'pptx-source',
+        filename: 'scheduler.pptx',
+        media_type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      }),
+    ])
+
+    renderInWorkspace(<LibraryPage />)
+
+    const actions = await screen.findByRole('region', { name: '学习就绪入口' })
+    expect(await within(actions).findByRole('link', { name: '查看概念地图' })).toHaveAttribute(
+      'href',
+      '/graph',
+    )
+    expect(within(actions).getByRole('link', { name: '开始问答' })).toHaveAttribute('href', '/qa')
+    expect(within(actions).getByRole('link', { name: '生成复习笔记' })).toHaveAttribute(
+      'href',
+      '/notes',
+    )
+  })
+
+  it('uses status text instead of links when provider and note generation are unavailable', async () => {
+    const capabilities: RuntimeCapabilities = {
+      ...availableCapabilities,
+      provider: { status: 'not_configured', label: '未配置回答模型' },
+      note_workflow: {
+        ...availableCapabilities.note_workflow,
+        enabled: false,
+      },
+    }
+    vi.spyOn(studyApi, 'listDocuments').mockResolvedValue([documentRecord()])
+
+    renderInWorkspace(<LibraryPage />, { workspace: { capabilities } })
+
+    const actions = await screen.findByRole('region', { name: '学习就绪入口' })
+    expect(await within(actions).findByRole('link', { name: '查看概念地图' })).toHaveAttribute(
+      'href',
+      '/graph',
+    )
+    expect(within(actions).queryByRole('link', { name: '开始问答' })).not.toBeInTheDocument()
+    expect(within(actions).queryByRole('link', { name: '生成复习笔记' })).not.toBeInTheDocument()
+    expect(within(actions).getByText('问答服务不可用')).toBeInTheDocument()
+    expect(within(actions).getByText('笔记生成不可用')).toBeInTheDocument()
+  })
+
+  it('gates notes when the generation capability is unavailable', async () => {
+    const capabilities: RuntimeCapabilities = {
+      ...availableCapabilities,
+      note_workflow: {
+        ...availableCapabilities.note_workflow,
+        generation: { status: 'unavailable', label: '笔记生成未启用' },
+      },
+    }
+    vi.spyOn(studyApi, 'listDocuments').mockResolvedValue([documentRecord()])
+
+    renderInWorkspace(<LibraryPage />, { workspace: { capabilities } })
+
+    const actions = await screen.findByRole('region', { name: '学习就绪入口' })
+    expect(await within(actions).findByRole('link', { name: '开始问答' })).toHaveAttribute(
+      'href',
+      '/qa',
+    )
+    expect(within(actions).queryByRole('link', { name: '生成复习笔记' })).not.toBeInTheDocument()
+    expect(within(actions).getByText('笔记生成不可用')).toBeInTheDocument()
+  })
+
+  it('does not offer notes when the only study-ready source is an image', async () => {
+    vi.spyOn(studyApi, 'listDocuments').mockResolvedValue([
+      documentRecord({ id: 'image', filename: 'diagram.png', media_type: 'image/png' }),
+    ])
+
+    renderInWorkspace(<LibraryPage />)
+
+    const actions = await screen.findByRole('region', { name: '学习就绪入口' })
+    await expectReadinessCount('可学习', 1)
+    expect(await within(actions).findByRole('link', { name: '查看概念地图' })).toBeInTheDocument()
+    expect(within(actions).getByRole('link', { name: '开始问答' })).toBeInTheDocument()
+    expect(within(actions).queryByRole('link', { name: '生成复习笔记' })).not.toBeInTheDocument()
+    expect(within(actions).getByText('暂无可生成笔记的资料')).toBeInTheDocument()
+  })
+
+  it('matches note eligibility for corpus role, media type, and legacy PPT filenames', async () => {
+    vi.spyOn(studyApi, 'listDocuments').mockResolvedValue([
+      documentRecord({ id: 'questions', corpus_role: 'questions' }),
+      documentRecord({
+        id: 'legacy-ppt',
+        filename: 'legacy.ppt',
+        media_type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      }),
+      documentRecord({ id: 'unsupported-media', media_type: 'application/octet-stream' }),
+    ])
+
+    renderInWorkspace(<LibraryPage />)
+
+    const actions = await screen.findByRole('region', { name: '学习就绪入口' })
+    await expectReadinessCount('可学习', 3)
+    expect(await within(actions).findByRole('link', { name: '查看概念地图' })).toBeInTheDocument()
+    expect(within(actions).getByRole('link', { name: '开始问答' })).toBeInTheDocument()
+    expect(within(actions).queryByRole('link', { name: '生成复习笔记' })).not.toBeInTheDocument()
+    expect(within(actions).getByText('暂无可生成笔记的资料')).toBeInTheDocument()
+  })
+
+  it('does not render readiness before the document projection resolves', () => {
+    vi.spyOn(studyApi, 'listDocuments').mockReturnValue(new Promise(() => undefined))
+
+    renderInWorkspace(<LibraryPage />)
+
+    expect(screen.getByRole('region', { name: '正在加载资料' })).toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: '学习就绪入口' })).not.toBeInTheDocument()
+  })
+
   it('shows ProblemDetails when the document projection is unavailable', async () => {
     vi.spyOn(studyApi, 'listDocuments').mockRejectedValue(
       new ApiError(
@@ -127,5 +272,6 @@ describe('LibraryPage', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('无法读取资料')
     expect(screen.getByRole('alert')).toHaveTextContent('请检查本地 API。')
+    expect(screen.queryByRole('region', { name: '学习就绪入口' })).not.toBeInTheDocument()
   })
 })

@@ -1,6 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { FilePlus2, LoaderCircle, Radio, Trash2 } from 'lucide-react'
+import {
+  BookOpen,
+  CircleAlert,
+  FilePlus2,
+  LoaderCircle,
+  MessageSquareText,
+  Network,
+  Radio,
+  Trash2,
+} from 'lucide-react'
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 
 import { studyApi } from '../../api/client'
 import type { DocumentRecord } from '../../api/types'
@@ -12,6 +22,127 @@ import { useWorkspace } from '../../app/WorkspaceContext'
 import { DocumentTable } from './DocumentTable'
 import { UploadDialog } from './UploadDialog'
 import { useJobEvents } from './useJobEvents'
+import './library-actions.css'
+
+const SUPPORTED_PPTX_MEDIA_TYPE =
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+const FAILURE_STATUSES = new Set(['partial_failed', 'failed', 'retry_wait'])
+
+type ReadinessBucket = 'ready' | 'review' | 'preparing' | 'attention'
+
+const READINESS_LABELS: ReadonlyArray<{
+  bucket: ReadinessBucket
+  label: string
+}> = [
+  { bucket: 'ready', label: '可学习' },
+  { bucket: 'review', label: '待审核' },
+  { bucket: 'preparing', label: '准备中' },
+  { bucket: 'attention', label: '需要处理' },
+]
+
+function isStudyReadyDocument(document: DocumentRecord): boolean {
+  return (
+    document.status === 'ready' &&
+    document.review_status === 'approved' &&
+    document.active_revision_id !== null &&
+    document.active_revision_id !== undefined &&
+    document.indexable === true
+  )
+}
+
+function isNoteReadyDocument(document: DocumentRecord): boolean {
+  return (
+    isStudyReadyDocument(document) &&
+    document.corpus_role === 'corpus' &&
+    !document.filename.toLowerCase().endsWith('.ppt') &&
+    (document.media_type === 'application/pdf' ||
+      document.media_type === SUPPORTED_PPTX_MEDIA_TYPE)
+  )
+}
+
+function readinessBucket(document: DocumentRecord): ReadinessBucket {
+  if (document.review_status === 'pending') return 'review'
+  if (document.review_status === 'rejected') return 'attention'
+  if (isStudyReadyDocument(document)) return 'ready'
+  if (FAILURE_STATUSES.has(document.status)) return 'attention'
+  return 'preparing'
+}
+
+interface ReadyStudyActionsProps {
+  documents: DocumentRecord[]
+  noteWorkflowAvailable: boolean
+  providerAvailable: boolean
+}
+
+function ReadyStudyActions({
+  documents,
+  noteWorkflowAvailable,
+  providerAvailable,
+}: ReadyStudyActionsProps) {
+  const counts: Record<ReadinessBucket, number> = {
+    ready: 0,
+    review: 0,
+    preparing: 0,
+    attention: 0,
+  }
+  for (const document of documents) counts[readinessBucket(document)] += 1
+
+  const hasReadyDocument = counts.ready > 0
+  const hasNoteReadyDocument = documents.some(isNoteReadyDocument)
+
+  return (
+    <section aria-label="学习就绪入口" className="ready-study-actions">
+      <div className="ready-study-actions__overview">
+        <h3>学习就绪</h3>
+        <ul aria-label="资料学习状态" className="ready-study-actions__counts">
+          {READINESS_LABELS.map(({ bucket, label }) => (
+            <li aria-label={`${label} ${counts[bucket]}`} className={`is-${bucket}`} key={bucket}>
+              <span>{label}</span>
+              <strong>{counts[bucket]}</strong>
+            </li>
+          ))}
+        </ul>
+      </div>
+      <nav aria-label="学习快捷操作" className="ready-study-actions__links">
+        {hasReadyDocument ? (
+          <>
+            <Link className="button ready-study-actions__link" to="/graph">
+              <Network aria-hidden="true" size={17} />
+              查看概念地图
+            </Link>
+            {providerAvailable ? (
+              <Link className="button ready-study-actions__link" to="/qa">
+                <MessageSquareText aria-hidden="true" size={17} />
+                开始问答
+              </Link>
+            ) : (
+              <span className="ready-study-actions__status">
+                <CircleAlert aria-hidden="true" size={16} />
+                问答服务不可用
+              </span>
+            )}
+            {noteWorkflowAvailable && hasNoteReadyDocument ? (
+              <Link className="button button--primary ready-study-actions__link" to="/notes">
+                <BookOpen aria-hidden="true" size={17} />
+                生成复习笔记
+              </Link>
+            ) : (
+              <span className="ready-study-actions__status">
+                <CircleAlert aria-hidden="true" size={16} />
+                {noteWorkflowAvailable ? '暂无可生成笔记的资料' : '笔记生成不可用'}
+              </span>
+            )}
+          </>
+        ) : (
+          <span className="ready-study-actions__status">
+            <CircleAlert aria-hidden="true" size={16} />
+            暂无可学习资料
+          </span>
+        )}
+      </nav>
+    </section>
+  )
+}
 
 export function LibraryPage() {
   const { courseId, capabilities, capabilitiesError, capabilitiesLoading } = useWorkspace()
@@ -25,6 +156,10 @@ export function LibraryPage() {
     queryFn: () => studyApi.listDocuments(courseId),
   })
   const documents = documentsQuery.data ?? []
+  const providerAvailable = capabilities?.provider.status === 'available'
+  const noteWorkflowAvailable =
+    capabilities?.note_workflow.enabled === true &&
+    capabilities.note_workflow.generation.status === 'available'
   const connection = useJobEvents(
     courseId,
     documents.flatMap((document) => (document.parse_job_id ? [document.parse_job_id] : [])),
@@ -76,6 +211,13 @@ export function LibraryPage() {
             ? '任务事件重连中'
             : '当前无运行任务'}
       </div>
+      {documentsQuery.isSuccess ? (
+        <ReadyStudyActions
+          documents={documents}
+          noteWorkflowAvailable={noteWorkflowAvailable}
+          providerAvailable={providerAvailable}
+        />
+      ) : null}
       {deletionId ? (
         <div className="cleanup-banner" role="status">
           {deletionQuery.data?.status === 'completed' ? (
