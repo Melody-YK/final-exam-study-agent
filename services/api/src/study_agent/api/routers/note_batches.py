@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Annotated, cast
 
 from fastapi import APIRouter, Header, Request, Response, status
@@ -26,6 +27,7 @@ from study_contracts import NoteBatchSnapshot
 
 router = APIRouter(prefix="/api/v1", tags=["note-batches"])
 IdempotencyKey = Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=512)]
+_ETAG = re.compile(r'^"([1-9][0-9]*)"$')
 
 
 async def _principal(request: Request) -> Principal:
@@ -84,6 +86,18 @@ def _problem(exc: NoteBatchServiceError) -> ApiProblem:
             "本地笔记演示未启用",
             False,
         ),
+        NoteBatchServiceErrorCode.VERSION_CONFLICT: (
+            412,
+            ProblemCode.VERSION_CONFLICT,
+            "笔记版本冲突",
+            False,
+        ),
+        NoteBatchServiceErrorCode.VERSION_NOT_FOUND: (
+            409,
+            ProblemCode.NOTE_VERSION_NOT_FOUND,
+            "笔记版本快照缺失",
+            False,
+        ),
     }
     status_code, code, title, retryable = mapping[exc.code]
     return ApiProblem(
@@ -107,6 +121,23 @@ def _accepted(
     return _public_snapshot(snapshot)
 
 
+def _version(if_match: str | None) -> int:
+    if if_match is None:
+        raise ApiProblem(
+            status=428,
+            code=ProblemCode.PRECONDITION_REQUIRED,
+            title="需要 If-Match",
+        )
+    match = _ETAG.fullmatch(if_match.strip())
+    if match is None:
+        raise ApiProblem(
+            status=422,
+            code=ProblemCode.INVALID_REQUEST,
+            title="If-Match 无效",
+        )
+    return int(match.group(1))
+
+
 @router.post(
     "/courses/{course_id}/note-batches",
     response_model=LocalDemoNoteBatchSnapshot,
@@ -124,6 +155,31 @@ async def create_note_batch(
             await _principal(request),
             course_id,
             payload,
+            idempotency_key,
+        )
+    except NoteBatchServiceError as exc:
+        raise _problem(exc) from exc
+    cast(DemoNoteRunner, request.app.state.note_runner).schedule(snapshot.id)
+    return _accepted(response, snapshot)
+
+
+@router.post(
+    "/notes/{note_id}/regeneration-batches",
+    response_model=LocalDemoNoteBatchSnapshot,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def create_note_regeneration_batch(
+    note_id: str,
+    request: Request,
+    response: Response,
+    idempotency_key: IdempotencyKey,
+    if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+) -> LocalDemoNoteBatchSnapshot:
+    try:
+        snapshot = await _service(request).create_regeneration_batch(
+            await _principal(request),
+            note_id,
+            _version(if_match),
             idempotency_key,
         )
     except NoteBatchServiceError as exc:

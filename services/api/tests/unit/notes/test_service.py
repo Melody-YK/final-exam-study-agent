@@ -91,6 +91,7 @@ class RecordingRepository:
             generation=1,
             generated_by_model=True,
             status="ready",
+            origin_batch_id=None,
             sources=(),
             created_at=now,
             updated_at=now,

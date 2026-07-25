@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import cast
 
-from sqlalchemy import select, text
+from sqlalchemy import and_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from study_agent.config import AppMode, Settings
@@ -21,6 +21,7 @@ from study_agent.infrastructure.db.models import (
     DocumentModel,
     DocumentRevisionModel,
     NoteCommandDedupModel,
+    NoteContentVersionModel,
     NoteCoverageUnitModel,
     NoteCoverageUnitResultModel,
     NoteGenerationBatchModel,
@@ -29,6 +30,7 @@ from study_agent.infrastructure.db.models import (
     NoteGenerationItemModel,
     NoteGenerationOutputModel,
     NoteItemInputModel,
+    NoteModel,
     RevisionChunkModel,
     UserModel,
 )
@@ -57,7 +59,8 @@ _PDF = "application/pdf"
 _PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 _PPT = "application/vnd.ms-powerpoint"
 _TERMINAL_ITEM_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
-_COMMAND_SCOPE = "note-batch:create"
+_CREATE_COMMAND_SCOPE = "note-batch:create"
+_REGENERATION_COMMAND_SCOPE = "note-batch:regeneration"
 
 
 class NoteBatchServiceErrorCode(StrEnum):
@@ -68,6 +71,8 @@ class NoteBatchServiceErrorCode(StrEnum):
     DOCUMENT_NOT_READY = "DOCUMENT_NOT_READY"
     REQUEST_LIMIT_EXCEEDED = "REQUEST_LIMIT_EXCEEDED"
     DEMO_UNAVAILABLE = "DEMO_UNAVAILABLE"
+    VERSION_CONFLICT = "VERSION_CONFLICT"
+    VERSION_NOT_FOUND = "VERSION_NOT_FOUND"
 
 
 class NoteBatchServiceError(RuntimeError):
@@ -144,11 +149,16 @@ class NoteBatchService:
                 raise _not_found()
             await session.execute(
                 text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_name, 0))"),
-                {"lock_name": f"note-demo:{course.user_id}:{course.id}:{key_hash}"},
+                {
+                    "lock_name": (
+                        f"note-demo:{course.user_id}:{course.id}:{_CREATE_COMMAND_SCOPE}:{key_hash}"
+                    )
+                },
             )
             replay = await self._replay_or_none(
                 session,
                 course=course,
+                command_scope=_CREATE_COMMAND_SCOPE,
                 key_hash=key_hash,
                 request_hash=request_hash,
             )
@@ -160,128 +170,318 @@ class NoteBatchService:
                 course,
                 tuple(request.document_ids),
             )
-            now = self._now()
-            batch = NoteGenerationBatchModel(
-                id=new_id(),
-                user_id=course.user_id,
-                course_id=course.id,
+            return await self._persist_batch(
+                session,
+                course=course,
+                frozen_inputs=frozen_inputs,
                 command_kind=NoteBatchCommandKind.CREATE.value,
-                mode=NoteBatchMode.MERGED.value,
                 style=request.style.value,
-                retry_of_batch_id=None,
                 title=request.title,
-                title_prefix=None,
-                section_path=list(section_path),
+                section_path=section_path,
                 target_note_id=None,
                 target_note_version=None,
                 target_note_version_sha256=None,
-                status=NoteBatchStatus.QUEUED.value,
-                state_version=1,
-                event_sequence=0,
-                cancel_epoch=0,
-                created_at=now,
-                updated_at=now,
+                command_scope=_CREATE_COMMAND_SCOPE,
+                key_hash=key_hash,
+                request_hash=request_hash,
             )
-            session.add(batch)
-            await session.flush()
 
-            input_rows: list[NoteGenerationInputModel] = []
-            for ordinal, frozen in enumerate(frozen_inputs, start=1):
-                input_row = NoteGenerationInputModel(
-                    id=new_id(),
-                    batch_id=batch.id,
-                    user_id=batch.user_id,
-                    course_id=batch.course_id,
-                    ordinal=ordinal,
-                    document_id=frozen.document_id,
-                    revision_id=frozen.revision_id,
-                    deletion_epoch=frozen.deletion_epoch,
-                    document_name=frozen.document_name,
-                    media_type=frozen.media_type,
-                    content_sha256=frozen.content_sha256,
-                    index_manifest_at_submit=frozen.index_manifest_at_submit,
-                    created_at=now,
-                )
-                session.add(input_row)
-                input_rows.append(input_row)
-            await session.flush()
+    async def create_regeneration_batch(
+        self,
+        principal: Principal,
+        note_id: str,
+        expected_version: int,
+        idempotency_key: str,
+    ) -> NoteBatchSnapshot:
+        self._require_local_demo()
+        if expected_version < 1:
+            raise NoteBatchServiceError(
+                NoteBatchServiceErrorCode.INVALID_REQUEST,
+                "If-Match 必须指定正整数版本。",
+            )
+        key = _normalize_idempotency_key(idempotency_key)
+        key_hash = hashlib.sha256(key.encode("utf-8")).hexdigest()
+        request_hash = _canonical_hash(
+            {
+                "note_id": note_id,
+                "target_note_version": expected_version,
+            }
+        )
 
-            for frozen, input_row in zip(frozen_inputs, input_rows, strict=True):
-                for unit in frozen.units:
-                    session.add(
-                        NoteCoverageUnitModel(
-                            id=new_id(),
-                            input_id=input_row.id,
-                            batch_id=batch.id,
-                            user_id=batch.user_id,
-                            course_id=batch.course_id,
-                            ordinal=unit.ordinal,
-                            unit_type=unit.unit_type,
-                            locator=unit.locator,
-                            content_sha256=unit.content_sha256,
-                            is_substantive=unit.is_substantive,
-                            created_at=now,
-                        )
+        async with self._database.session(principal) as session:
+            note_hint = await self._note_for_principal(session, principal, note_id)
+            if note_hint is None:
+                raise _not_found()
+            course = await self._course_for_principal(
+                session,
+                principal,
+                note_hint.course_id,
+            )
+            if course is None:
+                raise _not_found()
+            await session.execute(
+                text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_name, 0))"),
+                {
+                    "lock_name": (
+                        f"note-demo:{course.user_id}:{course.id}:"
+                        f"{_REGENERATION_COMMAND_SCOPE}:{key_hash}"
                     )
+                },
+            )
+            replay = await self._replay_or_none(
+                session,
+                course=course,
+                command_scope=_REGENERATION_COMMAND_SCOPE,
+                key_hash=key_hash,
+                request_hash=request_hash,
+            )
+            if replay is not None:
+                return await self._snapshot(session, replay)
 
-            item = NoteGenerationItemModel(
+            note = await self._note_for_principal(
+                session,
+                principal,
+                note_id,
+                for_update=True,
+            )
+            if note is None:
+                raise _not_found()
+            if note.version != expected_version:
+                raise NoteBatchServiceError(
+                    NoteBatchServiceErrorCode.VERSION_CONFLICT,
+                    f"当前版本为 {note.version}",
+                )
+            target_version = await session.scalar(
+                select(NoteContentVersionModel).where(
+                    NoteContentVersionModel.note_id == note.id,
+                    NoteContentVersionModel.version == expected_version,
+                    NoteContentVersionModel.user_id == note.user_id,
+                    NoteContentVersionModel.course_id == note.course_id,
+                )
+            )
+            if target_version is None:
+                raise NoteBatchServiceError(
+                    NoteBatchServiceErrorCode.VERSION_NOT_FOUND,
+                    "当前笔记版本缺少不可变快照, 无法安全重新生成。",
+                )
+
+            source_batch = await session.scalar(
+                select(NoteGenerationBatchModel)
+                .join(
+                    NoteGenerationOutputModel,
+                    and_(
+                        NoteGenerationOutputModel.batch_id == NoteGenerationBatchModel.id,
+                        NoteGenerationOutputModel.user_id == NoteGenerationBatchModel.user_id,
+                        NoteGenerationOutputModel.course_id == NoteGenerationBatchModel.course_id,
+                    ),
+                )
+                .where(
+                    NoteGenerationOutputModel.note_id == note.id,
+                    NoteGenerationOutputModel.user_id == note.user_id,
+                    NoteGenerationOutputModel.course_id == note.course_id,
+                    NoteGenerationOutputModel.note_version <= expected_version,
+                    NoteGenerationBatchModel.command_kind.in_(
+                        (
+                            NoteBatchCommandKind.CREATE.value,
+                            NoteBatchCommandKind.REGENERATION.value,
+                        )
+                    ),
+                    NoteGenerationBatchModel.mode == NoteBatchMode.MERGED.value,
+                    NoteGenerationBatchModel.status == NoteBatchStatus.SUCCEEDED.value,
+                )
+                .order_by(
+                    NoteGenerationOutputModel.note_version.desc(),
+                    NoteGenerationOutputModel.created_at.desc(),
+                    NoteGenerationOutputModel.id.desc(),
+                )
+                .limit(1)
+            )
+            if source_batch is None:
+                raise NoteBatchServiceError(
+                    NoteBatchServiceErrorCode.INVALID_REQUEST,
+                    "仅支持重新生成由当前批次工作流创建的笔记。",
+                )
+            document_ids = tuple(
+                await session.scalars(
+                    select(NoteGenerationInputModel.document_id)
+                    .where(
+                        NoteGenerationInputModel.batch_id == source_batch.id,
+                        NoteGenerationInputModel.user_id == source_batch.user_id,
+                        NoteGenerationInputModel.course_id == source_batch.course_id,
+                    )
+                    .order_by(NoteGenerationInputModel.ordinal)
+                )
+            )
+            if not document_ids:
+                raise NoteBatchServiceError(
+                    NoteBatchServiceErrorCode.INVALID_REQUEST,
+                    "原始笔记任务缺少资料快照。",
+                )
+            if len(document_ids) > self._settings.note_batch_max_documents:
+                raise NoteBatchServiceError(
+                    NoteBatchServiceErrorCode.REQUEST_LIMIT_EXCEEDED,
+                    "原始笔记的资料数量超过当前批次上限。",
+                )
+            frozen_inputs = await self._freeze_inputs(session, course, document_ids)
+            return await self._persist_batch(
+                session,
+                course=course,
+                frozen_inputs=frozen_inputs,
+                command_kind=NoteBatchCommandKind.REGENERATION.value,
+                style=source_batch.style,
+                title=note.title,
+                section_path=tuple(note.section_path),
+                target_note_id=note.id,
+                target_note_version=expected_version,
+                target_note_version_sha256=target_version.note_version_sha256,
+                command_scope=_REGENERATION_COMMAND_SCOPE,
+                key_hash=key_hash,
+                request_hash=request_hash,
+            )
+
+    async def _persist_batch(
+        self,
+        session: AsyncSession,
+        *,
+        course: CourseModel,
+        frozen_inputs: tuple[_FrozenInput, ...],
+        command_kind: str,
+        style: str,
+        title: str | None,
+        section_path: tuple[str, ...],
+        target_note_id: str | None,
+        target_note_version: int | None,
+        target_note_version_sha256: str | None,
+        command_scope: str,
+        key_hash: str,
+        request_hash: str,
+    ) -> NoteBatchSnapshot:
+        now = self._now()
+        batch = NoteGenerationBatchModel(
+            id=new_id(),
+            user_id=course.user_id,
+            course_id=course.id,
+            command_kind=command_kind,
+            mode=NoteBatchMode.MERGED.value,
+            style=style,
+            retry_of_batch_id=None,
+            title=title,
+            title_prefix=None,
+            section_path=list(section_path),
+            target_note_id=target_note_id,
+            target_note_version=target_note_version,
+            target_note_version_sha256=target_note_version_sha256,
+            status=NoteBatchStatus.QUEUED.value,
+            state_version=1,
+            event_sequence=0,
+            cancel_epoch=0,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(batch)
+        await session.flush()
+
+        input_rows: list[NoteGenerationInputModel] = []
+        for ordinal, frozen in enumerate(frozen_inputs, start=1):
+            input_row = NoteGenerationInputModel(
                 id=new_id(),
                 batch_id=batch.id,
                 user_id=batch.user_id,
                 course_id=batch.course_id,
-                ordinal=1,
-                status=NoteItemStatus.QUEUED.value,
-                phase=None,
-                state_version=1,
-                attempt=0,
-                max_attempts=1,
-                available_at=now,
-                lease_version=0,
-                cancel_epoch=0,
+                ordinal=ordinal,
+                document_id=frozen.document_id,
+                revision_id=frozen.revision_id,
+                deletion_epoch=frozen.deletion_epoch,
+                document_name=frozen.document_name,
+                media_type=frozen.media_type,
+                content_sha256=frozen.content_sha256,
+                index_manifest_at_submit=frozen.index_manifest_at_submit,
                 created_at=now,
-                updated_at=now,
             )
-            session.add(item)
-            await session.flush()
-            for ordinal, input_row in enumerate(input_rows, start=1):
+            session.add(input_row)
+            input_rows.append(input_row)
+        await session.flush()
+
+        for frozen, input_row in zip(frozen_inputs, input_rows, strict=True):
+            for unit in frozen.units:
                 session.add(
-                    NoteItemInputModel(
+                    NoteCoverageUnitModel(
                         id=new_id(),
-                        item_id=item.id,
                         input_id=input_row.id,
                         batch_id=batch.id,
                         user_id=batch.user_id,
                         course_id=batch.course_id,
-                        ordinal=ordinal,
+                        ordinal=unit.ordinal,
+                        unit_type=unit.unit_type,
+                        locator=unit.locator,
+                        content_sha256=unit.content_sha256,
+                        is_substantive=unit.is_substantive,
                         created_at=now,
                     )
                 )
 
-            await self._append_event(
-                session,
-                batch,
-                "note.batch.created",
-                {"batch_id": batch.id, "status": batch.status},
-                now,
-            )
+        item = NoteGenerationItemModel(
+            id=new_id(),
+            batch_id=batch.id,
+            user_id=batch.user_id,
+            course_id=batch.course_id,
+            ordinal=1,
+            status=NoteItemStatus.QUEUED.value,
+            phase=None,
+            state_version=1,
+            attempt=0,
+            max_attempts=1,
+            available_at=now,
+            lease_version=0,
+            cancel_epoch=0,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(item)
+        await session.flush()
+        for ordinal, input_row in enumerate(input_rows, start=1):
             session.add(
-                NoteCommandDedupModel(
+                NoteItemInputModel(
                     id=new_id(),
+                    item_id=item.id,
+                    input_id=input_row.id,
+                    batch_id=batch.id,
                     user_id=batch.user_id,
                     course_id=batch.course_id,
-                    command_scope=_COMMAND_SCOPE,
-                    key_hash=key_hash,
-                    request_hash=request_hash,
-                    result_type="note_batch",
-                    result_id=batch.id,
-                    response_status=202,
-                    expires_at=now
-                    + timedelta(seconds=self._settings.note_command_dedup_retention_seconds),
+                    ordinal=ordinal,
                     created_at=now,
                 )
             )
-            await session.flush()
-            return await self._snapshot(session, batch)
+
+        await self._append_event(
+            session,
+            batch,
+            "note.batch.created",
+            {
+                "batch_id": batch.id,
+                "status": batch.status,
+                "command_kind": batch.command_kind,
+            },
+            now,
+        )
+        session.add(
+            NoteCommandDedupModel(
+                id=new_id(),
+                user_id=batch.user_id,
+                course_id=batch.course_id,
+                command_scope=command_scope,
+                key_hash=key_hash,
+                request_hash=request_hash,
+                result_type="note_batch",
+                result_id=batch.id,
+                response_status=202,
+                expires_at=now
+                + timedelta(seconds=self._settings.note_command_dedup_retention_seconds),
+                created_at=now,
+            )
+        )
+        await session.flush()
+        return await self._snapshot(session, batch)
 
     async def get_batch(self, principal: Principal, batch_id: str) -> NoteBatchSnapshot:
         async with self._database.session(principal) as session:
@@ -441,6 +641,7 @@ class NoteBatchService:
         session: AsyncSession,
         *,
         course: CourseModel,
+        command_scope: str,
         key_hash: str,
         request_hash: str,
     ) -> NoteGenerationBatchModel | None:
@@ -449,7 +650,7 @@ class NoteBatchService:
             .where(
                 NoteCommandDedupModel.user_id == course.user_id,
                 NoteCommandDedupModel.course_id == course.id,
-                NoteCommandDedupModel.command_scope == _COMMAND_SCOPE,
+                NoteCommandDedupModel.command_scope == command_scope,
                 NoteCommandDedupModel.key_hash == key_hash,
             )
             .with_for_update(of=NoteCommandDedupModel)
@@ -679,6 +880,34 @@ class NoteBatchService:
             ),
         )
 
+    async def _note_for_principal(
+        self,
+        session: AsyncSession,
+        principal: Principal,
+        note_id: str,
+        *,
+        for_update: bool = False,
+    ) -> NoteModel | None:
+        statement = (
+            select(NoteModel)
+            .join(
+                CourseModel,
+                (CourseModel.id == NoteModel.course_id)
+                & (CourseModel.user_id == NoteModel.user_id),
+            )
+            .join(UserModel, UserModel.id == NoteModel.user_id)
+            .where(
+                NoteModel.id == note_id,
+                CourseModel.lifecycle == "active",
+                CourseModel.deleted_at.is_(None),
+                UserModel.subject == principal.subject,
+                UserModel.authentication_method == principal.authentication_method.value,
+            )
+        )
+        if for_update:
+            statement = statement.with_for_update(of=NoteModel)
+        return cast(NoteModel | None, await session.scalar(statement))
+
     async def _batch_for_principal(
         self,
         session: AsyncSession,
@@ -697,7 +926,12 @@ class NoteBatchService:
                 .join(UserModel, UserModel.id == CourseModel.user_id)
                 .where(
                     NoteGenerationBatchModel.id == batch_id,
-                    NoteGenerationBatchModel.command_kind == NoteBatchCommandKind.CREATE.value,
+                    NoteGenerationBatchModel.command_kind.in_(
+                        (
+                            NoteBatchCommandKind.CREATE.value,
+                            NoteBatchCommandKind.REGENERATION.value,
+                        )
+                    ),
                     NoteGenerationBatchModel.mode == NoteBatchMode.MERGED.value,
                     CourseModel.deleted_at.is_(None),
                     UserModel.subject == principal.subject,

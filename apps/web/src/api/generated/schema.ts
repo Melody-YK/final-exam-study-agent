@@ -522,6 +522,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/notes/{note_id}/regeneration-batches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Note Regeneration Batch */
+        post: operations["create_note_regeneration_batch_api_v1_notes__note_id__regeneration_batches_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/parse-jobs/{job_id}": {
         parameters: {
             query?: never;
@@ -1661,15 +1678,15 @@ export interface components {
         };
         /**
          * LocalDemoNoteBatchSnapshot
-         * @description Public snapshot shape supported by the local merged/create demo route.
+         * @description Public snapshot shape supported by local merged demo commands.
          */
         LocalDemoNoteBatchSnapshot: {
             /**
              * Command Kind
              * @default create
-             * @constant
+             * @enum {string}
              */
-            command_kind: "create";
+            command_kind: "create" | "regeneration";
             /** Completed At */
             completed_at?: string | null;
             /** Completed Items */
@@ -1851,6 +1868,8 @@ export interface components {
             generation: number;
             /** Id */
             id: string;
+            /** Origin Batch Id */
+            origin_batch_id: string | null;
             /** Section Path */
             section_path: string[];
             /** Sources */
@@ -3383,6 +3402,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NoteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_note_regeneration_batch_api_v1_notes__note_id__regeneration_batches_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+                "If-Match"?: string | null;
+            };
+            path: {
+                note_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LocalDemoNoteBatchSnapshot"];
                 };
             };
             /** @description Validation Error */

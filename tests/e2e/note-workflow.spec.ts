@@ -71,6 +71,28 @@ test('selected note template changes the generated preview', async ({ page }) =>
   await expect(preview).not.toContainText('线程是调度的基本单位。')
 })
 
+test('regenerates a workflow note through a batch and opens the new output', async ({ page }) => {
+  await page.getByRole('link', { name: '笔记' }).first().click()
+  await page.getByRole('button', { name: '新建笔记' }).click()
+
+  const dialog = page.getByRole('dialog', { name: '新建笔记' })
+  await dialog.getByLabel('标题（可选）').fill('异步重生成验证')
+  await dialog.getByRole('button', { name: '创建' }).click()
+  const progress = page.getByLabel('笔记生成进度')
+  await expect(progress).toContainText('succeeded')
+
+  await page.getByRole('button', { name: '重新生成' }).click()
+  await expect(page.getByRole('button', { name: '重新生成' })).toBeDisabled()
+  await expect(progress).toContainText('running')
+  await expect(progress).toContainText('succeeded')
+
+  await expect(page.getByLabel('笔记阅读视图')).toContainText('已通过异步批次重新生成。')
+  const entries = page.getByRole('button', { name: /异步重生成验证/ })
+  await expect(entries).toHaveCount(1)
+  await expect(entries).toHaveAttribute('aria-current', 'page')
+  await expect(page.getByText('版本 2 · 生成 2')).toBeVisible()
+})
+
 test('restores a running note batch after reload', async ({ page }) => {
   await page.getByRole('link', { name: '笔记' }).first().click()
   await page.getByRole('button', { name: '新建笔记' }).click()

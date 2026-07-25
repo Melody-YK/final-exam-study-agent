@@ -86,6 +86,14 @@ function newNoteBatchCommandKey(): string {
   return `note-batch-create-${crypto.randomUUID()}`
 }
 
+function newNoteRegenerationCommandKey(): string {
+  return `note-batch-regenerate-${crypto.randomUUID()}`
+}
+
+function noteRegenerationTargetKey(noteId: string, version: number): string {
+  return `${noteId}:${version}`
+}
+
 function isMissingBatch(error: unknown): boolean {
   return (
     error instanceof ApiError &&
@@ -363,13 +371,30 @@ function CreateNoteDialog({
 }
 
 interface NoteEditorProps {
+  batchInProgress: boolean
   note: NoteRecord
+  noteWorkflowReady: boolean
+  onRegenerate: () => void
   providerReady: boolean
+  regenerationError: unknown
+  regenerationPending: boolean
+  regenerating: boolean
   onReload: () => Promise<NoteRecord | undefined>
   onSaved: (note: NoteRecord) => void
 }
 
-function NoteEditor({ note, providerReady, onReload, onSaved }: NoteEditorProps) {
+function NoteEditor({
+  batchInProgress,
+  note,
+  noteWorkflowReady,
+  onRegenerate,
+  providerReady,
+  regenerationError,
+  regenerationPending,
+  regenerating,
+  onReload,
+  onSaved,
+}: NoteEditorProps) {
   const [draft, setDraft] = useState(note.body_markdown)
   const [viewMode, setViewMode] = useState<'read' | 'edit'>('read')
   const [conflict, setConflict] = useState(false)
@@ -403,15 +428,12 @@ function NoteEditor({ note, providerReady, onReload, onSaved }: NoteEditorProps)
       save.reset()
     },
   })
-  const regenerate = useMutation({
-    mutationFn: () => studyApi.regenerateNote(note.id),
-    onSuccess: (updated) => {
-      setDraft(updated.body_markdown)
-      setViewMode('read')
-      onSaved(updated)
-    },
-  })
   const changed = draft !== note.body_markdown
+  const workflowGenerated = note.origin_batch_id !== null
+  const regenerationReady = workflowGenerated ? noteWorkflowReady : providerReady
+  const regenerationUnavailableTitle = workflowGenerated
+    ? '笔记生成工作流不可用'
+    : 'Provider 不可用'
 
   return (
     <div className="note-workspace__editor">
@@ -445,12 +467,24 @@ function NoteEditor({ note, providerReady, onReload, onSaved }: NoteEditorProps)
           </div>
           <button
             className="button button--small"
-            disabled={!providerReady || changed || regenerate.isPending}
-            onClick={() => regenerate.mutate()}
-            title={!providerReady ? 'Provider 不可用' : changed ? '请先保存当前修改' : undefined}
+            disabled={
+              !regenerationReady || changed || batchInProgress || regenerationPending
+            }
+            onClick={onRegenerate}
+            title={
+              !regenerationReady
+                ? regenerationUnavailableTitle
+                : changed
+                  ? '请先保存当前修改'
+                  : batchInProgress
+                    ? '当前笔记批次仍在生成'
+                    : regenerationPending
+                      ? '正在启动重新生成'
+                      : undefined
+            }
             type="button"
           >
-            {regenerate.isPending ? (
+            {regenerating ? (
               <LoaderCircle aria-hidden="true" className="spin" size={15} />
             ) : (
               <RefreshCw aria-hidden="true" size={15} />
@@ -502,7 +536,7 @@ function NoteEditor({ note, providerReady, onReload, onSaved }: NoteEditorProps)
       ) : null}
       {save.isError && !conflict ? <ErrorNotice error={save.error} title="保存失败" /> : null}
       {reload.isError ? <ErrorNotice error={reload.error} title="无法载入服务器版本" /> : null}
-      {regenerate.isError ? <ErrorNotice error={regenerate.error} title="重新生成失败" /> : null}
+      {regenerationError ? <ErrorNotice error={regenerationError} title="重新生成失败" /> : null}
       {viewMode === 'edit' ? (
         <>
           <label className="sr-only" htmlFor={`note-body-${note.id}`}>
@@ -632,6 +666,7 @@ export function NotesPage() {
   const [createdBatch, setCreatedBatch] = useState<NoteBatchSnapshot | null>(null)
   const completedBatchRef = useRef<string | null>(null)
   const createCommandKeyRef = useRef<string | null>(null)
+  const regenerationCommandKeysRef = useRef(new Map<string, string>())
   const createOpen = createDialog.courseId === courseId && createDialog.open
   const activeBatchId =
     activeBatch.courseId === courseId ? activeBatch.id : localStorage.getItem(batchStorageKey)
@@ -675,6 +710,18 @@ export function NotesPage() {
   const noteWorkflowReady =
     capabilities?.note_workflow.enabled === true &&
     capabilities?.note_workflow.generation.status === 'available'
+  const replaceNote = (updated: NoteRecord) => {
+    queryClient.setQueryData<NoteRecord[]>(['notes', courseId], (current = []) =>
+      current.map((note) => (note.id === updated.id ? updated : note)),
+    )
+  }
+  const activateBatch = (snapshot: NoteBatchSnapshot) => {
+    completedBatchRef.current = null
+    queryClient.setQueryData(['note-batch', snapshot.id], snapshot)
+    localStorage.setItem(batchStorageKey, snapshot.id)
+    setCreatedBatch(snapshot)
+    setActiveBatch({ courseId, id: snapshot.id })
+  }
   const createBatch = useMutation({
     mutationFn: (input: MergedNoteBatchRequest) => {
       const commandKey = createCommandKeyRef.current ?? newNoteBatchCommandKey()
@@ -683,13 +730,28 @@ export function NotesPage() {
     },
     onSuccess: (snapshot) => {
       createCommandKeyRef.current = null
-      completedBatchRef.current = null
-      queryClient.setQueryData(['note-batch', snapshot.id], snapshot)
-      localStorage.setItem(batchStorageKey, snapshot.id)
-      setCreatedBatch(snapshot)
-      setActiveBatch({ courseId, id: snapshot.id })
+      activateBatch(snapshot)
       setCreateDialog({ courseId, open: false })
     },
+  })
+  const regenerateBatch = useMutation({
+    mutationFn: ({ noteId, version }: { noteId: string; version: number }) => {
+      const targetKey = noteRegenerationTargetKey(noteId, version)
+      const commandKey =
+        regenerationCommandKeysRef.current.get(targetKey) ?? newNoteRegenerationCommandKey()
+      regenerationCommandKeysRef.current.set(targetKey, commandKey)
+      return studyApi.createNoteRegenerationBatch(noteId, version, commandKey)
+    },
+    onSuccess: (snapshot, target) => {
+      regenerationCommandKeysRef.current.delete(
+        noteRegenerationTargetKey(target.noteId, target.version),
+      )
+      activateBatch(snapshot)
+    },
+  })
+  const regenerateLegacy = useMutation({
+    mutationFn: (noteId: string) => studyApi.regenerateNote(noteId),
+    onSuccess: replaceNote,
   })
   const batchSnapshot =
     batchQuery.data ??
@@ -733,11 +795,7 @@ export function NotesPage() {
       })
   }, [batchSnapshot, courseId, queryClient])
 
-  const replaceNote = (updated: NoteRecord) => {
-    queryClient.setQueryData<NoteRecord[]>(['notes', courseId], (current = []) =>
-      current.map((note) => (note.id === updated.id ? updated : note)),
-    )
-  }
+  const regenerationPending = regenerateBatch.isPending || regenerateLegacy.isPending
 
   return (
     <div className="page page--notes">
@@ -745,7 +803,7 @@ export function NotesPage() {
         actions={
           <button
             className="button button--primary"
-            disabled={!noteWorkflowReady || batchInProgress}
+            disabled={!noteWorkflowReady || batchInProgress || regenerateBatch.isPending}
             onClick={() => {
               createBatch.reset()
               createCommandKeyRef.current = newNoteBatchCommandKey()
@@ -756,6 +814,8 @@ export function NotesPage() {
                 ? '笔记生成工作流不可用'
                 : batchInProgress
                   ? '当前笔记仍在生成'
+                  : regenerateBatch.isPending
+                    ? '正在启动重新生成'
                   : undefined
             }
             type="button"
@@ -807,14 +867,40 @@ export function NotesPage() {
             ))}
           </nav>
           <NoteEditor
+            batchInProgress={batchInProgress}
             key={`${selected.id}-${selected.version}`}
             note={selected}
+            noteWorkflowReady={noteWorkflowReady}
+            onRegenerate={() => {
+              if (selected.origin_batch_id !== null) {
+                regenerateBatch.mutate({ noteId: selected.id, version: selected.version })
+              } else {
+                regenerateLegacy.mutate(selected.id)
+              }
+            }}
             onReload={async () => {
               const result = await notesQuery.refetch({ throwOnError: true })
               return result.data?.find((note) => note.id === selected.id)
             }}
             onSaved={replaceNote}
             providerReady={providerReady}
+            regenerationError={
+              selected.origin_batch_id !== null &&
+              regenerateBatch.variables?.noteId === selected.id
+                ? regenerateBatch.error
+                : selected.origin_batch_id === null && regenerateLegacy.variables === selected.id
+                  ? regenerateLegacy.error
+                  : null
+            }
+            regenerationPending={regenerationPending || createBatch.isPending}
+            regenerating={
+              (selected.origin_batch_id !== null &&
+                regenerateBatch.isPending &&
+                regenerateBatch.variables?.noteId === selected.id) ||
+              (selected.origin_batch_id === null &&
+                regenerateLegacy.isPending &&
+                regenerateLegacy.variables === selected.id)
+            }
           />
           <SourcesPanel note={selected} />
         </div>

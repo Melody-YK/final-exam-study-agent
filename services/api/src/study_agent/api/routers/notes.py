@@ -22,6 +22,7 @@ from study_agent.modules.notes.service import (
     NoteSnapshot,
     NoteSourceSnapshot,
     NoteVersionConflict,
+    NoteVersionNotFound,
 )
 from study_agent.providers.factory import ProviderRegistry
 from study_agent.providers.protocols import Clock
@@ -71,6 +72,7 @@ class NoteResponse(BaseModel):
     generation: int
     generated_by_model: bool
     status: str
+    origin_batch_id: str | None
     sources: list[NoteSourceResponse]
     created_at: datetime
     updated_at: datetime
@@ -124,6 +126,7 @@ def _response(snapshot: NoteSnapshot) -> NoteResponse:
         generation=snapshot.generation,
         generated_by_model=snapshot.generated_by_model,
         status=snapshot.status,
+        origin_batch_id=snapshot.origin_batch_id,
         sources=[_source_response(source) for source in snapshot.sources],
         created_at=snapshot.created_at,
         updated_at=snapshot.updated_at,
@@ -245,6 +248,13 @@ async def update_note(
             code=ProblemCode.VERSION_CONFLICT,
             title="笔记版本冲突",
             detail=f"当前版本为 {exc.current_version}",
+        ) from exc
+    except NoteVersionNotFound as exc:
+        raise ApiProblem(
+            status=409,
+            code=ProblemCode.NOTE_VERSION_NOT_FOUND,
+            title="笔记版本快照缺失",
+            detail="当前工作流笔记缺少可用于后续操作的版本快照。",
         ) from exc
     except LookupError as exc:
         raise ApiProblem(

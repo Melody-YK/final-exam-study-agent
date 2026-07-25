@@ -2420,11 +2420,14 @@
       },
       "LocalDemoNoteBatchSnapshot": {
         "additionalProperties": false,
-        "description": "Public snapshot shape supported by the local merged/create demo route.",
+        "description": "Public snapshot shape supported by local merged demo commands.",
         "properties": {
           "command_kind": {
-            "const": "create",
             "default": "create",
+            "enum": [
+              "create",
+              "regeneration"
+            ],
             "title": "Command Kind",
             "type": "string"
           },
@@ -3000,6 +3003,17 @@
             "title": "Id",
             "type": "string"
           },
+          "origin_batch_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin Batch Id"
+          },
           "section_path": {
             "items": {
               "type": "string"
@@ -3042,6 +3056,7 @@
           "generation",
           "generated_by_model",
           "status",
+          "origin_batch_id",
           "sources",
           "created_at",
           "updated_at"
@@ -5717,6 +5732,75 @@
         "summary": "Regenerate Note",
         "tags": [
           "notes"
+        ]
+      }
+    },
+    "/api/v1/notes/{note_id}/regeneration-batches": {
+      "post": {
+        "operationId": "create_note_regeneration_batch_api_v1_notes__note_id__regeneration_batches_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "note_id",
+            "required": true,
+            "schema": {
+              "title": "Note Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 512,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "If-Match"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocalDemoNoteBatchSnapshot"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Note Regeneration Batch",
+        "tags": [
+          "note-batches"
         ]
       }
     },

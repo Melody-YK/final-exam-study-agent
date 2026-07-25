@@ -58,6 +58,7 @@ function note(version = 1) {
     version,
     generation: 2,
     generated_by_model: true,
+    origin_batch_id: null,
     status: 'ready',
     sources: [
       {
@@ -104,6 +105,7 @@ function generatedNote(
   return {
     ...note(1),
     id: 'note-generated-e2e',
+    origin_batch_id: 'note-batch-e2e',
     section_path: sectionPath,
     title,
     body_markdown: `# ${title}\n\n> 笔记模板: ${rendered.label}\n\n## 核心内容\n\n${rendered.content}`,
@@ -247,6 +249,10 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
   let notesVersion = 1
   let generatedNoteRecord: ReturnType<typeof generatedNote> | null = null
   let noteBatchPolls = 0
+  let noteBatchId = 'note-batch-e2e'
+  let noteBatchCommand: 'create' | 'regeneration' = 'create'
+  let regenerationTargetNoteId: string | null = null
+  let regenerationTargetVersion: number | null = null
   let noteBatchPayload:
     | {
         mode: 'merged'
@@ -404,8 +410,8 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
     const itemStatus = succeeded ? 'succeeded' : status === 'running' ? 'running' : 'queued'
     return {
       schema_version: '1.0',
-      id: 'note-batch-e2e',
-      command_kind: 'create',
+      id: noteBatchId,
+      command_kind: noteBatchCommand,
       retry_of_batch_id: null,
       course_id: courseId,
       mode: 'merged',
@@ -413,9 +419,11 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
       title: payload.title?.trim() || null,
       title_prefix: null,
       section_path: payload.section_path?.length ? payload.section_path : ['未分类'],
-      target_note_id: null,
-      target_note_version: null,
-      target_note_version_sha256: null,
+      target_note_id: noteBatchCommand === 'regeneration' ? regenerationTargetNoteId : null,
+      target_note_version:
+        noteBatchCommand === 'regeneration' ? regenerationTargetVersion : null,
+      target_note_version_sha256:
+        noteBatchCommand === 'regeneration' ? 'a'.repeat(64) : null,
       status,
       completed_items: succeeded ? 1 : 0,
       total_items: 1,
@@ -445,7 +453,10 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
               ? 'insufficient_history'
               : 'not_started',
           attempt: status === 'queued' ? 0 : 1,
-          note_id: generatedNoteRecord?.id ?? null,
+          note_id:
+            noteBatchCommand === 'regeneration'
+              ? regenerationTargetNoteId
+              : (generatedNoteRecord?.id ?? null),
           failure_code: null,
           retryable_in_new_batch: false,
         },
@@ -1017,10 +1028,35 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
     if (method === 'POST' && path === `/courses/${courseId}/note-batches`) {
       noteBatchPayload = request.postDataJSON() as typeof noteBatchPayload
       noteBatchPolls = 0
+      noteBatchId = 'note-batch-e2e'
+      noteBatchCommand = 'create'
+      regenerationTargetNoteId = null
+      regenerationTargetVersion = null
+      return route.fulfill({ status: 202, json: noteBatchSnapshot('queued') })
+    }
+    if (
+      method === 'POST' &&
+      generatedNoteRecord !== null &&
+      path === `/notes/${generatedNoteRecord.id}/regeneration-batches`
+    ) {
+      if (
+        request.headers()['if-match'] !== `"${generatedNoteRecord.version}"` ||
+        !request.headers()['idempotency-key']
+      ) {
+        return route.fulfill({
+          status: 428,
+          json: problem(428, 'PRECONDITION_REQUIRED', '需要版本和幂等键'),
+        })
+      }
+      noteBatchPolls = 0
+      noteBatchId = 'note-regeneration-batch-e2e'
+      noteBatchCommand = 'regeneration'
+      regenerationTargetNoteId = generatedNoteRecord.id
+      regenerationTargetVersion = generatedNoteRecord.version
       return route.fulfill({ status: 202, json: noteBatchSnapshot('queued') })
     }
     if (method === 'GET' && /^\/note-batches\/[^/]+$/.test(path)) {
-      if (!noteBatchPayload) {
+      if (!noteBatchPayload || path !== `/note-batches/${noteBatchId}`) {
         return route.fulfill({
           status: 404,
           json: problem(404, 'RESOURCE_NOT_FOUND', '批次不存在'),
@@ -1029,17 +1065,30 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
       noteBatchPolls += 1
       const status = noteBatchPolls >= noteBatchPollsBeforeSuccess ? 'succeeded' : 'running'
       if (status === 'succeeded') {
-        generatedNoteRecord = generatedNote(
-          noteBatchPayload.title?.trim() || '合并课程笔记',
-          noteBatchPayload.section_path?.length ? noteBatchPayload.section_path : ['未分类'],
-          noteBatchPayload.style,
-        )
+        if (noteBatchCommand === 'regeneration' && generatedNoteRecord !== null) {
+          generatedNoteRecord = {
+            ...generatedNoteRecord,
+            body_markdown: `${generatedNoteRecord.body_markdown}\n\n## 重新生成结果\n\n已通过异步批次重新生成。`,
+            version: generatedNoteRecord.version + 1,
+            generation: generatedNoteRecord.generation + 1,
+            updated_at: '2026-07-19T05:45:00Z',
+          }
+        } else {
+          generatedNoteRecord = generatedNote(
+            noteBatchPayload.title?.trim() || '合并课程笔记',
+            noteBatchPayload.section_path?.length ? noteBatchPayload.section_path : ['未分类'],
+            noteBatchPayload.style,
+          )
+        }
       }
       return route.fulfill({ json: noteBatchSnapshot(status) })
     }
     if (method === 'GET' && path === `/courses/${courseId}/notes`) {
       return route.fulfill({
-        json: [note(notesVersion), ...(generatedNoteRecord ? [generatedNoteRecord] : [])],
+        json: [
+          note(notesVersion),
+          ...(generatedNoteRecord ? [generatedNoteRecord] : []),
+        ],
       })
     }
     if (method === 'PATCH' && path === '/notes/note-e2e') {
