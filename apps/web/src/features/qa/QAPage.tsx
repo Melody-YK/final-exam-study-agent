@@ -12,6 +12,7 @@ import {
   ShieldCheck,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 
 import { ApiError, studyApi } from '../../api/client'
 import type {
@@ -36,6 +37,18 @@ const stages = [
   { key: 'generation', label: '生成有据回答' },
   { key: 'validation', label: '校验引用' },
 ] as const
+
+function suggestedQuestionFromRouteState(state: unknown): string | null {
+  if (typeof state !== 'object' || state === null || Array.isArray(state)) return null
+  const candidate = state as Record<string, unknown>
+  if (candidate.startNewConversation !== true || typeof candidate.suggestedQuestion !== 'string') {
+    return null
+  }
+  const suggestedQuestion = candidate.suggestedQuestion.trim()
+  return suggestedQuestion.length > 0 && suggestedQuestion.length <= 2000
+    ? suggestedQuestion
+    : null
+}
 
 function activeStageIndex(snapshot: QuerySnapshot | undefined): number {
   if (!snapshot) return -1
@@ -241,10 +254,13 @@ function QueryTurn({
 export function QAPage() {
   const { courseId, capabilities, capabilitiesError, capabilitiesLoading } = useWorkspace()
   const queryClient = useQueryClient()
-  const [question, setQuestion] = useState('')
+  const location = useLocation()
+  const navigate = useNavigate()
+  const routeSuggestedQuestion = suggestedQuestionFromRouteState(location.state)
+  const [question, setQuestion] = useState(() => routeSuggestedQuestion ?? '')
   const [requestedConversationId, setRequestedConversationId] = useState<
     string | null | undefined
-  >(undefined)
+  >(() => (routeSuggestedQuestion === null ? undefined : null))
   const [source, setSource] = useState<{
     courseId: string
     queryId: string
@@ -252,6 +268,18 @@ export function QAPage() {
   } | null>(null)
   const threadEndRef = useRef<HTMLDivElement>(null)
   const providerReady = capabilities?.provider.status === 'available'
+
+  useEffect(() => {
+    if (routeSuggestedQuestion === null) return
+    void navigate(
+      {
+        pathname: location.pathname,
+        search: location.search,
+        hash: location.hash,
+      },
+      { replace: true, state: null },
+    )
+  }, [location.hash, location.pathname, location.search, navigate, routeSuggestedQuestion])
 
   const conversations = useQuery({
     queryKey: ['conversations', courseId],

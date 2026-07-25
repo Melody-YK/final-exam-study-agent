@@ -41,10 +41,10 @@ test('note conflict preserves the draft until the user reloads', async ({ page }
   await expect(page.getByLabel('笔记阅读视图')).toContainText('服务器上的最新正文。')
 })
 
-test('ordinary workspace exposes the knowledge graph instead of engineering trace', async ({ page }) => {
-  await page.getByRole('link', { name: '知识图谱' }).first().click()
-  await expect(page.getByRole('heading', { name: '课程知识图谱' })).toBeVisible()
-  await expect(page.getByLabel('课程知识图谱画布')).toBeVisible()
+test('ordinary workspace exposes the concept map instead of engineering trace', async ({ page }) => {
+  await page.getByRole('link', { name: '概念地图' }).first().click()
+  await expect(page.getByRole('heading', { name: '课程概念地图' })).toBeVisible()
+  await expect(page.getByLabel('课程概念地图画布')).toBeVisible()
   await expect(page.getByText('RRF')).toHaveCount(0)
   await expect(page.getByText('Tokenizer')).toHaveCount(0)
 })

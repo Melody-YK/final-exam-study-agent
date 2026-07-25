@@ -161,19 +161,53 @@ test('admin can inspect the original upload and reject a pending document', asyn
   await expect(rejectedRow).toContainText('课件内容与课程无关')
 })
 
-test('knowledge graph exposes concepts and readable source locations', async ({ page }) => {
+test('concept map focuses relationships and prepares a fresh QA draft', async ({ page }) => {
   await installMockApi(page)
   await page.goto('/graph')
 
-  await expect(page.getByRole('heading', { name: '课程知识图谱' })).toBeVisible()
-  await expect(page.getByLabel('课程知识图谱画布')).toBeVisible()
+  await expect(page.getByRole('heading', { name: '课程概念地图' })).toBeVisible()
+  await expect(page.getByLabel('课程概念地图画布')).toBeVisible()
   await page.locator('.knowledge-node--concept').filter({ hasText: '进程' }).click()
 
   const details = page.getByRole('complementary', { name: '节点详情' })
   await expect(details.getByRole('heading', { name: '进程' })).toBeVisible()
-  await expect(details.getByText('进程与线程.pdf')).toBeVisible()
+  await expect(
+    details.getByText('资料“进程与线程.pdf”包含概念“进程”9 次。'),
+  ).toBeVisible()
+  await expect(
+    details.getByText('概念“进程”和“调度”共同出现在 4 个内容片段中。'),
+  ).toBeVisible()
+  await expect(details.getByText('进程与线程.pdf', { exact: true })).toBeVisible()
   await expect(details.getByText(/第 6 页/)).toBeVisible()
   await expect(details.getByText('进程是资源分配的基本单位，线程是调度的基本单位。')).toBeVisible()
   await expect(page.getByText('Tokenizer')).toHaveCount(0)
   await expect(page.getByText(/Chunk/)).toHaveCount(0)
+
+  await page.getByRole('button', { name: '仅看关联' }).click()
+  await expect(page.locator('.knowledge-node')).toHaveCount(3)
+  await expect(page.locator('.knowledge-node--course')).toHaveCount(0)
+
+  const queryRequests: string[] = []
+  page.on('request', (request) => {
+    if (
+      request.method() === 'POST' &&
+      request.url().endsWith('/api/v1/courses/course-e2e/queries')
+    ) {
+      queryRequests.push(request.url())
+    }
+  })
+  await details.getByRole('button', { name: '围绕此概念提问' }).click()
+
+  await expect(page).toHaveURL(/\/qa$/)
+  const composer = page.getByLabel('课程问题')
+  await expect(composer).toHaveValue(
+    '请解释“进程”，并结合课程资料说明它与相关概念的联系。',
+  )
+  await expect(page.getByText('输入第一个问题开始会话')).toBeVisible()
+  await expect(page.getByText('已有来源')).toHaveCount(0)
+  expect(queryRequests).toEqual([])
+
+  await page.getByRole('button', { name: '提交问题' }).click()
+  await expect(page.getByText('已有来源')).toBeVisible()
+  expect(queryRequests).toHaveLength(1)
 })

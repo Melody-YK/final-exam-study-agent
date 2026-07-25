@@ -31,7 +31,7 @@ test('library exposes parse/index states and no-provider boundary', async ({ pag
   await expect(studyActions.getByText('问答服务不可用')).toBeVisible()
 
   await studyActions.getByRole('link', { name: '查看概念地图' }).click()
-  await expect(page.getByRole('heading', { name: '课程知识图谱' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '课程概念地图' })).toBeVisible()
   await page.getByRole('link', { name: '资料' }).click()
   await expect(page.getByRole('heading', { name: '课程资料' })).toBeVisible()
 

@@ -1,4 +1,8 @@
-import { act, fireEvent, screen, waitFor } from '@testing-library/react'
+import { QueryClientProvider } from '@tanstack/react-query'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import type { ReactNode } from 'react'
+import { MemoryRouter, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError, studyApi } from '../../api/client'
@@ -8,8 +12,13 @@ import type {
   RuntimeCapabilities,
   StructuredAnswer,
 } from '../../api/types'
+import { WorkspaceContext } from '../../app/WorkspaceContext'
 import { answeredSnapshot, citationSource, problem } from '../../test/fixtures'
-import { availableCapabilities, renderInWorkspace } from '../../test/render'
+import {
+  availableCapabilities,
+  createTestQueryClient,
+  renderInWorkspace,
+} from '../../test/render'
 import { QAPage } from './QAPage'
 import { queryRefetchInterval } from './queryPolling'
 
@@ -76,6 +85,50 @@ function deferred<T>() {
   return { promise, resolve }
 }
 
+function RouteStateProbe() {
+  const location = useLocation()
+  return <output data-testid="qa-route-state">{JSON.stringify(location.state)}</output>
+}
+
+function RouteStateExperience() {
+  return (
+    <>
+      <QAPage />
+      <RouteStateProbe />
+    </>
+  )
+}
+
+function renderWithRouteState(state: unknown) {
+  const queryClient = createTestQueryClient()
+
+  function Wrapper({ children }: { children: ReactNode }) {
+    return (
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={[{ pathname: '/qa', state }]}>
+          <WorkspaceContext.Provider
+            value={{
+              courseId: 'course-1',
+              course: { id: 'course-1', title: '操作系统', lifecycle: 'active' },
+              capabilities: availableCapabilities,
+              capabilitiesLoading: false,
+              capabilitiesError: false,
+            }}
+          >
+            {children}
+          </WorkspaceContext.Provider>
+        </MemoryRouter>
+      </QueryClientProvider>
+    )
+  }
+
+  return {
+    queryClient,
+    user: userEvent.setup(),
+    ...render(<RouteStateExperience />, { wrapper: Wrapper }),
+  }
+}
+
 describe('QAPage', () => {
   beforeEach(() => {
     vi.spyOn(studyApi, 'listConversations').mockResolvedValue([])
@@ -83,6 +136,55 @@ describe('QAPage', () => {
     vi.spyOn(studyApi, 'createConversation').mockResolvedValue(
       conversation('conversation-1', '新会话'),
     )
+  })
+
+  it('consumes a concept suggestion once as an unsent draft in a fresh conversation', async () => {
+    const existing = conversation('conversation-existing', '已有会话', {
+      turn_count: 1,
+      latest_query_id: 'query-existing',
+      latest_question: '已有问题',
+    })
+    vi.mocked(studyApi.listConversations).mockResolvedValue([existing])
+    const createQuery = vi.spyOn(studyApi, 'createQuery').mockResolvedValue(answeredSnapshot())
+    const suggestedQuestion = '请解释“进程”，并结合课程资料说明它与相关概念的联系。'
+    const { rerender, user } = renderWithRouteState({
+      suggestedQuestion,
+      startNewConversation: true,
+    })
+
+    expect(screen.getByLabelText('课程问题')).toHaveValue(suggestedQuestion)
+    expect(await screen.findByRole('button', { name: /已有会话/ })).not.toHaveAttribute(
+      'aria-current',
+    )
+    expect(screen.getByText('输入第一个问题开始会话')).toBeInTheDocument()
+    expect(studyApi.listConversationQueries).not.toHaveBeenCalled()
+    expect(createQuery).not.toHaveBeenCalled()
+    await waitFor(() => expect(screen.getByTestId('qa-route-state')).toHaveTextContent('null'))
+
+    await user.clear(screen.getByLabelText('课程问题'))
+    await user.type(screen.getByLabelText('课程问题'), '保留我的修改')
+    rerender(<RouteStateExperience />)
+
+    expect(screen.getByLabelText('课程问题')).toHaveValue('保留我的修改')
+    expect(createQuery).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['array state', [{ suggestedQuestion: '不应采用', startNewConversation: true }]],
+    ['missing new-conversation flag', { suggestedQuestion: '不应采用' }],
+    ['blank suggestion', { suggestedQuestion: '   ', startNewConversation: true }],
+    [
+      'oversized suggestion',
+      { suggestedQuestion: '问'.repeat(2001), startNewConversation: true },
+    ],
+  ])('ignores malformed concept draft route state: %s', async (_label, state) => {
+    const createQuery = vi.spyOn(studyApi, 'createQuery').mockResolvedValue(answeredSnapshot())
+
+    renderWithRouteState(state)
+
+    expect(screen.getByLabelText('课程问题')).toHaveValue('')
+    await screen.findByText('暂无会话，直接提问即可开始')
+    expect(createQuery).not.toHaveBeenCalled()
   })
 
   it('polls only while the query SSE is connecting or reconnecting', () => {
