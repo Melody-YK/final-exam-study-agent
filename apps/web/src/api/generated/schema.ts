@@ -331,6 +331,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/courses/{course_id}/knowledge-graph/sources/{revision_id}/{chunk_id}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Graph Source Preview */
+        get: operations["get_graph_source_preview_api_v1_courses__course_id__knowledge_graph_sources__revision_id___chunk_id__preview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/courses/{course_id}/knowledge-graph/sources/{revision_id}/{chunk_id}/preview/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Graph Source Preview Content */
+        get: operations["get_graph_source_preview_content_api_v1_courses__course_id__knowledge_graph_sources__revision_id___chunk_id__preview_content_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/courses/{course_id}/lab/trace": {
         parameters: {
             query?: never;
@@ -533,6 +567,40 @@ export interface paths {
         put?: never;
         /** Create Note Regeneration Batch */
         post: operations["create_note_regeneration_batch_api_v1_notes__note_id__regeneration_batches_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/notes/{note_id}/sources/{source_id}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Note Source Preview */
+        get: operations["get_note_source_preview_api_v1_notes__note_id__sources__source_id__preview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/notes/{note_id}/sources/{source_id}/preview/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Note Source Preview Content */
+        get: operations["get_note_source_preview_content_api_v1_notes__note_id__sources__source_id__preview_content_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1617,10 +1685,17 @@ export interface components {
             document_name: string;
             /** Excerpt */
             excerpt: string;
+            /**
+             * Locator Kind
+             * @enum {string}
+             */
+            locator_kind: "page" | "slide" | "section";
             /** Page Ordinal */
             page_ordinal: number;
             /** Revision Id */
             revision_id: string;
+            /** Section Path */
+            section_path?: string[];
         };
         /** KnowledgeGraphResponse */
         KnowledgeGraphResponse: {
@@ -2107,9 +2182,40 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "page" | "slide";
+            kind: "page" | "slide" | "section";
             /** Ordinal */
             ordinal: number;
+        };
+        /** SourcePreviewResponse */
+        SourcePreviewResponse: {
+            /** Bounding Boxes */
+            bounding_boxes: components["schemas"]["BoundingBox"][];
+            /** Chunk Id */
+            chunk_id: string;
+            /** Document Id */
+            document_id: string;
+            /** Document Name */
+            document_name: string;
+            locator: components["schemas"]["SourceLocator"];
+            /** Media Type */
+            media_type: string;
+            /** Provenance */
+            provenance: string[];
+            /** Quote */
+            quote: string;
+            /** Read Url */
+            read_url: string;
+            /**
+             * Read Url Expires At
+             * Format: date-time
+             */
+            read_url_expires_at: string;
+            /** Revision Id */
+            revision_id: string;
+            /** Section Path */
+            section_path: string[];
+            /** Source Id */
+            source_id: string;
         };
         /** StructuredAnswer */
         StructuredAnswer: {
@@ -2991,6 +3097,75 @@ export interface operations {
             };
         };
     };
+    get_graph_source_preview_api_v1_courses__course_id__knowledge_graph_sources__revision_id___chunk_id__preview_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                course_id: string;
+                revision_id: string;
+                chunk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourcePreviewResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_graph_source_preview_content_api_v1_courses__course_id__knowledge_graph_sources__revision_id___chunk_id__preview_content_get: {
+        parameters: {
+            query?: {
+                expires?: string | null;
+                signature?: string | null;
+            };
+            header?: never;
+            path: {
+                course_id: string;
+                revision_id: string;
+                chunk_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_latest_lab_trace_api_v1_courses__course_id__lab_trace_get: {
         parameters: {
             query?: never;
@@ -3549,6 +3724,73 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    get_note_source_preview_api_v1_notes__note_id__sources__source_id__preview_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                note_id: string;
+                source_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourcePreviewResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_note_source_preview_content_api_v1_notes__note_id__sources__source_id__preview_content_get: {
+        parameters: {
+            query?: {
+                expires?: string | null;
+                signature?: string | null;
+            };
+            header?: never;
+            path: {
+                note_id: string;
+                source_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

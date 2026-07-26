@@ -79,6 +79,7 @@ export interface JobEventData {
 }
 
 export type CitationSource = Schema<'CitationSourceResponse'>
+export type SourcePreview = Schema<'SourcePreviewResponse'>
 
 export type NoteSource = Schema<'NoteSourceResponse'>
 export type NoteRecord = Schema<'NoteResponse'>

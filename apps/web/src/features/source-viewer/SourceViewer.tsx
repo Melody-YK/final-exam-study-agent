@@ -1,15 +1,34 @@
 import { AlertTriangle, FileWarning, LoaderCircle } from 'lucide-react'
+import { fromMarkdown } from 'mdast-util-from-markdown'
+import ReactMarkdown from 'react-markdown'
 import { useEffect, useRef, useState } from 'react'
 
-import type { CitationSource } from '../../api/types'
+import type { BoundingBox, SourceLocator } from '../../api/types'
 import { Modal } from '../../components/ui/Modal'
+import { formatSourceLocator } from './sourceLocator'
+
+export interface SourcePreview {
+  document_name: string
+  revision_id: string
+  locator: SourceLocator
+  section_path?: string[]
+  quote: string
+  bounding_boxes: BoundingBox[]
+  media_type: string
+  read_url: string
+  read_url_expires_at: string
+}
 
 interface SourceViewerProps {
-  source: CitationSource | null
+  source: SourcePreview | null
   onClose: () => void
 }
 
-function BboxOverlay({ source }: { source: CitationSource }) {
+function locatorLabel(source: SourcePreview): string {
+  return formatSourceLocator(source.locator, source.section_path)
+}
+
+function BboxOverlay({ source }: { source: SourcePreview }) {
   return (
     <div className="bbox-layer" aria-hidden="true">
       {source.bounding_boxes.map((box, index) => (
@@ -28,7 +47,7 @@ function BboxOverlay({ source }: { source: CitationSource }) {
   )
 }
 
-function PdfCanvas({ source }: { source: CitationSource }) {
+function PdfCanvas({ source }: { source: SourcePreview }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [state, setState] = useState<'loading' | 'ready' | 'failed'>('loading')
 
@@ -88,7 +107,7 @@ function PdfCanvas({ source }: { source: CitationSource }) {
   )
 }
 
-function SlideOrImage({ source }: { source: CitationSource }) {
+function SlideOrImage({ source }: { source: SourcePreview }) {
   const [state, setState] = useState<'loading' | 'ready' | 'failed'>('loading')
 
   return (
@@ -107,7 +126,7 @@ function SlideOrImage({ source }: { source: CitationSource }) {
       ) : null}
       <div className="source-media__surface">
         <img
-          alt={`${source.document_name} ${source.locator.kind === 'slide' ? '幻灯片' : '页面'} ${source.locator.ordinal}`}
+          alt={`${source.document_name} ${locatorLabel(source)}`}
           onError={() => setState('failed')}
           onLoad={() => setState('ready')}
           src={source.read_url}
@@ -118,11 +137,155 @@ function SlideOrImage({ source }: { source: CitationSource }) {
   )
 }
 
-function sourceMediaKind(source: CitationSource): 'pdf' | 'image' | 'unsupported' {
+interface MarkdownSection {
+  body: string
+  label: string
+}
+
+interface MarkdownNode {
+  type?: unknown
+  value?: unknown
+  alt?: unknown
+  position?: { start?: { offset?: number } }
+  children?: MarkdownNode[]
+}
+
+function textContent(node: unknown): string {
+  if (typeof node !== 'object' || node === null) return ''
+  const candidate = node as { value?: unknown; alt?: unknown; children?: unknown[] }
+  if (typeof candidate.value === 'string') return candidate.value
+  if (typeof candidate.alt === 'string') return candidate.alt
+  return (candidate.children ?? []).map(textContent).join('')
+}
+
+function nodeOffset(node: MarkdownNode): number | null {
+  const offset = node.position?.start?.offset
+  return typeof offset === 'number' ? offset : null
+}
+
+function markdownSection(markdown: string, ordinal: number): MarkdownSection | null {
+  const tree = fromMarkdown(markdown)
+  const headings: Array<{ offset: number; label: string }> = []
+  const contentOffsets: number[] = []
+
+  const collectHeadings = (node: unknown) => {
+    if (typeof node !== 'object' || node === null) return
+    const candidate = node as MarkdownNode
+    const offset = nodeOffset(candidate)
+    const label = textContent(candidate).trim()
+    if (candidate.type === 'heading' && offset !== null && label) {
+      headings.push({
+        offset,
+        label,
+      })
+    }
+    if (
+      offset !== null &&
+      ((candidate.type === 'paragraph' && label) ||
+        ((candidate.type === 'code' || candidate.type === 'html') &&
+          typeof candidate.value === 'string' &&
+          candidate.value.trim()))
+    ) {
+      contentOffsets.push(offset)
+    }
+    candidate.children?.forEach(collectHeadings)
+  }
+  collectHeadings(tree)
+  headings.sort((left, right) => left.offset - right.offset)
+
+  const sections: MarkdownSection[] = []
+  const firstHeadingOffset = headings[0]?.offset ?? markdown.length
+  const preamble = markdown.slice(0, firstHeadingOffset).trim()
+  if (preamble && contentOffsets.some((offset) => offset < firstHeadingOffset)) {
+    sections.push({ body: preamble, label: '文档开头' })
+  }
+  headings.forEach((heading, index) => {
+    const end = headings[index + 1]?.offset ?? markdown.length
+    sections.push({
+      body: markdown.slice(heading.offset, end).trim(),
+      label: heading.label || `章节 ${sections.length + 1}`,
+    })
+  })
+
+  return sections[ordinal - 1] ?? null
+}
+
+function MarkdownSource({ source }: { source: SourcePreview }) {
+  const [state, setState] = useState<
+    | { status: 'loading' }
+    | { status: 'failed' }
+    | { status: 'unavailable' }
+    | { status: 'ready'; section: MarkdownSection }
+  >({ status: 'loading' })
+
+  useEffect(() => {
+    const controller = new AbortController()
+    const load = async () => {
+      try {
+        const response = await fetch(source.read_url, {
+          credentials: 'include',
+          headers: { Accept: 'text/markdown' },
+          signal: controller.signal,
+        })
+        if (!response.ok) throw new Error('Markdown source request failed')
+        const body = await response.text()
+        if (!controller.signal.aborted) {
+          const section = markdownSection(body, source.locator.ordinal)
+          setState(section ? { status: 'ready', section } : { status: 'unavailable' })
+        }
+      } catch {
+        if (!controller.signal.aborted) setState({ status: 'failed' })
+      }
+    }
+    void load()
+    return () => controller.abort()
+  }, [source.locator.ordinal, source.read_url])
+
+  return (
+    <div className="source-media source-media--markdown">
+      {state.status === 'loading' ? (
+        <span className="source-media__state">
+          <LoaderCircle aria-hidden="true" className="spin" size={20} />
+          加载章节
+        </span>
+      ) : state.status === 'failed' ? (
+        <span className="source-media__state" role="alert">
+          <FileWarning aria-hidden="true" size={20} />
+          无法读取 Markdown 章节
+        </span>
+      ) : state.status === 'unavailable' ? (
+        <span className="source-media__state" role="alert">
+          <FileWarning aria-hidden="true" size={20} />
+          Markdown 章节定位已失效，请重新生成来源
+        </span>
+      ) : (
+        <article aria-label={`Markdown 章节：${state.section.label}`}>
+          <ReactMarkdown
+            components={{
+              img: ({ alt }) => (
+                <span className="source-markdown__blocked-image" role="note">
+                  外部图片未加载{alt ? `：${alt}` : ''}
+                </span>
+              ),
+            }}
+            skipHtml
+          >
+            {state.section.body}
+          </ReactMarkdown>
+        </article>
+      )}
+    </div>
+  )
+}
+
+function sourceMediaKind(
+  source: SourcePreview,
+): 'pdf' | 'image' | 'markdown' | 'unsupported' {
   const mediaType =
     typeof source.media_type === 'string' ? source.media_type.toLowerCase() : ''
   if (mediaType === 'application/pdf') return 'pdf'
   if (mediaType.startsWith('image/')) return 'image'
+  if (mediaType === 'text/markdown') return 'markdown'
   return 'unsupported'
 }
 
@@ -138,7 +301,7 @@ export function SourceViewer({ source, onClose }: SourceViewerProps) {
     <Modal
       description={
         source
-          ? `${source.document_name} · ${source.locator.kind === 'slide' ? '幻灯片' : '第'} ${source.locator.ordinal}`
+          ? `${source.document_name} · ${locatorLabel(source)}`
           : undefined
       }
       onClose={onClose}
@@ -161,6 +324,8 @@ export function SourceViewer({ source, onClose }: SourceViewerProps) {
               <PdfCanvas source={source} />
             ) : mediaKind === 'image' ? (
               <SlideOrImage source={source} />
+            ) : mediaKind === 'markdown' ? (
+              <MarkdownSource source={source} />
             ) : (
               <div className="source-media source-media--unsupported" role="status">
                 <FileWarning aria-hidden="true" size={22} />
@@ -178,9 +343,7 @@ export function SourceViewer({ source, onClose }: SourceViewerProps) {
                 </div>
                 <div>
                   <dt>定位</dt>
-                  <dd>
-                    {source.locator.kind === 'slide' ? '幻灯片' : '页'} {source.locator.ordinal}
-                  </dd>
+                  <dd>{locatorLabel(source)}</dd>
                 </div>
               </dl>
             </aside>

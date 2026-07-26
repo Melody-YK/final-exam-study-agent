@@ -9,9 +9,10 @@ import {
   type Edge,
   type Node,
 } from '@xyflow/react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import {
   BookOpen,
+  Eye,
   FileSearch,
   Focus,
   Hash,
@@ -22,16 +23,21 @@ import {
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router'
 
+import { studyApi } from '../../api/client'
+import type { SourcePreview } from '../../api/types'
 import { useWorkspace } from '../../app/WorkspaceContext'
 import { ErrorNotice } from '../../components/ui/ErrorNotice'
 import { PageHeader } from '../../components/ui/PageHeader'
 import { StatusBadge } from '../../components/ui/StatusBadge'
+import { SourceViewer } from '../source-viewer/SourceViewer'
+import { formatSourceLocator } from '../source-viewer/sourceLocator'
 import {
   knowledgeGraphApi,
   type KnowledgeGraphEdge,
   type KnowledgeGraphEdgeKind,
   type KnowledgeGraphNode,
   type KnowledgeGraphNodeKind,
+  type KnowledgeGraphOccurrence,
   type KnowledgeGraphResponse,
 } from './knowledgeGraphApi'
 
@@ -138,6 +144,16 @@ function GraphExperience({ graph }: { graph: KnowledgeGraphResponse }) {
   const [selectedNodeId, setSelectedNodeId] = useState(graph.nodes[0]?.id ?? null)
   const [viewMode, setViewMode] = useState<'all' | 'related'>('all')
   const navigate = useNavigate()
+  const [preview, setPreview] = useState<SourcePreview | null>(null)
+  const previewMutation = useMutation({
+    mutationFn: (occurrence: KnowledgeGraphOccurrence) =>
+      studyApi.getKnowledgeGraphSourcePreview(
+        graph.course_id,
+        occurrence.revision_id,
+        occurrence.chunk_id,
+      ),
+    onSuccess: setPreview,
+  })
   const selectedNode = graph.nodes.find((node) => node.id === selectedNodeId) ?? graph.nodes[0]
   const layout = useMemo(() => buildFlowGraph(graph), [graph])
   const nodesById = useMemo(
@@ -261,10 +277,19 @@ function GraphExperience({ graph }: { graph: KnowledgeGraphResponse }) {
                 },
               })
             }
+            onOpenOccurrence={(occurrence) => previewMutation.mutate(occurrence)}
+            previewError={previewMutation.error}
+            previewErrorChunkId={
+              previewMutation.isError ? previewMutation.variables?.chunk_id : undefined
+            }
+            previewLoadingChunkId={
+              previewMutation.isPending ? previewMutation.variables?.chunk_id : undefined
+            }
             relationships={selectedRelationships}
           />
         ) : null}
       </section>
+      <SourceViewer onClose={() => setPreview(null)} source={preview} />
     </>
   )
 }
@@ -340,10 +365,18 @@ function GraphCanvas({
 function NodeDetails({
   node,
   onAskConcept,
+  onOpenOccurrence,
+  previewError,
+  previewErrorChunkId,
+  previewLoadingChunkId,
   relationships,
 }: {
   node: KnowledgeGraphNode
   onAskConcept: () => void
+  onOpenOccurrence: (occurrence: KnowledgeGraphOccurrence) => void
+  previewError: unknown
+  previewErrorChunkId?: string
+  previewLoadingChunkId?: string
   relationships: string[]
 }) {
   return (
@@ -410,11 +443,30 @@ function NodeDetails({
                 <div>
                   <strong>{occurrence.document_name}</strong>
                   <span>
-                    第 {occurrence.page_ordinal} 页 · 第 {occurrence.chunk_ordinal}{' '}
-                    个内容片段 · 出现 {occurrence.count} 次
+                    {formatSourceLocator(
+                      { kind: occurrence.locator_kind, ordinal: occurrence.page_ordinal },
+                      occurrence.section_path,
+                    )}{' '}
+                    · 第 {occurrence.chunk_ordinal} 个内容片段 · 出现 {occurrence.count} 次
                   </span>
                 </div>
                 <p>{occurrence.excerpt}</p>
+                <button
+                  className="button button--small knowledge-graph-occurrence-open"
+                  disabled={previewLoadingChunkId !== undefined}
+                  onClick={() => onOpenOccurrence(occurrence)}
+                  type="button"
+                >
+                  {previewLoadingChunkId === occurrence.chunk_id ? (
+                    <LoaderCircle aria-hidden="true" className="spin" size={14} />
+                  ) : (
+                    <Eye aria-hidden="true" size={14} />
+                  )}
+                  查看原文
+                </button>
+                {previewError && previewErrorChunkId === occurrence.chunk_id ? (
+                  <ErrorNotice error={previewError} title="原文不可用" />
+                ) : null}
               </li>
             ))}
           </ol>

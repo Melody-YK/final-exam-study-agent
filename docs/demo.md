@@ -17,7 +17,7 @@ make sync
 
 ## 演示顺序
 
-1. 打开 `http://127.0.0.1:5173`，创建课程并上传自制 PDF/PPTX。
+1. 打开 `http://127.0.0.1:5173`，创建课程并上传自制 PDF 或 Markdown；图片可用于资料入库，PPT/PPTX、DOCX、TIFF 请先转换格式。
 2. 展示 ParseJob、不可变 preview Revision、页/幻灯片定位和 Chunk。
 3. 未配置 Embedding 时展示 `parsed_index_blocked` / `index_blocked_provider`，说明不会生成伪向量。
 4. 在已配置且已获授权的本地环境中恢复 IndexJob，展示 Dense、BM25、RRF 和 active manifest；本仓库自动化不会执行该外部调用。

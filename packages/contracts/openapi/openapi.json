@@ -2194,6 +2194,15 @@
             "title": "Excerpt",
             "type": "string"
           },
+          "locator_kind": {
+            "enum": [
+              "page",
+              "slide",
+              "section"
+            ],
+            "title": "Locator Kind",
+            "type": "string"
+          },
           "page_ordinal": {
             "minimum": 1.0,
             "title": "Page Ordinal",
@@ -2203,6 +2212,13 @@
             "minLength": 1,
             "title": "Revision Id",
             "type": "string"
+          },
+          "section_path": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Section Path",
+            "type": "array"
           }
         },
         "required": [
@@ -2210,6 +2226,7 @@
           "document_name",
           "revision_id",
           "chunk_id",
+          "locator_kind",
           "page_ordinal",
           "chunk_ordinal",
           "count",
@@ -3723,7 +3740,8 @@
           "kind": {
             "enum": [
               "page",
-              "slide"
+              "slide",
+              "section"
             ],
             "title": "Kind",
             "type": "string"
@@ -3739,6 +3757,89 @@
           "ordinal"
         ],
         "title": "SourceLocator",
+        "type": "object"
+      },
+      "SourcePreviewResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "bounding_boxes": {
+            "items": {
+              "$ref": "#/components/schemas/BoundingBox"
+            },
+            "title": "Bounding Boxes",
+            "type": "array"
+          },
+          "chunk_id": {
+            "title": "Chunk Id",
+            "type": "string"
+          },
+          "document_id": {
+            "title": "Document Id",
+            "type": "string"
+          },
+          "document_name": {
+            "title": "Document Name",
+            "type": "string"
+          },
+          "locator": {
+            "$ref": "#/components/schemas/SourceLocator"
+          },
+          "media_type": {
+            "title": "Media Type",
+            "type": "string"
+          },
+          "provenance": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Provenance",
+            "type": "array"
+          },
+          "quote": {
+            "title": "Quote",
+            "type": "string"
+          },
+          "read_url": {
+            "title": "Read Url",
+            "type": "string"
+          },
+          "read_url_expires_at": {
+            "format": "date-time",
+            "title": "Read Url Expires At",
+            "type": "string"
+          },
+          "revision_id": {
+            "title": "Revision Id",
+            "type": "string"
+          },
+          "section_path": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Section Path",
+            "type": "array"
+          },
+          "source_id": {
+            "title": "Source Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_id",
+          "document_id",
+          "revision_id",
+          "chunk_id",
+          "document_name",
+          "locator",
+          "section_path",
+          "quote",
+          "bounding_boxes",
+          "provenance",
+          "media_type",
+          "read_url",
+          "read_url_expires_at"
+        ],
+        "title": "SourcePreviewResponse",
         "type": "object"
       },
       "StructuredAnswer": {
@@ -5145,6 +5246,156 @@
         ]
       }
     },
+    "/api/v1/courses/{course_id}/knowledge-graph/sources/{revision_id}/{chunk_id}/preview": {
+      "get": {
+        "operationId": "get_graph_source_preview_api_v1_courses__course_id__knowledge_graph_sources__revision_id___chunk_id__preview_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "course_id",
+            "required": true,
+            "schema": {
+              "title": "Course Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "revision_id",
+            "required": true,
+            "schema": {
+              "title": "Revision Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "chunk_id",
+            "required": true,
+            "schema": {
+              "title": "Chunk Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourcePreviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Graph Source Preview",
+        "tags": [
+          "sources"
+        ]
+      }
+    },
+    "/api/v1/courses/{course_id}/knowledge-graph/sources/{revision_id}/{chunk_id}/preview/content": {
+      "get": {
+        "operationId": "get_graph_source_preview_content_api_v1_courses__course_id__knowledge_graph_sources__revision_id___chunk_id__preview_content_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "course_id",
+            "required": true,
+            "schema": {
+              "title": "Course Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "revision_id",
+            "required": true,
+            "schema": {
+              "title": "Revision Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "chunk_id",
+            "required": true,
+            "schema": {
+              "title": "Chunk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expires",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Expires"
+            }
+          },
+          {
+            "in": "query",
+            "name": "signature",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Signature"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Graph Source Preview Content",
+        "tags": [
+          "sources"
+        ]
+      }
+    },
     "/api/v1/courses/{course_id}/lab/trace": {
       "get": {
         "operationId": "get_latest_lab_trace_api_v1_courses__course_id__lab_trace_get",
@@ -5989,6 +6240,138 @@
         "summary": "Create Note Regeneration Batch",
         "tags": [
           "note-batches"
+        ]
+      }
+    },
+    "/api/v1/notes/{note_id}/sources/{source_id}/preview": {
+      "get": {
+        "operationId": "get_note_source_preview_api_v1_notes__note_id__sources__source_id__preview_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "note_id",
+            "required": true,
+            "schema": {
+              "title": "Note Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "title": "Source Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourcePreviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Note Source Preview",
+        "tags": [
+          "sources"
+        ]
+      }
+    },
+    "/api/v1/notes/{note_id}/sources/{source_id}/preview/content": {
+      "get": {
+        "operationId": "get_note_source_preview_content_api_v1_notes__note_id__sources__source_id__preview_content_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "note_id",
+            "required": true,
+            "schema": {
+              "title": "Note Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "title": "Source Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expires",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Expires"
+            }
+          },
+          {
+            "in": "query",
+            "name": "signature",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Signature"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Note Source Preview Content",
+        "tags": [
+          "sources"
         ]
       }
     },

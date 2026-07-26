@@ -6,6 +6,9 @@ from typing import ClassVar
 
 from study_agent.providers.protocols import ObjectMetadata
 
+MARKDOWN_MEDIA_TYPE = "text/markdown"
+MAX_MARKDOWN_UPLOAD_BYTES = 5 * 1024 * 1024
+
 
 class UploadRejectionReason(StrEnum):
     INVALID_REQUEST = "invalid_request"
@@ -32,12 +35,10 @@ class ValidatedUpload:
 
 
 class UploadValidator:
-    _allowed: ClassVar[dict[str, tuple[str, tuple[bytes, ...]]]] = {
+    _allowed: ClassVar[dict[str, tuple[str, tuple[bytes, ...] | None]]] = {
         ".pdf": ("application/pdf", (b"%PDF-",)),
-        ".pptx": (
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            (b"PK\x03\x04",),
-        ),
+        ".md": (MARKDOWN_MEDIA_TYPE, None),
+        ".markdown": (MARKDOWN_MEDIA_TYPE, None),
         ".png": ("image/png", (b"\x89PNG\r\n\x1a\n",)),
         ".jpg": ("image/jpeg", (b"\xff\xd8\xff",)),
         ".jpeg": ("image/jpeg", (b"\xff\xd8\xff",)),
@@ -55,7 +56,7 @@ class UploadValidator:
             len(payload),
             sha256(payload).hexdigest(),
         )
-        self._validate_magic(upload.media_type, payload)
+        self._validate_content(upload.media_type, payload)
         return upload
 
     def validate_declaration(
@@ -92,14 +93,19 @@ class UploadValidator:
         expected = self._allowed.get(extension)
         if expected is None:
             raise UploadRejected(
-                "unsupported file extension",
+                "仅支持 PDF、Markdown、JPG 和 PNG; PPTX、DOCX、TIFF 等请先转换为 PDF 或 Markdown。",
                 UploadRejectionReason.UNSUPPORTED_MEDIA_TYPE,
             )
         expected_type, _ = expected
         if content_type.lower().strip() != expected_type:
             raise UploadRejected(
-                "declared content type does not match extension",
+                f"文件类型声明与扩展名不匹配; {safe_name} 应使用 {expected_type}。",
                 UploadRejectionReason.UNSUPPORTED_MEDIA_TYPE,
+            )
+        if expected_type == MARKDOWN_MEDIA_TYPE and size_bytes > MAX_MARKDOWN_UPLOAD_BYTES:
+            raise UploadRejected(
+                "Markdown 单个文件不能超过 5 MB; 请拆分章节或转换为 PDF 后重新上传。",
+                UploadRejectionReason.TOO_LARGE,
             )
 
         normalized_sha256 = expected_sha256.lower().strip()
@@ -131,7 +137,7 @@ class UploadValidator:
             )
         if metadata.content_type.lower().strip() != upload.media_type:
             raise UploadRejected(
-                "stored object content type does not match the upload declaration",
+                "上传对象的内容类型与声明不一致; 请重新选择 PDF、Markdown、JPG 或 PNG 文件。",
                 UploadRejectionReason.UNSUPPORTED_MEDIA_TYPE,
             )
         if metadata.sha256 is None or metadata.sha256.lower() != upload.sha256:
@@ -139,17 +145,37 @@ class UploadValidator:
                 "stored object sha256 does not match the upload declaration",
                 UploadRejectionReason.HASH_MISMATCH,
             )
-        self._validate_magic(upload.media_type, prefix)
+        self._validate_content(upload.media_type, prefix)
 
     @classmethod
-    def _validate_magic(cls, media_type: str, prefix: bytes) -> None:
+    def _validate_content(cls, media_type: str, payload: bytes) -> None:
+        if media_type == MARKDOWN_MEDIA_TYPE:
+            if b"\x00" in payload:
+                raise UploadRejected(
+                    "Markdown 不能包含二进制 NUL 字节; 请另存为 UTF-8 Markdown 后重新上传。",
+                    UploadRejectionReason.UNSUPPORTED_MEDIA_TYPE,
+                )
+            try:
+                text = payload.decode("utf-8-sig")
+            except UnicodeDecodeError as exc:
+                raise UploadRejected(
+                    "Markdown 必须使用 UTF-8 编码; 请转换编码后重新上传。",
+                    UploadRejectionReason.UNSUPPORTED_MEDIA_TYPE,
+                ) from exc
+            if not text.strip():
+                raise UploadRejected(
+                    "Markdown 文件不能为空; 请补充正文后重新上传。",
+                    UploadRejectionReason.UNSUPPORTED_MEDIA_TYPE,
+                )
+            return
+
         signatures = next(
             signatures
             for expected_type, signatures in cls._allowed.values()
-            if expected_type == media_type
+            if expected_type == media_type and signatures is not None
         )
-        if not any(prefix.startswith(signature) for signature in signatures):
+        if not any(payload.startswith(signature) for signature in signatures):
             raise UploadRejected(
-                "file magic does not match declared type",
+                "文件内容与声明的类型不匹配; 请确认文件未损坏, 并转换为 PDF 或 Markdown 后重试。",
                 UploadRejectionReason.UNSUPPORTED_MEDIA_TYPE,
             )

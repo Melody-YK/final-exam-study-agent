@@ -49,6 +49,44 @@ class LocalReadTokenSigner:
         expected = self._signature(query_id, citation_id, expires)
         return hmac.compare_digest(signature, expected)
 
+    def sign_scoped(
+        self,
+        scope: str,
+        parent_id: str,
+        source_id: str,
+        *,
+        expires_at: datetime,
+    ) -> LocalReadGrant:
+        self._validate_scope(scope, parent_id, source_id)
+        if expires_at.tzinfo is None:
+            raise ValueError("local read expiry must be timezone-aware")
+        expires = int(expires_at.timestamp())
+        return LocalReadGrant(
+            expires=expires,
+            signature=self._scoped_signature(scope, parent_id, source_id, expires),
+        )
+
+    def verify_scoped(
+        self,
+        scope: str,
+        parent_id: str,
+        source_id: str,
+        *,
+        expires: int,
+        signature: str,
+        now: datetime,
+    ) -> bool:
+        try:
+            self._validate_scope(scope, parent_id, source_id)
+        except ValueError:
+            return False
+        if now.tzinfo is None or expires < 0 or expires < int(now.timestamp()):
+            return False
+        if len(signature) != 43:
+            return False
+        expected = self._scoped_signature(scope, parent_id, source_id, expires)
+        return hmac.compare_digest(signature, expected)
+
     def _signature(self, query_id: str, citation_id: str, expires: int) -> str:
         message = json.dumps(
             ["v1", query_id, citation_id, expires],
@@ -57,3 +95,23 @@ class LocalReadTokenSigner:
         ).encode("ascii")
         digest = hmac.new(self._key, message, hashlib.sha256).digest()
         return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+
+    def _scoped_signature(
+        self,
+        scope: str,
+        parent_id: str,
+        source_id: str,
+        expires: int,
+    ) -> str:
+        message = json.dumps(
+            ["v2", scope, parent_id, source_id, expires],
+            ensure_ascii=True,
+            separators=(",", ":"),
+        ).encode("ascii")
+        digest = hmac.new(self._key, message, hashlib.sha256).digest()
+        return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+
+    @staticmethod
+    def _validate_scope(scope: str, parent_id: str, source_id: str) -> None:
+        if not scope or not parent_id or not source_id:
+            raise ValueError("local read grant scope identifiers must not be empty")

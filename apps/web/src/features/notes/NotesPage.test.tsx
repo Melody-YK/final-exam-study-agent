@@ -1,9 +1,9 @@
-import { screen, waitFor } from '@testing-library/react'
+import { screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 import { ApiError, studyApi } from '../../api/client'
 import type { NoteBatchSnapshot, RuntimeCapabilities } from '../../api/types'
-import { documentRecord, noteRecord, problem } from '../../test/fixtures'
+import { documentRecord, noteRecord, problem, sourcePreview } from '../../test/fixtures'
 import { availableCapabilities, renderInWorkspace } from '../../test/render'
 import { NotesPage } from './NotesPage'
 
@@ -101,6 +101,80 @@ describe('NotesPage', () => {
     expect(screen.getByText('旧版本')).toBeInTheDocument()
     expect(screen.getByText('不可用 · SOURCE_DELETED')).toBeInTheDocument()
     expect(screen.getByText('deleted.pdf')).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: '查看原文' })).toHaveLength(1)
+  })
+
+  it('opens an active Markdown note source at its validated section', async () => {
+    const note = noteRecord({
+      sources: [
+        {
+          ...noteRecord().sources[0]!,
+          document_name: 'outline.md',
+          locator: { kind: 'section', ordinal: 2 },
+        },
+      ],
+    })
+    vi.spyOn(studyApi, 'listNotes').mockResolvedValue([note])
+    vi.spyOn(studyApi, 'getNoteSourcePreview').mockResolvedValue(
+      sourcePreview({
+        document_name: 'outline.md',
+        locator: { kind: 'section', ordinal: 2 },
+        section_path: ['进程管理', '调度'],
+        media_type: 'text/markdown',
+        read_url: '/api/v1/notes/note-1/sources/note-source-1/preview/content',
+      }),
+    )
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response('# 基础\n\n前一章。\n\n## 调度\n\n**就绪队列**', {
+          status: 200,
+          headers: { 'Content-Type': 'text/markdown' },
+        }),
+      ),
+    )
+    const { user } = renderInWorkspace(<NotesPage />)
+
+    await user.click(await screen.findByRole('button', { name: '查看原文' }))
+
+    expect(studyApi.getNoteSourcePreview).toHaveBeenCalledWith('note-1', 'note-source-1')
+    expect(await screen.findByRole('heading', { name: '调度' })).toBeInTheDocument()
+    expect(screen.getByText('就绪队列').tagName).toBe('STRONG')
+    expect(screen.queryByText('前一章。')).not.toBeInTheDocument()
+    expect(screen.getAllByText('进程管理 / 调度').length).toBeGreaterThan(0)
+  })
+
+  it('shows a preview failure beside the note source that was opened', async () => {
+    const firstSource = noteRecord().sources[0]!
+    const note = noteRecord({
+      sources: [
+        firstSource,
+        {
+          ...firstSource,
+          id: 'note-source-2',
+          document_name: 'legacy-slides.pptx',
+        },
+      ],
+    })
+    vi.spyOn(studyApi, 'listNotes').mockResolvedValue([note])
+    vi.spyOn(studyApi, 'getNoteSourcePreview').mockRejectedValue(
+      new ApiError(
+        problem({
+          title: 'PPTX 预览页不可用',
+          detail: '请先转换为 PDF 后重新上传。',
+        }),
+      ),
+    )
+    const { user } = renderInWorkspace(<NotesPage />)
+
+    const openButtons = await screen.findAllByRole('button', { name: '查看原文' })
+    await user.click(openButtons[1]!)
+
+    const alert = await screen.findByRole('alert')
+    const sourceItem = alert.closest('li')
+    expect(sourceItem).not.toBeNull()
+    expect(within(sourceItem!).getByText('legacy-slides.pptx')).toBeVisible()
+    expect(alert).toHaveTextContent('请先转换为 PDF 后重新上传。')
   })
 
   it('detects a version conflict and loads the latest server note', async () => {
@@ -150,16 +224,16 @@ describe('NotesPage', () => {
       body_markdown: '# 虚拟内存\n\n> 笔记模板: 考前速记\n\n生成后的正文。',
     })
     const readyPdf = documentRecord()
-    const readyPptx = documentRecord({
-      id: 'slides-ready',
-      filename: 'memory.pptx',
-      media_type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-      active_revision_id: 'revision-slides',
+    const readyMarkdown = documentRecord({
+      id: 'markdown-ready',
+      filename: 'memory.md',
+      media_type: 'text/markdown',
+      active_revision_id: 'revision-markdown',
     })
     vi.spyOn(studyApi, 'listNotes').mockResolvedValueOnce([]).mockResolvedValue([generated])
     vi.spyOn(studyApi, 'listDocuments').mockResolvedValue([
       readyPdf,
-      readyPptx,
+      readyMarkdown,
       documentRecord({ id: 'image-ready', filename: 'scan.png', media_type: 'image/png' }),
       documentRecord({ id: 'pdf-queued', filename: 'queued.pdf', status: 'queued' }),
       documentRecord({
@@ -195,7 +269,8 @@ describe('NotesPage', () => {
 
     await user.click(screen.getByRole('button', { name: '新建笔记' }))
     expect(await screen.findByText('chapter-1.pdf')).toBeInTheDocument()
-    expect(screen.getByText('memory.pptx')).toBeInTheDocument()
+    expect(screen.getByText('memory.md')).toBeInTheDocument()
+    expect(screen.getByText('已就绪的 PDF/Markdown')).toBeInTheDocument()
     expect(screen.queryByText('scan.png')).not.toBeInTheDocument()
     expect(screen.queryByText('queued.pdf')).not.toBeInTheDocument()
     expect(screen.queryByText('question-bank.pdf')).not.toBeInTheDocument()
@@ -210,7 +285,7 @@ describe('NotesPage', () => {
       expect(studyApi.createNoteBatch).toHaveBeenCalledWith('course-1', {
         schema_version: '1.0',
         mode: 'merged',
-        document_ids: ['document-1', 'slides-ready'],
+        document_ids: ['document-1', 'markdown-ready'],
         style: 'exam_focus',
         section_path: ['第二章', '内存'],
         title: '虚拟内存',
@@ -412,7 +487,7 @@ describe('NotesPage', () => {
     expect(screen.getByText('最短 · 最多 12 条')).toBeInTheDocument()
     expect(screen.getByText('定义、条件、区别和公式优先')).toBeInTheDocument()
     expect(screen.getByText('中等 · 最多 30 条')).toBeInTheDocument()
-    expect(screen.getByText('按资料和页码快速梳理层级')).toBeInTheDocument()
+    expect(screen.getByText('按资料和来源位置快速梳理层级')).toBeInTheDocument()
     expect(screen.getByText('最长 · 最多 40 条 / 12,000 字符')).toBeInTheDocument()
     expect(screen.getByText('按来源顺序保留完整上下文')).toBeInTheDocument()
 
@@ -422,9 +497,9 @@ describe('NotesPage', () => {
     expect(examSample.children).toHaveLength(3)
     expect(examSample).toHaveTextContent('资料名称• 高频定义或公式• 关键条件与区别')
     expect(outlineSample.children).toHaveLength(3)
-    expect(outlineSample).toHaveTextContent('1. 资料名称1.1 第 1 页1. 关键知识点')
+    expect(outlineSample).toHaveTextContent('1. 资料名称1.1 来源位置1. 关键知识点')
     expect(completeSample.children).toHaveLength(3)
-    expect(completeSample).toHaveTextContent('资料名称第 1 页来源正文段落')
+    expect(completeSample).toHaveTextContent('资料名称来源位置来源正文段落')
     expect(examSample).toHaveAttribute('aria-current', 'true')
     expect(outlineSample).not.toHaveAttribute('aria-current')
     expect(completeSample).not.toHaveAttribute('aria-current')

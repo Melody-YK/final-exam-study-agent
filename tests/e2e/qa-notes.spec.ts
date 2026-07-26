@@ -18,7 +18,7 @@ test('answered and abstained queries remain visibly distinct', async ({ page }) 
   await page.getByRole('button', { name: /进程页面\.png/ }).click()
   await expect(page.getByRole('dialog', { name: '来源' })).toBeVisible()
   await expect(page.getByText('引用原文')).toBeVisible()
-  await expect(page.getByRole('img', { name: '进程页面.png 页面 6' })).toBeVisible()
+  await expect(page.getByRole('img', { name: '进程页面.png 第 6 页' })).toBeVisible()
   await expect(page.locator('.bbox-highlight')).toHaveCount(1)
   await page.getByRole('button', { name: '关闭' }).click()
 
@@ -39,6 +39,23 @@ test('note conflict preserves the draft until the user reloads', async ({ page }
   await expect(editor).toHaveValue('# 本地草稿\n\n尚未覆盖服务器。')
   await page.getByRole('button', { name: '载入服务器版本' }).click()
   await expect(page.getByLabel('笔记阅读视图')).toContainText('服务器上的最新正文。')
+})
+
+test('note source opens only the requested Markdown section', async ({ page }) => {
+  await page.getByRole('link', { name: '笔记' }).first().click()
+  const sources = page.getByRole('complementary', { name: '笔记来源' })
+
+  await expect(sources.getByText('调度算法.md')).toBeVisible()
+  await expect(sources.getByText('章节 2')).toBeVisible()
+  await sources.getByRole('button', { name: '查看原文' }).click()
+
+  const viewer = page.getByRole('dialog', { name: '来源' })
+  await expect(viewer.getByRole('heading', { name: '进程调度' })).toBeVisible()
+  await expect(viewer).toContainText('调度算法 / 进程调度')
+  await expect(viewer).toContainText('就绪队列决定调度候选。')
+  await expect(viewer).not.toContainText('前一章节内容。')
+  await expect(viewer.getByRole('note')).toContainText('外部图片未加载：远程示意图')
+  await expect(viewer.getByRole('img')).toHaveCount(0)
 })
 
 test('ordinary workspace exposes the concept map instead of engineering trace', async ({ page }) => {

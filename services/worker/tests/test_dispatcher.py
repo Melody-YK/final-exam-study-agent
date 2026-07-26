@@ -92,6 +92,7 @@ def test_native_capabilities_do_not_advertise_ocr_or_rendering() -> None:
     assert capabilities.media_types == [
         "application/pdf",
         "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "text/markdown",
     ]
     assert capabilities.supports_ocr is False
     assert capabilities.supports_rendering is False

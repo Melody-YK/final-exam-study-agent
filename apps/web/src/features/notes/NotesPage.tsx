@@ -3,12 +3,12 @@ import {
   AlertTriangle,
   BookOpen,
   Check,
+  Eye,
   FileClock,
   FilePlus2,
   FileText,
   LoaderCircle,
   Pencil,
-  Presentation,
   RefreshCw,
   Save,
 } from 'lucide-react'
@@ -25,15 +25,17 @@ import type {
   NoteGenerationPhase,
   NoteItemSnapshot,
   NoteRecord,
+  SourcePreview,
 } from '../../api/types'
 import { useWorkspace } from '../../app/WorkspaceContext'
 import { ErrorNotice } from '../../components/ui/ErrorNotice'
 import { Modal } from '../../components/ui/Modal'
 import { PageHeader } from '../../components/ui/PageHeader'
 import { StatusBadge } from '../../components/ui/StatusBadge'
+import { SourceViewer } from '../source-viewer/SourceViewer'
+import { formatSourceLocator } from '../source-viewer/sourceLocator'
 
-const SUPPORTED_PPTX_MEDIA_TYPE =
-  'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+const MARKDOWN_MEDIA_TYPE = 'text/markdown'
 
 const TERMINAL_BATCH_STATUSES: NoteBatchStatus[] = [
   'partial_success',
@@ -62,15 +64,15 @@ const NOTE_STYLE_OPTIONS: ReadonlyArray<{
     value: 'outline',
     label: '结构提纲',
     density: '中等 · 最多 30 条',
-    intendedUse: '按资料和页码快速梳理层级',
-    structure: ['1. 资料名称', '1.1 第 1 页', '1. 关键知识点'],
+    intendedUse: '按资料和来源位置快速梳理层级',
+    structure: ['1. 资料名称', '1.1 来源位置', '1. 关键知识点'],
   },
   {
     value: 'complete',
     label: '完整讲义',
     density: '最长 · 最多 40 条 / 12,000 字符',
     intendedUse: '按来源顺序保留完整上下文',
-    structure: ['资料名称', '第 1 页', '来源正文段落'],
+    structure: ['资料名称', '来源位置', '来源正文段落'],
   },
 ]
 
@@ -85,17 +87,15 @@ function isNoteSourceDocument(document: DocumentRecord): boolean {
     !document.active_revision_id ||
     document.corpus_role !== 'corpus' ||
     document.indexable !== true ||
-    document.filename.toLowerCase().endsWith('.ppt')
+    /\.pptx?$/.test(document.filename.toLowerCase())
   ) {
     return false
   }
-  return (
-    document.media_type === 'application/pdf' || document.media_type === SUPPORTED_PPTX_MEDIA_TYPE
-  )
+  return document.media_type === 'application/pdf' || document.media_type === MARKDOWN_MEDIA_TYPE
 }
 
-function documentKind(document: DocumentRecord): 'PDF' | 'PPTX' {
-  return document.media_type === SUPPORTED_PPTX_MEDIA_TYPE ? 'PPTX' : 'PDF'
+function documentKind(document: DocumentRecord): 'PDF' | 'Markdown' {
+  return document.media_type === MARKDOWN_MEDIA_TYPE ? 'Markdown' : 'PDF'
 }
 
 function noteBatchStorageKey(courseId: string): string {
@@ -300,12 +300,12 @@ function CreateNoteDialog({
                 <span>
                   {activeSelectedIds.length} / {eligibleDocuments.length} 已选择
                 </span>
-                <span className="muted">已就绪的 PDF/PPTX</span>
+                <span className="muted">已就绪的 PDF/Markdown</span>
               </div>
               <div className="note-batch-documents__list">
                 {eligibleDocuments.map((document) => {
                   const checked = activeSelectedIds.includes(document.id)
-                  const isPptx = documentKind(document) === 'PPTX'
+                  const kind = documentKind(document)
                   return (
                     <label className="note-batch-document" key={document.id}>
                       <input
@@ -317,15 +317,12 @@ function CreateNoteDialog({
                       <span className="note-batch-document__check" aria-hidden="true">
                         {checked ? <Check size={14} /> : null}
                       </span>
-                      {isPptx ? (
-                        <Presentation aria-hidden="true" size={18} />
-                      ) : (
-                        <FileText aria-hidden="true" size={18} />
-                      )}
+                      <FileText aria-hidden="true" size={18} />
                       <span className="note-batch-document__details">
                         <strong>{document.filename}</strong>
                         <small>
-                          {documentKind(document)} · {document.page_count ?? '未知'} 页
+                          {kind} · {document.page_count ?? '未知'}{' '}
+                          {kind === 'Markdown' ? '个章节' : '页'}
                         </small>
                       </span>
                     </label>
@@ -643,45 +640,69 @@ function NoteBatchProgress({ batch }: { batch: NoteBatchSnapshot }) {
 
 function SourcesPanel({ note }: { note: NoteRecord }) {
   const hasUnavailableSource = note.sources.some((source) => !source.available || source.stale)
+  const [preview, setPreview] = useState<SourcePreview | null>(null)
+  const previewMutation = useMutation({
+    mutationFn: (sourceId: string) => studyApi.getNoteSourcePreview(note.id, sourceId),
+    onSuccess: setPreview,
+  })
 
   return (
-    <aside className="note-sources" aria-label="笔记来源">
-      <header>
-        <h3>来源</h3>
-        <StatusBadge tone={hasUnavailableSource ? 'warning' : 'success'}>
-          {note.sources.length} 条
-        </StatusBadge>
-      </header>
-      {note.sources.length ? (
-        <ol>
-          {note.sources.map((source) => (
-            <li key={source.id}>
-              <div>
-                <BookOpen aria-hidden="true" size={16} />
-                <span>
-                  <strong>{source.document_name}</strong>
-                  <small>
-                    {source.locator.kind === 'slide' ? '幻灯片' : '页'} {source.locator.ordinal}
-                  </small>
+    <>
+      <aside className="note-sources" aria-label="笔记来源">
+        <header>
+          <h3>来源</h3>
+          <StatusBadge tone={hasUnavailableSource ? 'warning' : 'success'}>
+            {note.sources.length} 条
+          </StatusBadge>
+        </header>
+        {note.sources.length ? (
+          <ol>
+            {note.sources.map((source) => (
+              <li key={source.id}>
+                <div>
+                  <BookOpen aria-hidden="true" size={16} />
+                  <span>
+                    <strong>{source.document_name}</strong>
+                    <small>{formatSourceLocator(source.locator)}</small>
+                  </span>
+                </div>
+                <blockquote>{source.quote}</blockquote>
+                <span
+                  className={`source-state source-state--${!source.available ? 'unavailable' : source.stale ? 'stale' : 'active'}`}
+                >
+                  {!source.available
+                    ? `不可用${source.unavailable_reason ? ` · ${source.unavailable_reason}` : ''}`
+                    : source.stale
+                      ? '旧版本'
+                      : '活动来源'}
                 </span>
-              </div>
-              <blockquote>{source.quote}</blockquote>
-              <span
-                className={`source-state source-state--${!source.available ? 'unavailable' : source.stale ? 'stale' : 'active'}`}
-              >
-                {!source.available
-                  ? `不可用${source.unavailable_reason ? ` · ${source.unavailable_reason}` : ''}`
-                  : source.stale
-                    ? '旧版本'
-                    : '活动来源'}
-              </span>
-            </li>
-          ))}
-        </ol>
-      ) : (
-        <p className="muted">无来源</p>
-      )}
-    </aside>
+                {source.available && !source.stale ? (
+                  <button
+                    className="button button--small note-source-open"
+                    disabled={previewMutation.isPending}
+                    onClick={() => previewMutation.mutate(source.id)}
+                    type="button"
+                  >
+                    {previewMutation.isPending && previewMutation.variables === source.id ? (
+                      <LoaderCircle aria-hidden="true" className="spin" size={14} />
+                    ) : (
+                      <Eye aria-hidden="true" size={14} />
+                    )}
+                    查看原文
+                  </button>
+                ) : null}
+                {previewMutation.isError && previewMutation.variables === source.id ? (
+                  <ErrorNotice error={previewMutation.error} title="原文不可用" />
+                ) : null}
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <p className="muted">无来源</p>
+        )}
+      </aside>
+      <SourceViewer onClose={() => setPreview(null)} source={preview} />
+    </>
   )
 }
 
@@ -934,7 +955,7 @@ export function NotesPage() {
                 regenerateLegacy.variables === selected.id)
             }
           />
-          <SourcesPanel note={selected} />
+          <SourcesPanel key={selected.id} note={selected} />
         </div>
       ) : (
         <section className="empty-state">

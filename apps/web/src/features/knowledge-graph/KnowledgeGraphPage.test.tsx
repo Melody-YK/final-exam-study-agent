@@ -3,6 +3,8 @@ import type { ReactNode } from 'react'
 import { useLocation } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { studyApi } from '../../api/client'
+import { sourcePreview } from '../../test/fixtures'
 import { renderInWorkspace } from '../../test/render'
 import {
   describeGraphRelationship,
@@ -125,7 +127,9 @@ function graphFixture(
             document_name: '01-process.pdf',
             revision_id: 'revision-1',
             chunk_id: 'revision-1:chunk:1',
+            locator_kind: 'page',
             page_ordinal: 1,
+            section_path: ['进程管理'],
             chunk_ordinal: 1,
             count: 2,
             excerpt: '进程是资源分配和调度的基本单位。',
@@ -369,6 +373,67 @@ describe('KnowledgeGraphPage', () => {
         },
       }),
     )
+  })
+
+  it('opens a Markdown occurrence with section-aware source positioning', async () => {
+    const graph = graphFixture()
+    const concept = graph.nodes.find((node) => node.kind === 'concept')
+    const occurrence = concept?.occurrences?.[0]
+    expect(occurrence).toBeDefined()
+    if (!occurrence) return
+    occurrence.locator_kind = 'section'
+    occurrence.page_ordinal = 2
+    occurrence.section_path = ['进程管理', '调度']
+    vi.spyOn(knowledgeGraphApi, 'getCourseKnowledgeGraph').mockResolvedValue(graph)
+    vi.spyOn(studyApi, 'getKnowledgeGraphSourcePreview').mockResolvedValue(
+      sourcePreview({
+        source_id: occurrence.chunk_id,
+        document_name: occurrence.document_name,
+        locator: { kind: 'section', ordinal: 2 },
+        section_path: occurrence.section_path,
+        media_type: 'text/markdown',
+        read_url: '/api/v1/courses/course-1/knowledge-graph/source/content',
+      }),
+    )
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response('# 基础\n\n前一章。\n\n## 调度\n\n就绪队列。', {
+          status: 200,
+          headers: { 'Content-Type': 'text/markdown' },
+        }),
+      ),
+    )
+    const { user } = renderInWorkspace(<KnowledgeGraphPage />)
+
+    await user.click(await screen.findByRole('button', { name: '查看概念：进程' }))
+    expect(screen.getByText(/进程管理 \/ 调度/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '查看原文' }))
+
+    expect(studyApi.getKnowledgeGraphSourcePreview).toHaveBeenCalledWith(
+      'course-1',
+      occurrence.revision_id,
+      occurrence.chunk_id,
+    )
+    expect(await screen.findByRole('heading', { name: '调度' })).toBeInTheDocument()
+    expect(screen.queryByText('前一章。')).not.toBeInTheDocument()
+  })
+
+  it('shows a preview failure beside the graph occurrence that was opened', async () => {
+    vi.spyOn(knowledgeGraphApi, 'getCourseKnowledgeGraph').mockResolvedValue(graphFixture())
+    vi.spyOn(studyApi, 'getKnowledgeGraphSourcePreview').mockRejectedValue(
+      new Error('请先转换为 PDF 后重新上传。'),
+    )
+    const { user } = renderInWorkspace(<KnowledgeGraphPage />)
+
+    await user.click(await screen.findByRole('button', { name: '查看概念：进程' }))
+    await user.click(screen.getByRole('button', { name: '查看原文' }))
+
+    const alert = await screen.findByRole('alert')
+    const occurrenceItem = alert.closest('li')
+    expect(occurrenceItem).not.toBeNull()
+    expect(within(occurrenceItem!).getByText('01-process.pdf')).toBeVisible()
+    expect(alert).toHaveTextContent('请先转换为 PDF 后重新上传。')
   })
 
   it('renders a source-aware empty state when no concepts qualify', async () => {

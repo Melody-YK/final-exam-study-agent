@@ -68,6 +68,7 @@ class RawBlock(RawModel):
     bbox: RawBoundingBox
     reading_order: int = Field(ge=0)
     confidence: float = Field(default=1.0, ge=0, le=1)
+    section_path: list[str] = Field(default_factory=list)
     metadata: dict[str, MetadataValue] = Field(default_factory=dict)
     artifact: RawArtifact | None = None
 
@@ -81,7 +82,7 @@ class RawPage(RawModel):
     ordinal: int = Field(ge=1)
     width: int = Field(gt=0)
     height: int = Field(gt=0)
-    source_kind: Literal["page", "slide"]
+    source_kind: Literal["page", "slide", "section"]
     native_text_present: bool
     blocks: list[RawBlock] = Field(default_factory=list)
     metadata: dict[str, MetadataValue] = Field(default_factory=dict)
@@ -103,6 +104,7 @@ class RawDocument(RawModel):
     document_sha256: Sha256Hex
     parser_profile: Literal["native-v1", "ocr-v1"] = "native-v1"
     source_backend: Literal[
+        "markdown-native",
         "pdf-native",
         "pptx-native",
         "paddleocr-general",
@@ -141,7 +143,9 @@ def normalize_page(
         block_id = f"{raw_page.source_kind}-{raw_page.ordinal}-block-{raw_block.reading_order}"
         if raw_block.type is BlockType.TITLE and raw_block.text:
             current_title_id = block_id
-            current_section = [raw_block.text]
+            current_section = list(raw_block.section_path) or [raw_block.text]
+        elif raw_block.section_path:
+            current_section = list(raw_block.section_path)
         parent_id = None if raw_block.type is BlockType.TITLE else current_title_id
         normalized_blocks.append(
             Block(

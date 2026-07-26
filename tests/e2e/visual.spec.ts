@@ -120,7 +120,7 @@ test('primary views stay nonblank and free of overflow or control overlap', asyn
   await verifyView(page, testInfo, 'qa')
 
   await page.getByRole('button', { name: /进程页面\.png/ }).click()
-  await expect(page.getByRole('img', { name: '进程页面.png 页面 6' })).toBeVisible()
+  await expect(page.getByRole('img', { name: '进程页面.png 第 6 页' })).toBeVisible()
   await verifyView(page, testInfo, 'source')
   await page.getByRole('button', { name: '关闭' }).click()
 

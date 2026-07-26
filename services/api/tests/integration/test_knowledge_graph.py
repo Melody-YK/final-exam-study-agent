@@ -156,6 +156,12 @@ async def test_knowledge_graph_is_traceable_bounded_and_deterministic(
         assert process.occurrence_count == 3
         assert [occurrence.count for occurrence in process.occurrences] == [2, 1, 1]
         assert [occurrence.page_ordinal for occurrence in process.occurrences] == [1, 1, 1]
+        assert [occurrence.locator_kind for occurrence in process.occurrences] == [
+            "page",
+            "page",
+            "page",
+        ]
+        assert process.occurrences[0].section_path == ("测试",)
         assert process.occurrences[0].document_name == "01-process.pdf"
         assert process.occurrences[0].revision_id
         assert process.occurrences[0].chunk_id

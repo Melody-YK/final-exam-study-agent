@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { answeredSnapshot, noteRecord, problem } from '../test/fixtures'
-import { documentRecord } from '../test/fixtures'
+import {
+  answeredSnapshot,
+  documentRecord,
+  noteRecord,
+  problem,
+  sourcePreview,
+} from '../test/fixtures'
 import type { NoteBatchSnapshot } from './types'
 import { StudyApiClient } from './client'
 
@@ -170,6 +175,29 @@ describe('StudyApiClient', () => {
     )
   })
 
+  it('uses the generated note and knowledge-graph source preview routes', async () => {
+    const preview = sourcePreview()
+    const fetchMock = vi.fn().mockImplementation(
+      async () =>
+        new Response(JSON.stringify(preview), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const client = new StudyApiClient('/api/v1')
+
+    await expect(client.getNoteSourcePreview('note/1', 'source/1')).resolves.toEqual(preview)
+    await expect(
+      client.getKnowledgeGraphSourcePreview('course/1', 'revision/1', 'chunk/1'),
+    ).resolves.toEqual(preview)
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      '/api/v1/notes/note%2F1/sources/source%2F1/preview',
+      '/api/v1/courses/course%2F1/knowledge-graph/sources/revision%2F1/chunk%2F1/preview',
+    ])
+  })
+
   it('hashes and completes the browser upload sequence without bypassing the API', async () => {
     const digest = new Uint8Array(32).fill(0xab).buffer
     vi.stubGlobal('crypto', {
@@ -236,6 +264,57 @@ describe('StudyApiClient', () => {
       upload_session_id: 'upload-1',
     })
     expect(progress.mock.calls.map(([value]) => value)).toEqual([8, 24, 82, 100])
+  })
+
+  it('normalizes an untyped Markdown file to the backend media contract', async () => {
+    const digest = new Uint8Array(32).fill(0xcd).buffer
+    vi.stubGlobal('crypto', {
+      randomUUID: () => 'uuid-1',
+      subtle: { digest: vi.fn().mockResolvedValue(digest) },
+    })
+    const file = new File(['# 复习提纲'], 'outline.markdown')
+    Object.defineProperty(file, 'arrayBuffer', {
+      value: vi.fn().mockResolvedValue(new TextEncoder().encode('# 复习提纲').buffer),
+    })
+    const created = {
+      document: documentRecord({ id: 'markdown-upload', media_type: 'text/markdown' }),
+      upload: {
+        id: 'upload-markdown',
+        url: '/api/v1/uploads/upload-markdown',
+        expires_at: '2099-01-01T00:00:00Z',
+      },
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(created), {
+          status: 201,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ upload_session_id: 'upload-markdown', status: 'uploaded' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(created.document), {
+          status: 202,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await new StudyApiClient('/api/v1').uploadDocument('course-1', file, 'corpus')
+
+    const createInit = fetchMock.mock.calls[0]?.[1] as RequestInit
+    const uploadInit = fetchMock.mock.calls[1]?.[1] as RequestInit
+    expect(JSON.parse(String(createInit.body))).toMatchObject({
+      filename: 'outline.markdown',
+      media_type: 'text/markdown',
+    })
+    expect(new Headers(uploadInit.headers).get('Content-Type')).toBe('text/markdown')
   })
 
   it('sends the optimistic note version in If-Match', async () => {

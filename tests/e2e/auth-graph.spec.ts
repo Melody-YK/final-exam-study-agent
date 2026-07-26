@@ -216,16 +216,22 @@ test('concept map focuses relationships and prepares a fresh QA draft', async ({
   const details = page.getByRole('complementary', { name: '节点详情' })
   await expect(details.getByRole('heading', { name: '进程' })).toBeVisible()
   await expect(
-    details.getByText('资料“进程与线程.pdf”包含概念“进程”9 次。'),
+    details.getByText('资料“调度算法.md”包含概念“进程”9 次。'),
   ).toBeVisible()
   await expect(
     details.getByText('概念“进程”和“调度”共同出现在 4 个内容片段中。'),
   ).toBeVisible()
-  await expect(details.getByText('进程与线程.pdf', { exact: true })).toBeVisible()
-  await expect(details.getByText(/第 6 页/)).toBeVisible()
+  await expect(details.getByText('调度算法.md', { exact: true })).toBeVisible()
+  await expect(details.getByText(/调度算法 \/ 进程调度/)).toBeVisible()
   await expect(details.getByText('进程是资源分配的基本单位，线程是调度的基本单位。')).toBeVisible()
   await expect(page.getByText('Tokenizer')).toHaveCount(0)
   await expect(page.getByText(/Chunk/)).toHaveCount(0)
+
+  await details.getByRole('button', { name: '查看原文' }).click()
+  const sourceViewer = page.getByRole('dialog', { name: '来源' })
+  await expect(sourceViewer.getByRole('heading', { name: '进程调度' })).toBeVisible()
+  await expect(sourceViewer).not.toContainText('前一章节内容。')
+  await sourceViewer.getByRole('button', { name: '关闭' }).click()
 
   await page.getByRole('button', { name: '仅看关联' }).click()
   await expect(page.locator('.knowledge-node')).toHaveCount(3)

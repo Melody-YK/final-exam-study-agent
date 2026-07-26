@@ -26,6 +26,7 @@ import { ErrorNotice } from '../../components/ui/ErrorNotice'
 import { PageHeader } from '../../components/ui/PageHeader'
 import { StatusBadge } from '../../components/ui/StatusBadge'
 import { SourceViewer } from '../source-viewer/SourceViewer'
+import { formatSourceLocator } from '../source-viewer/sourceLocator'
 import {
   isTerminal,
   queryRefetchInterval,
@@ -63,9 +64,7 @@ function CitationButton({ citation, onOpen }: { citation: Citation; onOpen: () =
   return (
     <button className="citation-button" onClick={onOpen} type="button">
       <span>{citation.document_name}</span>
-      <small>
-        {citation.locator.kind === 'slide' ? '幻灯片' : '页'} {citation.locator.ordinal}
-      </small>
+      <small>{formatSourceLocator(citation.locator)}</small>
       <ExternalLink aria-hidden="true" size={14} />
     </button>
   )

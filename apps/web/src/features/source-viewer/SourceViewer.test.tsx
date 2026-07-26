@@ -1,5 +1,5 @@
 import { fireEvent, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { CitationSource } from '../../api/types'
 import { citationSource } from '../../test/fixtures'
@@ -7,6 +7,8 @@ import { renderInWorkspace } from '../../test/render'
 import { SourceViewer } from './SourceViewer'
 
 describe('SourceViewer', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
   it('does not render source media or quoted content after the read URL expires', () => {
     renderInWorkspace(
       <SourceViewer
@@ -80,5 +82,164 @@ describe('SourceViewer', () => {
       height: '15%',
     })
     expect(screen.getByText('幻灯片 7')).toBeInTheDocument()
+  })
+
+  it('renders only the requested Markdown section without HTML or remote images', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        [
+          '# 第一章',
+          '',
+          '前一章内容。',
+          '',
+          '## 进程',
+          '',
+          '**重点内容**',
+          '',
+          '<script data-testid="unsafe">alert(1)</script>',
+          '',
+          '![远程结构图](https://example.com/graph.png)',
+        ].join('\n'),
+        { status: 200, headers: { 'Content-Type': 'text/markdown' } },
+      ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderInWorkspace(
+      <SourceViewer
+        onClose={() => undefined}
+        source={citationSource({
+          document_name: 'outline.md',
+          locator: { kind: 'section', ordinal: 2 },
+          media_type: 'text/markdown',
+          read_url: '/api/v1/queries/query-1/citations/citation-1/content',
+        })}
+      />,
+    )
+
+    expect(await screen.findByRole('heading', { name: '进程' })).toBeInTheDocument()
+    expect(screen.getByText('重点内容').tagName).toBe('STRONG')
+    expect(screen.queryByText('前一章内容。')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('unsafe')).not.toBeInTheDocument()
+    expect(screen.getByRole('note')).toHaveTextContent('外部图片未加载：远程结构图')
+    expect(screen.queryByRole('img')).not.toBeInTheDocument()
+    expect(screen.getByText('章节 2')).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/queries/query-1/citations/citation-1/content',
+      expect.objectContaining({
+        credentials: 'include',
+        headers: { Accept: 'text/markdown' },
+      }),
+    )
+  })
+
+  it('keeps Markdown ordinals aligned when ignored preamble syntax precedes a heading', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response('---\n\n# 第一章\n\n正文。', {
+          status: 200,
+          headers: { 'Content-Type': 'text/markdown' },
+        }),
+      ),
+    )
+
+    renderInWorkspace(
+      <SourceViewer
+        onClose={() => undefined}
+        source={citationSource({
+          document_name: 'outline.md',
+          locator: { kind: 'section', ordinal: 1 },
+          media_type: 'text/markdown',
+          read_url: '/api/v1/queries/query-1/citations/citation-1/content',
+        })}
+      />,
+    )
+
+    expect(await screen.findByRole('heading', { name: '第一章' })).toBeInTheDocument()
+    expect(screen.getByText('正文。')).toBeInTheDocument()
+  })
+
+  it('counts raw HTML as source text without rendering it', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response('<div>ignored</div>\n\n# 第一章\n\n正文。', {
+          status: 200,
+          headers: { 'Content-Type': 'text/markdown' },
+        }),
+      ),
+    )
+
+    renderInWorkspace(
+      <SourceViewer
+        onClose={() => undefined}
+        source={citationSource({
+          document_name: 'outline.md',
+          locator: { kind: 'section', ordinal: 2 },
+          media_type: 'text/markdown',
+          read_url: '/api/v1/queries/query-1/citations/citation-1/content',
+        })}
+      />,
+    )
+
+    expect(await screen.findByRole('heading', { name: '第一章' })).toBeInTheDocument()
+    expect(screen.getByText('正文。')).toBeInTheDocument()
+    expect(screen.queryByText('ignored')).not.toBeInTheDocument()
+  })
+
+  it('counts image alt text when selecting a later Markdown section', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response('![结构图](https://example.com/graph.png)\n\n# 第一章\n\n正文。', {
+          status: 200,
+          headers: { 'Content-Type': 'text/markdown' },
+        }),
+      ),
+    )
+
+    renderInWorkspace(
+      <SourceViewer
+        onClose={() => undefined}
+        source={citationSource({
+          document_name: 'outline.md',
+          locator: { kind: 'section', ordinal: 2 },
+          media_type: 'text/markdown',
+          read_url: '/api/v1/queries/query-1/citations/citation-1/content',
+        })}
+      />,
+    )
+
+    expect(await screen.findByRole('heading', { name: '第一章' })).toBeInTheDocument()
+    expect(screen.getByText('正文。')).toBeInTheDocument()
+    expect(screen.queryByRole('note')).not.toBeInTheDocument()
+  })
+
+  it('fails closed when a Markdown section ordinal is out of range', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response('# 第一章\n\n正文。', {
+          status: 200,
+          headers: { 'Content-Type': 'text/markdown' },
+        }),
+      ),
+    )
+
+    renderInWorkspace(
+      <SourceViewer
+        onClose={() => undefined}
+        source={citationSource({
+          document_name: 'outline.md',
+          locator: { kind: 'section', ordinal: 3 },
+          media_type: 'text/markdown',
+          read_url: '/api/v1/queries/query-1/citations/citation-1/content',
+        })}
+      />,
+    )
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Markdown 章节定位已失效')
+    expect(screen.queryByText('正文。')).not.toBeInTheDocument()
   })
 })

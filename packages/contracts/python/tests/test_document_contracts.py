@@ -7,6 +7,7 @@ from study_contracts.documents import (
     BoundingBox,
     Page,
     ParseResultManifest,
+    SourceLocator,
 )
 
 
@@ -43,6 +44,13 @@ def test_parse_manifest_round_trips_with_normalized_source_metadata() -> None:
 
     assert restored == manifest
     assert restored.schema_version == "1.0"
+
+
+def test_source_locator_accepts_markdown_section() -> None:
+    locator = SourceLocator(kind="section", ordinal=3)
+
+    assert locator.kind == "section"
+    assert locator.ordinal == 3
 
 
 @pytest.mark.parametrize(

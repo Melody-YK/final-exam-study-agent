@@ -142,13 +142,13 @@ describe('LibraryPage', () => {
     await expectReadinessCount('需要处理', 3)
   })
 
-  it('links ready PDF and modern PPTX sources to every available study workflow', async () => {
+  it('links ready PDF and Markdown sources to every available study workflow', async () => {
     vi.spyOn(studyApi, 'listDocuments').mockResolvedValue([
       documentRecord({ id: 'pdf-source' }),
       documentRecord({
-        id: 'pptx-source',
-        filename: 'scheduler.pptx',
-        media_type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        id: 'markdown-source',
+        filename: 'scheduler.md',
+        media_type: 'text/markdown',
       }),
     ])
 

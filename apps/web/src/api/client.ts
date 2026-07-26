@@ -35,6 +35,7 @@ import type {
   QuerySnapshot,
   RegisterRequest,
   RuntimeCapabilities,
+  SourcePreview,
   UploadCompleteRequest,
 } from './types'
 
@@ -109,6 +110,21 @@ function idempotencyKey(prefix: string): string {
   return `${prefix}-${crypto.randomUUID()}`
 }
 
+const uploadMediaTypes: Readonly<Record<string, string>> = {
+  pdf: 'application/pdf',
+  md: 'text/markdown',
+  markdown: 'text/markdown',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+}
+
+function uploadMediaType(file: File): string {
+  const separator = file.name.lastIndexOf('.')
+  const extension = separator < 0 ? '' : file.name.slice(separator + 1).toLowerCase()
+  return uploadMediaTypes[extension] ?? (file.type || 'application/octet-stream')
+}
+
 function jsonBody<T>(body: T): string {
   return JSON.stringify(body)
 }
@@ -161,13 +177,14 @@ export class StudyApiClient {
     signal?: AbortSignal,
   ): Promise<DocumentRecord> {
     const digest = await sha256File(file)
+    const mediaType = uploadMediaType(file)
     onProgress?.(8)
     const created = await this.request<DocumentUploadCreated>(`/courses/${courseId}/documents`, {
       method: 'POST',
       signal,
       body: jsonBody<DocumentCreate>({
         filename: file.name,
-        media_type: file.type || 'application/octet-stream',
+        media_type: mediaType,
         size_bytes: file.size,
         sha256: digest,
         corpus_role: corpusRole,
@@ -176,7 +193,7 @@ export class StudyApiClient {
     onProgress?.(24)
     const uploadResponse = await fetch(created.upload.url, {
       method: 'PUT',
-      headers: { 'Content-Type': file.type || 'application/octet-stream' },
+      headers: { 'Content-Type': mediaType },
       body: file,
       signal,
     })
@@ -339,6 +356,22 @@ export class StudyApiClient {
 
   getCitation(queryId: string, citationId: string): Promise<CitationSource> {
     return this.request(`/queries/${queryId}/citations/${citationId}`)
+  }
+
+  getNoteSourcePreview(noteId: string, sourceId: string): Promise<SourcePreview> {
+    return this.request(
+      `/notes/${encodeURIComponent(noteId)}/sources/${encodeURIComponent(sourceId)}/preview`,
+    )
+  }
+
+  getKnowledgeGraphSourcePreview(
+    courseId: string,
+    revisionId: string,
+    chunkId: string,
+  ): Promise<SourcePreview> {
+    return this.request(
+      `/courses/${encodeURIComponent(courseId)}/knowledge-graph/sources/${encodeURIComponent(revisionId)}/${encodeURIComponent(chunkId)}/preview`,
+    )
   }
 
   listNotes(courseId: string): Promise<NoteRecord[]> {

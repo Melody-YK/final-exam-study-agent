@@ -251,11 +251,36 @@ describe('QAPage', () => {
 
     const dialog = await screen.findByRole('dialog', { name: '来源' })
     expect(dialog).toHaveTextContent('进程拥有独立的地址空间。')
-    const image = screen.getByRole('img', { name: /chapter-1\.png 页面 3/ })
+    const image = screen.getByRole('img', { name: /chapter-1\.png 第 3 页/ })
     fireEvent.load(image)
     const highlight = container.querySelector('.bbox-highlight')
     expect(highlight).toHaveStyle({ left: '10%', top: '20%', width: '40%', height: '8%' })
     expect(studyApi.getCitation).toHaveBeenCalledWith('query-1', 'citation-1')
+  })
+
+  it('labels Markdown citations as sections instead of pages', async () => {
+    const snapshot = answeredSnapshot()
+    const sourceCitation = snapshot.answer?.citations[0]
+    if (!sourceCitation) throw new Error('answered fixture must include a citation')
+    const markdownCitation = {
+      ...sourceCitation,
+      document_name: 'outline.md',
+      locator: { kind: 'section' as const, ordinal: 2 },
+    }
+    vi.spyOn(studyApi, 'createQuery').mockResolvedValue({
+      ...snapshot,
+      answer: {
+        ...snapshot.answer!,
+        citations: [markdownCitation],
+      },
+    })
+    renderInWorkspace(<QAPage />)
+
+    await submitQuestion()
+
+    const citationButton = await screen.findByRole('button', { name: /outline\.md/ })
+    expect(citationButton).toHaveTextContent('章节 2')
+    expect(citationButton).not.toHaveTextContent('页 2')
   })
 
   it('shows migrated questions as one chronological thread and restores it after remount', async () => {

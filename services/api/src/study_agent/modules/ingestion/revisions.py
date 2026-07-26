@@ -287,6 +287,7 @@ class RevisionService:
         if attempt.parser_profile != job.parser_profile or attempt.schema_version != "1.0":
             raise self._invalid_schema("attempt parser profile 或 schema 不受支持。")
         native_backend = {
+            "text/markdown": "markdown-native",
             "application/pdf": "pdf-native",
             "application/vnd.openxmlformats-officedocument.presentationml.presentation": (
                 "pptx-native"

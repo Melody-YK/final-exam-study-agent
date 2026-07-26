@@ -15,6 +15,7 @@ NATIVE_PROFILE = "native-v1"
 NATIVE_MEDIA_TYPES = (
     "application/pdf",
     "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "text/markdown",
 )
 OCR_MEDIA_TYPES = (
     "application/pdf",

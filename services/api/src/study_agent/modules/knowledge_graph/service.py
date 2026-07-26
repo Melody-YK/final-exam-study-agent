@@ -134,7 +134,9 @@ class KnowledgeGraphOccurrence:
     document_name: str
     revision_id: str
     chunk_id: str
+    locator_kind: str
     page_ordinal: int
+    section_path: tuple[str, ...]
     chunk_ordinal: int
     count: int
     excerpt: str
@@ -344,7 +346,9 @@ class KnowledgeGraphService:
                         document_name=document.filename,
                         revision_id=document.revision_id,
                         chunk_id=chunk.id,
+                        locator_kind=chunk.locator_kind,
                         page_ordinal=chunk.page_ordinal,
+                        section_path=tuple(chunk.section_path),
                         chunk_ordinal=chunk.ordinal,
                         count=count,
                         excerpt=_excerpt(chunk.text, concept),

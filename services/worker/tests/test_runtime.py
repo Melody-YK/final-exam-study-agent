@@ -233,6 +233,42 @@ async def test_native_handler_packages_only_requested_pdf_page(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
+async def test_native_handler_packages_markdown_sections_through_installed_subprocess(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "outline.md"
+    source.write_text(
+        "# 操作系统\n\n课程介绍。\n\n## 进程\n\n进程是资源分配单位。\n",
+        encoding="utf-8",
+    )
+
+    result, reporter = await _run_handler(tmp_path, source, media_type="text/markdown")
+
+    assert result.page_count == 2
+    assert result.failed_pages == ()
+    assert [upload.name for upload in reporter.uploads] == [
+        "raw-page-000001.json",
+        "page-000001.json",
+        "raw-page-000002.json",
+        "page-000002.json",
+        "parse-result.json",
+    ]
+    first_page = Page.model_validate(_assert_canonical(_upload(reporter, "page-000001.json")))
+    second_page = Page.model_validate(_assert_canonical(_upload(reporter, "page-000002.json")))
+    attempt = ParseAttemptResult.model_validate(
+        _assert_canonical(_upload(reporter, "parse-result.json"))
+    )
+    assert first_page.source_kind == "section"
+    assert first_page.blocks[0].section_path == ["操作系统"]
+    assert second_page.source_kind == "section"
+    assert second_page.blocks[0].section_path == ["操作系统", "进程"]
+    assert attempt.source_backend == "markdown-native"
+    assert attempt.requested_page_ordinals == [1, 2]
+    assert attempt.covered_page_ordinals == [1, 2]
+    assert [page.ordinal for page in attempt.pages] == [1, 2]
+
+
+@pytest.mark.asyncio
 async def test_native_handler_parses_pptx_without_libreoffice(tmp_path: Path) -> None:
     fixture = build_documents(tmp_path / "fixtures").pptx
     assert _settings(tmp_path).soffice_bin is None

@@ -24,8 +24,7 @@ import { UploadDialog } from './UploadDialog'
 import { useJobEvents } from './useJobEvents'
 import './library-actions.css'
 
-const SUPPORTED_PPTX_MEDIA_TYPE =
-  'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+const MARKDOWN_MEDIA_TYPE = 'text/markdown'
 const FAILURE_STATUSES = new Set(['partial_failed', 'failed', 'retry_wait'])
 
 type ReadinessBucket = 'ready' | 'review' | 'preparing' | 'attention'
@@ -54,9 +53,8 @@ function isNoteReadyDocument(document: DocumentRecord): boolean {
   return (
     isStudyReadyDocument(document) &&
     document.corpus_role === 'corpus' &&
-    !document.filename.toLowerCase().endsWith('.ppt') &&
-    (document.media_type === 'application/pdf' ||
-      document.media_type === SUPPORTED_PPTX_MEDIA_TYPE)
+    !/\.pptx?$/.test(document.filename.toLowerCase()) &&
+    (document.media_type === 'application/pdf' || document.media_type === MARKDOWN_MEDIA_TYPE)
   )
 }
 

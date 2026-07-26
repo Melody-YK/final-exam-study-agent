@@ -39,6 +39,7 @@ from study_agent.providers.protocols import Clock
 from study_contracts import NoteBatchStyle
 
 _PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+_MARKDOWN = "text/markdown"
 _EXAM_POINTS_PER_PAGE = 2
 _EXAM_POINTS_PER_NOTE = 12
 _EXAM_EXCERPT_CHARS = 96
@@ -88,6 +89,8 @@ class _SourceChunk:
     text: str
     page_ordinal: int
     content_sha256: str
+    locator_kind: str = "page"
+    section_path: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -500,7 +503,13 @@ class DemoNoteRunner:
                     chunk_id=chunk.id,
                     ordinal=chunk.ordinal,
                     text=chunk.text,
+                    locator_kind=(
+                        "section"
+                        if input_row.media_type == _MARKDOWN
+                        else ("slide" if input_row.media_type == _PPTX else chunk.locator_kind)
+                    ),
                     page_ordinal=chunk.page_ordinal,
+                    section_path=tuple(chunk.section_path),
                     content_sha256=chunk.content_sha256,
                 )
                 for input_row in inputs
@@ -711,7 +720,7 @@ class DemoNoteRunner:
                         document_deletion_epoch=chunk.deletion_epoch,
                         content_sha256=_valid_hash(chunk.content_sha256, chunk.chunk_id),
                         locator={
-                            "kind": ("slide" if chunk.media_type == _PPTX else "page"),
+                            "kind": chunk.locator_kind,
                             "ordinal": chunk.page_ordinal,
                         },
                         quote=chunk.text.strip(),
@@ -1139,11 +1148,15 @@ def _render_demo_note(material: _Material) -> _RenderedNote:
             current_page = page_key
             if material.style is not NoteBatchStyle.EXAM_FOCUS:
                 page_index += 1
-                page_label = (
-                    f"幻灯片 {chunk.page_ordinal}"
-                    if chunk.media_type == _PPTX
-                    else f"第 {chunk.page_ordinal} 页"
-                )
+                if chunk.media_type == _PPTX:
+                    page_label = f"幻灯片 {chunk.page_ordinal}"
+                elif chunk.media_type == _MARKDOWN:
+                    section_label = " / ".join(chunk.section_path)
+                    page_label = (
+                        f"章节: {section_label}" if section_label else f"章节 {chunk.page_ordinal}"
+                    )
+                else:
+                    page_label = f"第 {chunk.page_ordinal} 页"
                 if material.style is NoteBatchStyle.OUTLINE:
                     page_label = f"{document_index}.{chunk.page_ordinal} {page_label}"
                 lines.extend([f"### {page_label}", ""])

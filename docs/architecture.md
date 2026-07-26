@@ -29,7 +29,7 @@ Compose 只负责 PostgreSQL/pgvector；API、Runner、Worker 和 Web 在本地 
 
 ## Worker 与 OCR
 
-默认 Worker 只包含原生 PDF/PPTX 解析。Paddle 位于独立 profile，capability probe 不下载或初始化模型；操作员必须对每个后端显式 `warmup`，并在真实自制页通过严格 Adapter 后写入独立 readiness marker。缺少包、平台、cache 或 marker 时 fail closed。General OCR 成功不代表 PP-StructureV3、MinerU 或付费 OCR 可用。私有 OCR 输入只在本机授权 smoke 中处理，原文件不复制到仓库，聚合报告不保留原文或源路径。
+默认 Worker 包含原生 PDF、Markdown 解析，并保留历史 PPTX 记录的解析兼容；新上传不接受 PPT/PPTX。Paddle 位于独立 profile，capability probe 不下载或初始化模型；操作员必须对每个后端显式 `warmup`，并在真实自制页通过严格 Adapter 后写入独立 readiness marker。缺少包、平台、cache 或 marker 时 fail closed。General OCR 成功不代表 PP-StructureV3、MinerU 或付费 OCR 可用。私有 OCR 输入只在本机授权 smoke 中处理，原文件不复制到仓库，聚合报告不保留原文或源路径。
 
 ## 删除和授权
 

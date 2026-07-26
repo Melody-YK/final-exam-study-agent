@@ -102,6 +102,8 @@ def _provider_registry_without_upstream() -> ProviderRegistry:
 async def _seed_ready_documents(
     database: Database,
     principal: Principal,
+    *,
+    second_media_type: str = "text/markdown",
 ) -> tuple[str, tuple[str, str]]:
     course = await CourseRepository(database).create(principal, "本地笔记演示")
     document_ids: list[str] = []
@@ -120,17 +122,38 @@ async def _seed_ready_documents(
             )
             document = await session.get(DocumentModel, seeded.document_id)
             assert document is not None
-            media_type = (
-                "application/pdf"
-                if ordinal == 1
-                else "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-            )
-            document.filename = f"chapter-{ordinal}.{'pdf' if ordinal == 1 else 'pptx'}"
+            media_type = "application/pdf" if ordinal == 1 else second_media_type
+            suffix = {
+                "application/pdf": "pdf",
+                "text/markdown": "md",
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation": (
+                    "pptx"
+                ),
+            }[media_type]
+            document.filename = f"chapter-{ordinal}.{suffix}"
             document.media_type = media_type
             document.status = "ready"
             stored_object = await session.get(StoredObjectModel, document.stored_object_id)
             assert stored_object is not None
             stored_object.media_type = media_type
+            if media_type == "text/markdown":
+                page = await session.scalar(
+                    select(RevisionPageModel).where(
+                        RevisionPageModel.revision_id == seeded.revision_id
+                    )
+                )
+                chunks = list(
+                    await session.scalars(
+                        select(RevisionChunkModel).where(
+                            RevisionChunkModel.revision_id == seeded.revision_id
+                        )
+                    )
+                )
+                assert page is not None
+                page.source_kind = "section"
+                for chunk in chunks:
+                    chunk.locator_kind = "section"
+                    chunk.section_path = ["临界区"]
             document_ids.append(document.id)
     return course.id, (document_ids[0], document_ids[1])
 
@@ -402,13 +425,22 @@ async def test_note_batch_demo_runs_without_providers_and_persists_preview(
             assert note["generated_by_model"] is False
             body_markdown = note["body_markdown"]
             assert "## chapter-1.pdf" in body_markdown
-            assert "## chapter-2.pptx" in body_markdown
+            assert "## chapter-2.md" in body_markdown
             assert not any(line.startswith("### ") for line in body_markdown.splitlines())
             assert "Source-derived local demo note" not in body_markdown
             assert "进程是操作系统进行资源分配的基本单位" in body_markdown
             assert "临界区需要互斥访问共享资源" in body_markdown
             assert len(note["sources"]) == 2
             assert all(source["chunk_id"] not in body_markdown for source in note["sources"])
+            markdown_sources = [
+                source for source in note["sources"] if source["document_id"] == document_ids[1]
+            ]
+            assert [source["locator"]["kind"] for source in markdown_sources] == ["section"]
+            coverage_types = {unit["unit_type"] for unit in completed_body["coverage_units"]}
+            assert coverage_types == {"pdf_page_window", "pdf_section"}
+            assert any(
+                unit["locator"].startswith("section:") for unit in completed_body["coverage_units"]
+            )
 
             replay = await client.post(
                 f"/api/v1/courses/{course_id}/note-batches",
@@ -733,6 +765,116 @@ async def test_note_batch_style_database_constraint_rejects_invalid_value(
                 await session.flush()
             await session.rollback()
     finally:
+        await database.dispose()
+
+
+@pytest.mark.integration
+async def test_note_batch_rejects_legacy_pptx_and_other_non_note_formats(
+    test_database_url: str,
+    tmp_path: Path,
+) -> None:
+    await upgrade_database(test_database_url)
+    database = Database(test_database_url)
+    principal = Principal(
+        subject="note-demo-format-policy",
+        authentication_method=AuthenticationMethod.LOCAL,
+    )
+    pptx_media_type = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    course_id, document_ids = await _seed_ready_documents(
+        database,
+        principal,
+        second_media_type=pptx_media_type,
+    )
+    app = create_app(
+        settings=_settings(test_database_url, tmp_path),
+        database=database,
+        storage=LocalStorage(tmp_path),
+        principal_provider=StaticPrincipalProvider(principal),
+        provider_registry=_provider_registry_without_upstream(),
+    )
+    payload = {"mode": "merged", "document_ids": [document_ids[1]]}
+
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://testserver"
+        ) as client:
+            pptx_rejected = await client.post(
+                f"/api/v1/courses/{course_id}/note-batches",
+                headers={"Idempotency-Key": "reject-legacy-pptx"},
+                json=payload,
+            )
+            assert pptx_rejected.status_code == 415
+            assert pptx_rejected.json()["code"] == "UNSUPPORTED_MEDIA_TYPE"
+            assert "PPT/PPTX" in pptx_rejected.json()["detail"]
+            assert "PDF 或 Markdown" in pptx_rejected.json()["detail"]
+
+            async with database.session(principal) as session:
+                document = await session.get(DocumentModel, document_ids[1])
+                assert document is not None
+                assert document.media_type == pptx_media_type
+                document.filename = "chapter-2.png"
+                document.media_type = "image/png"
+
+            image_rejected = await client.post(
+                f"/api/v1/courses/{course_id}/note-batches",
+                headers={"Idempotency-Key": "reject-image-note"},
+                json=payload,
+            )
+            assert image_rejected.status_code == 415
+            assert image_rejected.json()["code"] == "UNSUPPORTED_MEDIA_TYPE"
+            assert "仅支持使用 PDF 和 Markdown" in image_rejected.json()["detail"]
+    finally:
+        await database.dispose()
+
+
+@pytest.mark.integration
+async def test_markdown_note_uses_section_locators_and_labels(
+    test_database_url: str,
+    tmp_path: Path,
+) -> None:
+    await upgrade_database(test_database_url)
+    database = Database(test_database_url)
+    principal = Principal(
+        subject="note-demo-markdown-sections",
+        authentication_method=AuthenticationMethod.LOCAL,
+    )
+    course_id, document_ids = await _seed_ready_documents(database, principal)
+    settings = _settings(test_database_url, tmp_path)
+    clock = SystemClock()
+    service = NoteBatchService(database, settings, clock)
+    runner = DemoNoteRunner(database, settings, clock)
+
+    try:
+        created = await service.create_batch(
+            principal,
+            course_id,
+            MergedNoteBatchRequest(
+                mode="merged",
+                document_ids=[document_ids[1]],
+                style=NoteBatchStyle.OUTLINE,
+            ),
+            "markdown-section-note",
+        )
+        assert created.coverage_units[0].unit_type.value == "pdf_section"
+        assert created.coverage_units[0].locator == "section:1"
+        assert await runner.run_once(created.id) == created.id
+        completed = await service.get_batch(principal, created.id)
+        note_id = completed.items[0].note_id
+        assert note_id is not None
+
+        async with database.session(principal) as session:
+            note = await session.get(NoteModel, note_id)
+            sources = list(
+                await session.scalars(
+                    select(NoteSourceModel).where(NoteSourceModel.note_id == note_id)
+                )
+            )
+        assert note is not None
+        assert "章节: 临界区" in note.body_markdown
+        assert "第 1 页" not in note.body_markdown
+        assert [source.locator["kind"] for source in sources] == ["section"]
+    finally:
+        await runner.shutdown()
         await database.dispose()
 
 

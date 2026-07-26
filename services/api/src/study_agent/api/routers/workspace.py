@@ -205,7 +205,7 @@ async def get_runtime_capabilities(request: Request) -> RuntimeCapabilitiesRespo
         native_parser=CapabilityResponse(
             status="available" if availability.native_parser else "worker_required",
             label=(
-                "PDF / PPTX 原生解析 Worker 在线"
+                "PDF / Markdown 原生解析 Worker 在线"
                 if availability.native_parser
                 else "需要已验证的本地原生解析 Worker"
             ),
