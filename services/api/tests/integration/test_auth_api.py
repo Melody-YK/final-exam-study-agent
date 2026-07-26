@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -7,7 +8,7 @@ from typing import Annotated
 
 import pytest
 from fastapi import Depends
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport, AsyncClient, Response
 from pydantic import SecretStr
 from sqlalchemy import func, select
 
@@ -36,7 +37,13 @@ from study_agent.modules.jobs.clock import SystemClock
 from study_agent.storage.local import LocalStorage
 
 
-def _settings(database_url: str, root: Path, *, app_mode: AppMode = AppMode.TEST) -> Settings:
+def _settings(
+    database_url: str,
+    root: Path,
+    *,
+    app_mode: AppMode = AppMode.TEST,
+    active_account_capacity: int = 10,
+) -> Settings:
     return Settings(
         _env_file=None,
         app_mode=app_mode,
@@ -44,6 +51,7 @@ def _settings(database_url: str, root: Path, *, app_mode: AppMode = AppMode.TEST
         local_storage_root=root,
         lexical_index_root=root / "lexical",
         note_demo_phase_delay_seconds=0,
+        active_account_capacity=active_account_capacity,
     )
 
 
@@ -61,6 +69,58 @@ def _auth_app(database: Database, settings: Settings, root: Path):
         return {"subject": principal.subject, "scopes": sorted(principal.scopes)}
 
     return app
+
+
+async def _register_first_admin(client: AsyncClient) -> tuple[str, str]:
+    response = await client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": "capacity-admin@example.com",
+            "password": "capacity admin password",
+            "display_name": "Capacity Admin",
+        },
+    )
+    assert response.status_code == 201
+    account_id = response.json()["id"]
+    session_token = client.cookies.get(SESSION_COOKIE_NAME)
+    assert isinstance(account_id, str)
+    assert session_token is not None
+    return account_id, session_token
+
+
+async def _seat_usage(database: Database, now: datetime | None = None) -> tuple[int, int]:
+    snapshot_at = datetime.now(UTC) if now is None else now
+    async with database.system_session("capacity-test") as session:
+        active_accounts = await session.scalar(
+            select(func.count())
+            .select_from(AccountModel)
+            .where(
+                AccountModel.status == "active",
+                AccountModel.disabled_at.is_(None),
+            )
+        )
+        available_invitations = await session.scalar(
+            select(func.count())
+            .select_from(RegistrationInvitationModel)
+            .where(
+                RegistrationInvitationModel.used_at.is_(None),
+                RegistrationInvitationModel.revoked_at.is_(None),
+                RegistrationInvitationModel.expires_at > snapshot_at,
+            )
+        )
+    return int(active_accounts or 0), int(available_invitations or 0)
+
+
+async def _assert_seat_usage(
+    database: Database,
+    *,
+    capacity: int,
+    active_accounts: int,
+    available_invitations: int,
+) -> None:
+    usage = await _seat_usage(database)
+    assert usage == (active_accounts, available_invitations)
+    assert sum(usage) <= capacity
 
 
 @pytest.mark.integration
@@ -171,6 +231,9 @@ async def test_first_account_inherits_local_courses_and_admin_role_is_enforced(
                 "documents": 0,
                 "notes": 0,
             }
+            assert diagnostics.json()["active_accounts"] == 2
+            assert diagnostics.json()["account_capacity"] == 10
+            assert diagnostics.json()["available_account_seats"] == 8
             assert diagnostics.json()["runtime"] == {
                 "app_mode": "local",
                 "database": "postgresql",
@@ -631,5 +694,484 @@ async def test_admin_account_controls_revoke_sessions_and_preserve_an_active_adm
                 admin_note_provided=False,
             )
         assert exc_info.value.code is AccountServiceErrorCode.CONFLICT
+    finally:
+        await database.dispose()
+
+
+@pytest.mark.integration
+async def test_capacity_one_allows_first_admin_but_refuses_an_invitation(
+    test_database_url: str,
+    tmp_path: Path,
+) -> None:
+    await upgrade_database(test_database_url)
+    database = Database(test_database_url)
+    settings = _settings(test_database_url, tmp_path, active_account_capacity=1)
+    app = _auth_app(database, settings, tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as client:
+            await _register_first_admin(client)
+
+            invitation = await client.post("/api/v1/admin/invitations", json={})
+            diagnostics = await client.get("/api/v1/admin/diagnostics")
+
+        assert invitation.status_code == 409
+        assert invitation.json()["code"] == "ACCOUNT_CAPACITY_REACHED"
+        assert diagnostics.status_code == 200
+        assert diagnostics.json()["active_accounts"] == 1
+        assert diagnostics.json()["account_capacity"] == 1
+        assert diagnostics.json()["available_account_seats"] == 0
+        await _assert_seat_usage(
+            database,
+            capacity=1,
+            active_accounts=1,
+            available_invitations=0,
+        )
+    finally:
+        await database.dispose()
+
+
+@pytest.mark.integration
+async def test_registration_consumes_its_reserved_invitation_seat_atomically(
+    test_database_url: str,
+    tmp_path: Path,
+) -> None:
+    await upgrade_database(test_database_url)
+    database = Database(test_database_url)
+    settings = _settings(test_database_url, tmp_path, active_account_capacity=2)
+    app = _auth_app(database, settings, tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as client:
+            await _register_first_admin(client)
+            invitation = await client.post("/api/v1/admin/invitations", json={})
+            assert invitation.status_code == 201
+            await _assert_seat_usage(
+                database,
+                capacity=2,
+                active_accounts=1,
+                available_invitations=1,
+            )
+
+            registered = await client.post(
+                "/api/v1/auth/register",
+                json={
+                    "email": "reserved-seat@example.com",
+                    "password": "reserved seat password",
+                    "display_name": "Reserved Seat",
+                    "invite_code": invitation.json()["code"],
+                },
+            )
+            assert registered.status_code == 201
+            await _assert_seat_usage(
+                database,
+                capacity=2,
+                active_accounts=2,
+                available_invitations=0,
+            )
+
+            logged_in_admin = await client.post(
+                "/api/v1/auth/login",
+                json={
+                    "email": "capacity-admin@example.com",
+                    "password": "capacity admin password",
+                },
+            )
+            assert logged_in_admin.status_code == 200
+            no_remaining_seat = await client.post("/api/v1/admin/invitations", json={})
+
+        assert no_remaining_seat.status_code == 409
+        assert no_remaining_seat.json()["code"] == "ACCOUNT_CAPACITY_REACHED"
+        await _assert_seat_usage(
+            database,
+            capacity=2,
+            active_accounts=2,
+            available_invitations=0,
+        )
+    finally:
+        await database.dispose()
+
+
+@pytest.mark.integration
+async def test_revoked_and_expired_invitations_release_reserved_seats(
+    test_database_url: str,
+    tmp_path: Path,
+) -> None:
+    await upgrade_database(test_database_url)
+    database = Database(test_database_url)
+    settings = _settings(test_database_url, tmp_path, active_account_capacity=2)
+    app = _auth_app(database, settings, tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as client:
+            await _register_first_admin(client)
+            first = await client.post("/api/v1/admin/invitations", json={})
+            assert first.status_code == 201
+            assert (await client.post("/api/v1/admin/invitations", json={})).status_code == 409
+
+            revoked = await client.delete(f"/api/v1/admin/invitations/{first.json()['id']}")
+            assert revoked.status_code == 204
+            second = await client.post("/api/v1/admin/invitations", json={})
+            assert second.status_code == 201
+
+            now = datetime.now(UTC)
+            async with database.system_session("capacity-test-expiry") as session:
+                expiring = await session.scalar(
+                    select(RegistrationInvitationModel).where(
+                        RegistrationInvitationModel.id == second.json()["id"]
+                    )
+                )
+                assert expiring is not None
+                expiring.created_at = now - timedelta(days=2)
+                expiring.expires_at = now - timedelta(days=1)
+
+            replacement = await client.post("/api/v1/admin/invitations", json={})
+
+        assert replacement.status_code == 201
+        await _assert_seat_usage(
+            database,
+            capacity=2,
+            active_accounts=1,
+            available_invitations=1,
+        )
+    finally:
+        await database.dispose()
+
+
+@pytest.mark.integration
+async def test_suspension_frees_a_seat_and_reservation_blocks_reactivation(
+    test_database_url: str,
+    tmp_path: Path,
+) -> None:
+    await upgrade_database(test_database_url)
+    database = Database(test_database_url)
+    settings = _settings(test_database_url, tmp_path, active_account_capacity=2)
+    app = _auth_app(database, settings, tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as client:
+            await _register_first_admin(client)
+            invitation = await client.post("/api/v1/admin/invitations", json={})
+            registered = await client.post(
+                "/api/v1/auth/register",
+                json={
+                    "email": "reactivation@example.com",
+                    "password": "reactivation password",
+                    "display_name": "Reactivation User",
+                    "invite_code": invitation.json()["code"],
+                },
+            )
+            assert registered.status_code == 201
+            account_id = registered.json()["id"]
+            logged_in_admin = await client.post(
+                "/api/v1/auth/login",
+                json={
+                    "email": "capacity-admin@example.com",
+                    "password": "capacity admin password",
+                },
+            )
+            assert logged_in_admin.status_code == 200
+
+            suspended = await client.patch(
+                f"/api/v1/admin/users/{account_id}",
+                json={"status": "suspended"},
+            )
+            assert suspended.status_code == 200
+            await _assert_seat_usage(
+                database,
+                capacity=2,
+                active_accounts=1,
+                available_invitations=0,
+            )
+
+            reservation = await client.post("/api/v1/admin/invitations", json={})
+            assert reservation.status_code == 201
+            blocked = await client.patch(
+                f"/api/v1/admin/users/{account_id}",
+                json={"status": "active"},
+            )
+            assert blocked.status_code == 409
+            assert blocked.json()["code"] == "ACCOUNT_CAPACITY_REACHED"
+            await _assert_seat_usage(
+                database,
+                capacity=2,
+                active_accounts=1,
+                available_invitations=1,
+            )
+
+            assert (
+                await client.delete(f"/api/v1/admin/invitations/{reservation.json()['id']}")
+            ).status_code == 204
+            reactivated = await client.patch(
+                f"/api/v1/admin/users/{account_id}",
+                json={"status": "active"},
+            )
+
+        assert reactivated.status_code == 200
+        assert reactivated.json()["status"] == "active"
+        await _assert_seat_usage(
+            database,
+            capacity=2,
+            active_accounts=2,
+            available_invitations=0,
+        )
+    finally:
+        await database.dispose()
+
+
+@pytest.mark.integration
+async def test_invalid_invitation_does_not_reveal_that_capacity_is_full(
+    test_database_url: str,
+    tmp_path: Path,
+) -> None:
+    await upgrade_database(test_database_url)
+    database = Database(test_database_url)
+    settings = _settings(test_database_url, tmp_path, active_account_capacity=2)
+    app = _auth_app(database, settings, tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as client:
+            await _register_first_admin(client)
+            reservation = await client.post("/api/v1/admin/invitations", json={})
+            assert reservation.status_code == 201
+            await _assert_seat_usage(
+                database,
+                capacity=2,
+                active_accounts=1,
+                available_invitations=1,
+            )
+
+            base_payload = {
+                "password": "invalid invitation password",
+                "display_name": "Invalid Invitation",
+            }
+            missing = await client.post(
+                "/api/v1/auth/register",
+                json={**base_payload, "email": "missing-at-capacity@example.com"},
+            )
+            forged = await client.post(
+                "/api/v1/auth/register",
+                json={
+                    **base_payload,
+                    "email": "forged-at-capacity@example.com",
+                    "invite_code": "x" * 32,
+                },
+            )
+
+        for response in (missing, forged):
+            assert response.status_code == 403
+            assert response.json()["code"] == "AUTH_FORBIDDEN"
+            assert "capacity" not in response.text.lower()
+            assert "容量" not in response.text
+        await _assert_seat_usage(
+            database,
+            capacity=2,
+            active_accounts=1,
+            available_invitations=1,
+        )
+    finally:
+        await database.dispose()
+
+
+@pytest.mark.integration
+async def test_concurrent_registrations_cannot_consume_the_same_reserved_seat(
+    test_database_url: str,
+    tmp_path: Path,
+) -> None:
+    await upgrade_database(test_database_url)
+    database = Database(test_database_url)
+    settings = _settings(test_database_url, tmp_path, active_account_capacity=2)
+    app = _auth_app(database, settings, tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as admin_client:
+            await _register_first_admin(admin_client)
+            invitation = await admin_client.post("/api/v1/admin/invitations", json={})
+            assert invitation.status_code == 201
+            invite_code = invitation.json()["code"]
+
+        barrier = asyncio.Barrier(2)
+
+        async def register(contender: int) -> Response:
+            async with AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url="http://testserver",
+            ) as client:
+                await barrier.wait()
+                return await client.post(
+                    "/api/v1/auth/register",
+                    json={
+                        "email": f"registration-race-{contender}@example.com",
+                        "password": "registration race password",
+                        "display_name": f"Registration Race {contender}",
+                        "invite_code": invite_code,
+                    },
+                )
+
+        first, second = await asyncio.gather(register(1), register(2))
+        responses = (first, second)
+
+        assert sorted(response.status_code for response in responses) == [201, 403]
+        loser = next(response for response in responses if response.status_code == 403)
+        assert loser.json()["code"] == "AUTH_FORBIDDEN"
+        await _assert_seat_usage(
+            database,
+            capacity=2,
+            active_accounts=2,
+            available_invitations=0,
+        )
+    finally:
+        await database.dispose()
+
+
+@pytest.mark.integration
+async def test_concurrent_invitation_requests_cannot_reserve_the_same_last_seat(
+    test_database_url: str,
+    tmp_path: Path,
+) -> None:
+    await upgrade_database(test_database_url)
+    database = Database(test_database_url)
+    settings = _settings(test_database_url, tmp_path, active_account_capacity=2)
+    app = _auth_app(database, settings, tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as admin_client:
+            _, admin_token = await _register_first_admin(admin_client)
+
+        barrier = asyncio.Barrier(2)
+
+        async def create_invitation() -> Response:
+            async with AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url="http://testserver",
+            ) as contender:
+                contender.cookies.set(SESSION_COOKIE_NAME, admin_token)
+                await barrier.wait()
+                return await contender.post("/api/v1/admin/invitations", json={})
+
+        first, second = await asyncio.gather(create_invitation(), create_invitation())
+        responses = (first, second)
+
+        assert sorted(response.status_code for response in responses) == [201, 409]
+        loser = next(response for response in responses if response.status_code == 409)
+        assert loser.json()["code"] == "ACCOUNT_CAPACITY_REACHED"
+        await _assert_seat_usage(
+            database,
+            capacity=2,
+            active_accounts=1,
+            available_invitations=1,
+        )
+    finally:
+        await database.dispose()
+
+
+@pytest.mark.integration
+async def test_concurrent_reactivation_and_invitation_compete_for_the_same_last_seat(
+    test_database_url: str,
+    tmp_path: Path,
+) -> None:
+    await upgrade_database(test_database_url)
+    database = Database(test_database_url)
+    settings = _settings(test_database_url, tmp_path, active_account_capacity=2)
+    app = _auth_app(database, settings, tmp_path)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as setup_client:
+            _, admin_token = await _register_first_admin(setup_client)
+            invitation = await setup_client.post("/api/v1/admin/invitations", json={})
+            assert invitation.status_code == 201
+            registered = await setup_client.post(
+                "/api/v1/auth/register",
+                json={
+                    "email": "reactivation-race@example.com",
+                    "password": "reactivation race password",
+                    "display_name": "Reactivation Race",
+                    "invite_code": invitation.json()["code"],
+                },
+            )
+            assert registered.status_code == 201
+            account_id = registered.json()["id"]
+
+            setup_client.cookies.clear()
+            setup_client.cookies.set(SESSION_COOKIE_NAME, admin_token)
+            suspended = await setup_client.patch(
+                f"/api/v1/admin/users/{account_id}",
+                json={"status": "suspended"},
+            )
+            assert suspended.status_code == 200
+            await _assert_seat_usage(
+                database,
+                capacity=2,
+                active_accounts=1,
+                available_invitations=0,
+            )
+
+        barrier = asyncio.Barrier(2)
+
+        async def reactivate() -> Response:
+            async with AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url="http://testserver",
+            ) as contender:
+                contender.cookies.set(SESSION_COOKIE_NAME, admin_token)
+                await barrier.wait()
+                return await contender.patch(
+                    f"/api/v1/admin/users/{account_id}",
+                    json={"status": "active"},
+                )
+
+        async def create_invitation() -> Response:
+            async with AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url="http://testserver",
+            ) as contender:
+                contender.cookies.set(SESSION_COOKIE_NAME, admin_token)
+                await barrier.wait()
+                return await contender.post("/api/v1/admin/invitations", json={})
+
+        reactivation, invitation_creation = await asyncio.gather(
+            reactivate(),
+            create_invitation(),
+        )
+        responses = (reactivation, invitation_creation)
+        winners = [response for response in responses if response.status_code in {200, 201}]
+        losers = [response for response in responses if response.status_code == 409]
+
+        assert len(winners) == 1
+        assert len(losers) == 1
+        assert losers[0].json()["code"] == "ACCOUNT_CAPACITY_REACHED"
+        if reactivation.status_code == 200:
+            assert invitation_creation.status_code == 409
+            await _assert_seat_usage(
+                database,
+                capacity=2,
+                active_accounts=2,
+                available_invitations=0,
+            )
+        else:
+            assert reactivation.status_code == 409
+            assert invitation_creation.status_code == 201
+            await _assert_seat_usage(
+                database,
+                capacity=2,
+                active_accounts=1,
+                available_invitations=1,
+            )
     finally:
         await database.dispose()

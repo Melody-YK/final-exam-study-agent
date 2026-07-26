@@ -71,7 +71,10 @@ function UsersTable() {
     mutationFn: ({ id, input }: { id: string; input: AdminAccountUpdate }) =>
       studyApi.updateAdminUser(id, input),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['admin', 'users'] })
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['admin', 'users'] }),
+        queryClient.invalidateQueries({ queryKey: ['admin', 'diagnostics'] }),
+      ])
       setTarget(null)
     },
   })
@@ -238,13 +241,25 @@ function InvitationsTable() {
     queryKey: ['admin', 'invitations'],
     queryFn: () => studyApi.listAdminInvitations(),
   })
+  const diagnosticsQuery = useQuery({
+    queryKey: ['admin', 'diagnostics'],
+    queryFn: () => studyApi.adminDiagnostics(),
+  })
+  const availableSeats = diagnosticsQuery.data?.available_account_seats
+  const capacityReached = availableSeats === 0
+  const refreshInvitationCapacity = () =>
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['admin', 'invitations'] }),
+      queryClient.invalidateQueries({ queryKey: ['admin', 'diagnostics'] }),
+    ])
   const createInvitation = useMutation({
     mutationFn: () => studyApi.createAdminInvitation(expiresInDays),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'invitations'] }),
+    onSuccess: refreshInvitationCapacity,
+    onError: refreshInvitationCapacity,
   })
   const revokeInvitation = useMutation({
     mutationFn: (id: string) => studyApi.revokeAdminInvitation(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'invitations'] }),
+    onSuccess: refreshInvitationCapacity,
   })
 
   const closeCreate = () => {
@@ -256,13 +271,37 @@ function InvitationsTable() {
   return (
     <>
       <div className="admin-table-toolbar">
-        <p>邀请码单次有效，使用后自动失效。</p>
+        <div className="admin-table-toolbar__summary">
+          <p>邀请码单次有效，使用后自动失效。</p>
+          <div
+            aria-busy={diagnosticsQuery.isLoading}
+            aria-label="账号容量"
+            aria-live="polite"
+            className="admin-capacity-summary"
+          >
+            {diagnosticsQuery.data ? (
+              <>
+                <span>
+                  {`活跃账号 ${diagnosticsQuery.data.active_accounts} / ${diagnosticsQuery.data.account_capacity}`}
+                </span>
+                <span>{`剩余席位 ${diagnosticsQuery.data.available_account_seats}`}</span>
+              </>
+            ) : diagnosticsQuery.isError ? (
+              <span>账号容量暂不可用</span>
+            ) : (
+              <span>账号容量读取中</span>
+            )}
+          </div>
+        </div>
         <button
           className="button button--primary"
+          disabled={capacityReached}
           onClick={() => {
+            if (capacityReached) return
             createInvitation.reset()
             setCreateOpen(true)
           }}
+          title={capacityReached ? '账号容量已满' : undefined}
           type="button"
         >
           <TicketPlus aria-hidden="true" size={16} />
@@ -274,6 +313,13 @@ function InvitationsTable() {
           error={invitationsQuery.error}
           onRetry={() => void invitationsQuery.refetch()}
           title="无法读取邀请码"
+        />
+      ) : null}
+      {diagnosticsQuery.isError ? (
+        <ErrorNotice
+          error={diagnosticsQuery.error}
+          onRetry={() => void diagnosticsQuery.refetch()}
+          title="无法读取账号容量"
         />
       ) : null}
       {revokeInvitation.isError ? (
@@ -335,8 +381,11 @@ function InvitationsTable() {
               </button>
               <button
                 className="button button--primary"
-                disabled={createInvitation.isPending}
-                onClick={() => createInvitation.mutate()}
+                disabled={createInvitation.isPending || capacityReached}
+                onClick={() => {
+                  if (!capacityReached) createInvitation.mutate()
+                }}
+                title={capacityReached ? '账号容量已满' : undefined}
                 type="button"
               >
                 {createInvitation.isPending ? '创建中...' : '创建'}

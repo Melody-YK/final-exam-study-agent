@@ -28,7 +28,7 @@
 - **Category**: correctness / resource protection / API / tests
 - **Planned at**: commit `a67dc87`, 2026-07-25
 - **Target branch**: `codex/p1-invitation-account-capacity`
-- **Execution status**: TODO
+- **Execution status**: DONE, verified on `codex/p1-invitation-account-capacity` on 2026-07-26
 
 ## Why this matters
 
@@ -165,12 +165,12 @@ Run API generation twice and confirm the second run produces no generated diff.
 
 ## Done criteria
 
-- [ ] Active accounts plus usable reserved invitations cannot exceed configured capacity.
-- [ ] Registration, invite creation, and reactivation are serialized and race-tested on PostgreSQL.
-- [ ] First-admin bootstrap and existing invite secrecy/one-time behavior remain intact.
-- [ ] Admin UI shows capacity and cannot deliberately create an invite at zero seats.
-- [ ] API/OpenAPI/TypeScript contracts agree and generation is deterministic.
-- [ ] Focused backend/Web/E2E, mypy, Ruff, lint, typecheck, and diff hygiene pass.
+- [x] Active accounts plus usable reserved invitations cannot exceed configured capacity.
+- [x] Registration, invite creation, and reactivation are serialized and race-tested on PostgreSQL.
+- [x] First-admin bootstrap and existing invite secrecy/one-time behavior remain intact.
+- [x] Admin UI shows capacity and cannot deliberately create an invite at zero seats.
+- [x] API/OpenAPI/TypeScript contracts agree and generation is deterministic.
+- [x] Focused backend/Web/E2E, mypy, Ruff, lint, typecheck, and diff hygiene pass.
 
 ## STOP conditions
 

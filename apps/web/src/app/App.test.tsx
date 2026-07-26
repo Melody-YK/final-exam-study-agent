@@ -146,6 +146,9 @@ describe('App', () => {
       role: 'admin',
     })
     vi.spyOn(studyApi, 'adminDiagnostics').mockResolvedValue({
+      active_accounts: 2,
+      account_capacity: 10,
+      available_account_seats: 8,
       totals: {
         accounts: 2,
         active_sessions: 1,

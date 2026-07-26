@@ -71,6 +71,7 @@ class AccountServiceErrorCode(StrEnum):
     INVALID_INVITATION = "INVALID_INVITATION"
     NOT_FOUND = "NOT_FOUND"
     CONFLICT = "CONFLICT"
+    CAPACITY_REACHED = "CAPACITY_REACHED"
 
 
 class AccountServiceError(RuntimeError):
@@ -124,8 +125,21 @@ class InvitationGrant:
 
 
 @dataclass(frozen=True, slots=True)
+class SeatUsage:
+    active_accounts: int
+    reserved_invitations: int
+
+    @property
+    def occupied_seats(self) -> int:
+        return self.active_accounts + self.reserved_invitations
+
+
+@dataclass(frozen=True, slots=True)
 class AdminDiagnostics:
     accounts: int
+    active_accounts: int
+    account_capacity: int
+    available_account_seats: int
     active_sessions: int
     courses: int
     documents: int
@@ -153,10 +167,7 @@ class AccountService:
         normalized_password = _validate_new_password(password)
         now = self._now()
         async with self._database.system_session(_AUTH_ACTOR) as session:
-            await session.execute(
-                text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_name, 0))"),
-                {"lock_name": _REGISTRATION_LOCK},
-            )
+            await self._acquire_capacity_lock(session)
             is_first_account = (
                 await session.scalar(select(func.count()).select_from(AccountModel)) == 0
             )
@@ -172,6 +183,13 @@ class AccountService:
                     AccountServiceErrorCode.EMAIL_EXISTS,
                     "该邮箱已注册。",
                 )
+
+            seat_usage = await self._seat_usage(session, now)
+            if (
+                seat_usage.active_accounts >= self._settings.active_account_capacity
+                or seat_usage.occupied_seats > self._settings.active_account_capacity
+            ):
+                self._raise_capacity_reached()
 
             password_hash = await asyncio.to_thread(
                 DEFAULT_PASSWORD_HASHER.hash,
@@ -316,6 +334,8 @@ class AccountService:
         normalized_note = _normalize_admin_note(admin_note) if admin_note_provided else None
         now = self._now()
         async with self._database.system_session(_AUTH_ACTOR) as session:
+            if status is AccountStatus.ACTIVE:
+                await self._acquire_capacity_lock(session)
             await session.execute(
                 text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_name, 0))"),
                 {"lock_name": _ACCOUNT_ADMIN_LOCK},
@@ -363,6 +383,15 @@ class AccountService:
                         "必须保留至少一个可用的管理员账号。",
                     )
 
+            is_reactivation = (
+                target.status == AccountStatus.SUSPENDED.value
+                and effective_status is AccountStatus.ACTIVE
+            )
+            if is_reactivation:
+                seat_usage = await self._seat_usage(session, now)
+                if seat_usage.occupied_seats >= self._settings.active_account_capacity:
+                    self._raise_capacity_reached()
+
             if role is not None:
                 target.role = role.value
             if status is not None:
@@ -403,6 +432,10 @@ class AccountService:
             created_at=now,
         )
         async with self._database.system_session(_AUTH_ACTOR) as session:
+            await self._acquire_capacity_lock(session)
+            seat_usage = await self._seat_usage(session, now)
+            if seat_usage.occupied_seats >= self._settings.active_account_capacity:
+                self._raise_capacity_reached()
             session.add(model)
             await session.flush()
             invitation = _invitation_from_model(model, now)
@@ -448,6 +481,7 @@ class AccountService:
         _require_admin(actor)
         now = self._now()
         async with self._database.system_session(_AUTH_ACTOR) as session:
+            seat_usage = await self._seat_usage(session, now)
             accounts = await session.scalar(select(func.count()).select_from(AccountModel))
             active_sessions = await session.scalar(
                 select(func.count())
@@ -462,6 +496,12 @@ class AccountService:
             notes = await session.scalar(select(func.count()).select_from(NoteModel))
         return AdminDiagnostics(
             accounts=accounts or 0,
+            active_accounts=seat_usage.active_accounts,
+            account_capacity=self._settings.active_account_capacity,
+            available_account_seats=max(
+                self._settings.active_account_capacity - seat_usage.occupied_seats,
+                0,
+            ),
             active_sessions=active_sessions or 0,
             courses=courses or 0,
             documents=documents or 0,
@@ -469,6 +509,49 @@ class AccountService:
             app_mode=self._settings.app_mode.value,
             database="postgresql",
             demo_lab_enabled=self._settings.demo_lab_enabled,
+        )
+
+    async def _acquire_capacity_lock(self, session: AsyncSession) -> None:
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_name, 0))"),
+            {"lock_name": _REGISTRATION_LOCK},
+        )
+
+    async def _seat_usage(self, session: AsyncSession, now: datetime) -> SeatUsage:
+        active_accounts = (
+            select(func.count())
+            .select_from(AccountModel)
+            .where(AccountModel.status == AccountStatus.ACTIVE.value)
+            .scalar_subquery()
+        )
+        reserved_invitations = (
+            select(func.count())
+            .select_from(RegistrationInvitationModel)
+            .where(
+                RegistrationInvitationModel.used_at.is_(None),
+                RegistrationInvitationModel.revoked_at.is_(None),
+                RegistrationInvitationModel.expires_at > now,
+            )
+            .scalar_subquery()
+        )
+        row = (
+            await session.execute(
+                select(
+                    active_accounts.label("active_accounts"),
+                    reserved_invitations.label("reserved_invitations"),
+                )
+            )
+        ).one()
+        return SeatUsage(
+            active_accounts=int(row.active_accounts),
+            reserved_invitations=int(row.reserved_invitations),
+        )
+
+    @staticmethod
+    def _raise_capacity_reached() -> None:
+        raise AccountServiceError(
+            AccountServiceErrorCode.CAPACITY_REACHED,
+            "账号容量已满, 请先停用账号或撤销未使用的邀请码。",
         )
 
     async def _registration_user(

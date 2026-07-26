@@ -5,9 +5,10 @@ import type { ReactNode } from 'react'
 import { MemoryRouter } from 'react-router'
 import { describe, expect, it, vi } from 'vitest'
 
-import { studyApi } from '../../api/client'
+import { ApiError, studyApi } from '../../api/client'
 import type { AuthState } from '../../app/auth'
 import { AuthContext } from '../../app/auth'
+import { problem } from '../../test/fixtures'
 import { createTestQueryClient } from '../../test/render'
 import { AdminUsersPage } from './AdminUsersPage'
 
@@ -33,6 +34,33 @@ const studentAccount = {
   status: 'active' as const,
   admin_note: null,
   created_at: '2026-07-21T08:00:00Z',
+}
+
+function adminDiagnostics(
+  overrides: Partial<{
+    account_capacity: number
+    active_accounts: number
+    available_account_seats: number
+  }> = {},
+) {
+  return {
+    active_accounts: 2,
+    account_capacity: 10,
+    available_account_seats: 7,
+    totals: {
+      accounts: 2,
+      active_sessions: 1,
+      courses: 1,
+      documents: 3,
+      notes: 4,
+    },
+    runtime: {
+      app_mode: 'local' as const,
+      database: 'postgresql' as const,
+      demo_lab_enabled: true,
+    },
+    ...overrides,
+  }
 }
 
 function renderPage() {
@@ -132,6 +160,9 @@ describe('AdminUsersPage', () => {
     vi.spyOn(studyApi, 'listAdminInvitations').mockResolvedValue({
       items: [availableInvitation],
     })
+    const diagnostics = vi
+      .spyOn(studyApi, 'adminDiagnostics')
+      .mockResolvedValue(adminDiagnostics())
     const revokeInvitation = vi.spyOn(studyApi, 'revokeAdminInvitation').mockResolvedValue()
     const createInvitation = vi.spyOn(studyApi, 'createAdminInvitation').mockResolvedValue({
       ...availableInvitation,
@@ -141,8 +172,11 @@ describe('AdminUsersPage', () => {
     const { user } = renderPage()
 
     await user.click(screen.getByRole('tab', { name: '邀请码' }))
+    expect(await screen.findByLabelText('账号容量')).toHaveTextContent('活跃账号 2 / 10')
+    expect(screen.getByLabelText('账号容量')).toHaveTextContent('剩余席位 7')
     await user.click(await screen.findByRole('button', { name: '撤销邀请码' }))
     await waitFor(() => expect(revokeInvitation).toHaveBeenCalledWith('invitation-existing'))
+    await waitFor(() => expect(diagnostics).toHaveBeenCalledTimes(2))
 
     await user.click(screen.getByRole('button', { name: '创建邀请码' }))
     const createDialog = screen.getByRole('dialog', { name: '创建邀请码' })
@@ -151,11 +185,78 @@ describe('AdminUsersPage', () => {
 
     expect(await within(createDialog).findByText('invite-code-plaintext-123456')).toBeVisible()
     expect(createInvitation).toHaveBeenCalledWith(14)
+    expect(diagnostics).toHaveBeenCalledTimes(3)
     await user.click(within(createDialog).getByRole('button', { name: '完成' }))
     expect(screen.queryByText('invite-code-plaintext-123456')).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: '创建邀请码' }))
     expect(screen.queryByText('invite-code-plaintext-123456')).not.toBeInTheDocument()
     expect(screen.getByRole('dialog', { name: '创建邀请码' })).toHaveTextContent('有效期')
+  })
+
+  it('disables invitation creation when no account seats remain', async () => {
+    vi.spyOn(studyApi, 'listAdminUsers').mockResolvedValue({
+      items: [adminAccount, studentAccount],
+    })
+    vi.spyOn(studyApi, 'listAdminInvitations').mockResolvedValue({ items: [] })
+    vi.spyOn(studyApi, 'adminDiagnostics').mockResolvedValue(
+      adminDiagnostics({ account_capacity: 2, available_account_seats: 0 }),
+    )
+    const createInvitation = vi.spyOn(studyApi, 'createAdminInvitation')
+    const { user } = renderPage()
+
+    await user.click(screen.getByRole('tab', { name: '邀请码' }))
+
+    expect(await screen.findByLabelText('账号容量')).toHaveTextContent('活跃账号 2 / 2')
+    expect(screen.getByLabelText('账号容量')).toHaveTextContent('剩余席位 0')
+    const createButton = screen.getByRole('button', { name: '创建邀请码' })
+    expect(createButton).toBeDisabled()
+    await user.click(createButton)
+    expect(screen.queryByRole('dialog', { name: '创建邀请码' })).not.toBeInTheDocument()
+    expect(createInvitation).not.toHaveBeenCalled()
+  })
+
+  it('keeps the dialog open and refreshes capacity after a creation race loses the last seat', async () => {
+    vi.spyOn(studyApi, 'listAdminUsers').mockResolvedValue({
+      items: [adminAccount, studentAccount],
+    })
+    vi.spyOn(studyApi, 'listAdminInvitations').mockResolvedValue({ items: [] })
+    const diagnostics = vi
+      .spyOn(studyApi, 'adminDiagnostics')
+      .mockResolvedValueOnce(
+        adminDiagnostics({ account_capacity: 3, available_account_seats: 1 }),
+      )
+      .mockResolvedValue(
+        adminDiagnostics({
+          account_capacity: 3,
+          active_accounts: 3,
+          available_account_seats: 0,
+        }),
+      )
+    vi.spyOn(studyApi, 'createAdminInvitation').mockRejectedValue(
+      new ApiError(
+        problem({
+          status: 409,
+          code: 'ACCOUNT_CAPACITY_REACHED',
+          title: '账号容量已满',
+          detail: '最后一个席位已被其他请求占用。',
+        }),
+      ),
+    )
+    const { user } = renderPage()
+
+    await user.click(screen.getByRole('tab', { name: '邀请码' }))
+    expect(await screen.findByLabelText('账号容量')).toHaveTextContent('剩余席位 1')
+    await user.click(screen.getByRole('button', { name: '创建邀请码' }))
+    const dialog = screen.getByRole('dialog', { name: '创建邀请码' })
+    await user.click(within(dialog).getByRole('button', { name: '创建' }))
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('邀请码未创建')
+    expect(within(dialog).getByRole('alert')).toHaveTextContent(
+      '最后一个席位已被其他请求占用。',
+    )
+    await waitFor(() => expect(screen.getByLabelText('账号容量')).toHaveTextContent('剩余席位 0'))
+    expect(within(dialog).getByRole('button', { name: '创建' })).toBeDisabled()
+    expect(diagnostics).toHaveBeenCalledTimes(2)
   })
 })

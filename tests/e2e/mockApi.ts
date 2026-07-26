@@ -182,9 +182,11 @@ function abstained(question: string, queryId: string, conversationId: string, cr
 }
 
 export interface MockApiOptions {
+  accountCapacity?: number
   accountRole?: 'admin' | 'user'
   authenticated?: boolean
   includeNoteEligibilityDriftDocuments?: boolean
+  invitationCapacityRaceOnce?: boolean
   noteBatchPollsBeforeSuccess?: number
   providerAvailable?: boolean
   seedCourseSelection?: boolean
@@ -246,6 +248,20 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
       revoked_at: null,
     },
   ]
+  const accountCapacity = options.accountCapacity ?? 10
+  const capacityNow = new Date('2026-07-24T08:00:00Z')
+  let invitationCapacityRacePending = options.invitationCapacityRaceOnce ?? false
+  const activeAccountCount = () =>
+    adminAccounts.filter((account) => account.status === 'active').length
+  const availableInvitationCount = () =>
+    invitations.filter(
+      (invitation) =>
+        invitation.used_at === null &&
+        invitation.revoked_at === null &&
+        new Date(invitation.expires_at).getTime() > capacityNow.getTime(),
+    ).length
+  const availableAccountSeats = () =>
+    Math.max(accountCapacity - activeAccountCount() - availableInvitationCount(), 0)
   const noteBatchPollsBeforeSuccess = options.noteBatchPollsBeforeSuccess ?? 3
   const providerAvailable = options.providerAvailable ?? true
   let notesVersion = 1
@@ -573,6 +589,16 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
           json: problem(409, 'STATE_CONFLICT', '不能修改当前账号的角色或状态'),
         })
       }
+      if (
+        current.status === 'suspended' &&
+        payload.status === 'active' &&
+        availableAccountSeats() === 0
+      ) {
+        return route.fulfill({
+          status: 409,
+          json: problem(409, 'ACCOUNT_CAPACITY_REACHED', '账号容量已满'),
+        })
+      }
       const updated = { ...current, ...payload }
       adminAccounts = adminAccounts.map((account) =>
         account.id === updated.id ? updated : account,
@@ -596,8 +622,38 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
         })
       }
       const payload = request.postDataJSON() as { expires_in_days: number }
+      if (invitationCapacityRacePending) {
+        invitationCapacityRacePending = false
+        if (availableAccountSeats() > 0) {
+          invitations = [
+            {
+              id: 'invitation-e2e-capacity-race',
+              created_by_account_id: mockAccount.id,
+              used_by_account_id: null,
+              status: 'available',
+              created_at: capacityNow.toISOString(),
+              expires_at: new Date(
+                capacityNow.getTime() + payload.expires_in_days * 24 * 60 * 60 * 1_000,
+              ).toISOString(),
+              used_at: null,
+              revoked_at: null,
+            },
+            ...invitations,
+          ]
+        }
+        return route.fulfill({
+          status: 409,
+          json: problem(409, 'ACCOUNT_CAPACITY_REACHED', '账号容量已满'),
+        })
+      }
+      if (availableAccountSeats() === 0) {
+        return route.fulfill({
+          status: 409,
+          json: problem(409, 'ACCOUNT_CAPACITY_REACHED', '账号容量已满'),
+        })
+      }
       invitationSequence += 1
-      const createdAt = new Date('2026-07-24T08:00:00Z')
+      const createdAt = capacityNow
       const invitation: MockInvitation = {
         id: `invitation-e2e-${invitationSequence}`,
         created_by_account_id: mockAccount.id,
@@ -648,8 +704,11 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
       }
       return route.fulfill({
         json: {
+          active_accounts: activeAccountCount(),
+          account_capacity: accountCapacity,
+          available_account_seats: availableAccountSeats(),
           totals: {
-            accounts: 1,
+            accounts: adminAccounts.length,
             active_sessions: authenticated ? 1 : 0,
             courses: 1,
             documents: documents.length,

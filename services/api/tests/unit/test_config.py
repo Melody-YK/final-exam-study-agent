@@ -108,6 +108,45 @@ def test_settings_are_immutable_after_validation() -> None:
     assert settings.allowed_hosts == ()
 
 
+def test_active_account_capacity_defaults_to_ten(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ACTIVE_ACCOUNT_CAPACITY", raising=False)
+
+    settings = Settings(_env_file=None, app_mode=AppMode.TEST)
+
+    assert settings.active_account_capacity == 10
+
+
+def test_active_account_capacity_accepts_environment_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ACTIVE_ACCOUNT_CAPACITY", "25")
+
+    settings = Settings(_env_file=None, app_mode=AppMode.TEST)
+
+    assert settings.active_account_capacity == 25
+
+
+@pytest.mark.parametrize("capacity", [1, 10_000])
+def test_active_account_capacity_accepts_validation_boundaries(capacity: int) -> None:
+    settings = Settings(
+        _env_file=None,
+        app_mode=AppMode.TEST,
+        active_account_capacity=capacity,
+    )
+
+    assert settings.active_account_capacity == capacity
+
+
+@pytest.mark.parametrize("capacity", [0, 10_001])
+def test_active_account_capacity_rejects_values_outside_boundaries(capacity: int) -> None:
+    with pytest.raises(ValidationError):
+        Settings(
+            _env_file=None,
+            app_mode=AppMode.TEST,
+            active_account_capacity=capacity,
+        )
+
+
 def test_bracketed_ipv6_allowed_host_is_normalized() -> None:
     settings = Settings(
         _env_file=None,
