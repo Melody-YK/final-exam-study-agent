@@ -23,6 +23,7 @@ from study_agent.modules.notes.service import (
     NoteSourceSnapshot,
     NoteVersionConflict,
     NoteVersionNotFound,
+    NoteWorkflowRegenerationRequired,
 )
 from study_agent.providers.factory import ProviderRegistry
 from study_agent.providers.protocols import Clock
@@ -270,6 +271,13 @@ async def update_note(
 async def regenerate_note(note_id: str, request: Request, response: Response) -> NoteResponse:
     try:
         snapshot = await _service(request).regenerate(await _principal(request), note_id)
+    except NoteWorkflowRegenerationRequired as exc:
+        raise ApiProblem(
+            status=409,
+            code=ProblemCode.STATE_CONFLICT,
+            title="工作流笔记需要批次重新生成",
+            detail="该笔记由持久批次工作流管理, 请使用批次重新生成。",
+        ) from exc
     except NoteGenerationError as exc:
         raise _generation_problem(exc) from exc
     except NoteVersionConflict as exc:

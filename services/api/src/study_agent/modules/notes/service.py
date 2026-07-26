@@ -48,6 +48,10 @@ class NoteVersionNotFound(RuntimeError):
     """A workflow-managed Note is missing its immutable current version."""
 
 
+class NoteWorkflowRegenerationRequired(RuntimeError):
+    """A workflow-managed Note must regenerate through a durable batch."""
+
+
 @dataclass(frozen=True, slots=True)
 class NoteSourceSnapshot:
     id: str
@@ -569,6 +573,8 @@ class NoteService:
         current = await self._repository.get(principal, note_id)
         if current is None:
             raise LookupError("note is unavailable")
+        if current.origin_batch_id is not None:
+            raise NoteWorkflowRegenerationRequired
         question = self._generation_question(current.section_path, current.title)
         retrieved, answer = await self._generate(principal, current.course_id, question)
         return await self._repository.regenerate(

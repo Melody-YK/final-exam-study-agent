@@ -96,6 +96,13 @@ async def test_workflow_note_edit_can_create_idempotent_regeneration_batch(
             assert edited.headers["etag"] == '"2"'
             assert edited.json()["origin_batch_id"] == source_batch.id
 
+            legacy_regeneration = await client.post(f"/api/v1/notes/{note_id}/regenerate")
+            assert legacy_regeneration.status_code == 409
+            assert legacy_regeneration.json()["code"] == "STATE_CONFLICT"
+            unchanged = await client.get(f"/api/v1/notes/{note_id}")
+            assert unchanged.headers["etag"] == '"2"'
+            assert unchanged.json() == edited.json()
+
             missing_precondition = await client.post(
                 f"/api/v1/notes/{note_id}/regeneration-batches",
                 headers={"Idempotency-Key": "missing-if-match"},

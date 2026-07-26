@@ -104,6 +104,22 @@ test('regenerates a workflow note through a batch and opens the new output', asy
   await expect(entries).toHaveCount(1)
   await expect(entries).toHaveAttribute('aria-current', 'page')
   await expect(page.getByText('版本 2 · 生成 2')).toBeVisible()
+
+  const repeatedTerminalRead = await page.evaluate(async () => {
+    await fetch('/api/v1/note-batches/note-regeneration-batch-e2e')
+    await fetch('/api/v1/note-batches/note-regeneration-batch-e2e')
+    const response = await fetch('/api/v1/courses/course-e2e/notes')
+    const notes = (await response.json()) as Array<{
+      title: string
+      version: number
+      generation: number
+    }>
+    const regenerated = notes.find((note) => note.title === '异步重生成验证')
+    return regenerated
+      ? { version: regenerated.version, generation: regenerated.generation }
+      : null
+  })
+  expect(repeatedTerminalRead).toEqual({ version: 2, generation: 2 })
 })
 
 test('restores a running note batch after reload', async ({ page }) => {

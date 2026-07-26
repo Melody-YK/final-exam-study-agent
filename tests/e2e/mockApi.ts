@@ -251,6 +251,7 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
   let notesVersion = 1
   let generatedNoteRecord: ReturnType<typeof generatedNote> | null = null
   let noteBatchPolls = 0
+  let noteBatchCompletionApplied = false
   let noteBatchId = 'note-batch-e2e'
   let noteBatchCommand: 'create' | 'regeneration' = 'create'
   let regenerationTargetNoteId: string | null = null
@@ -1030,6 +1031,7 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
     if (method === 'POST' && path === `/courses/${courseId}/note-batches`) {
       noteBatchPayload = request.postDataJSON() as typeof noteBatchPayload
       noteBatchPolls = 0
+      noteBatchCompletionApplied = false
       noteBatchId = 'note-batch-e2e'
       noteBatchCommand = 'create'
       regenerationTargetNoteId = null
@@ -1051,6 +1053,7 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
         })
       }
       noteBatchPolls = 0
+      noteBatchCompletionApplied = false
       noteBatchId = 'note-regeneration-batch-e2e'
       noteBatchCommand = 'regeneration'
       regenerationTargetNoteId = generatedNoteRecord.id
@@ -1066,7 +1069,7 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
       }
       noteBatchPolls += 1
       const status = noteBatchPolls >= noteBatchPollsBeforeSuccess ? 'succeeded' : 'running'
-      if (status === 'succeeded') {
+      if (status === 'succeeded' && !noteBatchCompletionApplied) {
         if (noteBatchCommand === 'regeneration' && generatedNoteRecord !== null) {
           generatedNoteRecord = {
             ...generatedNoteRecord,
@@ -1082,6 +1085,7 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
             noteBatchPayload.style,
           )
         }
+        noteBatchCompletionApplied = true
       }
       return route.fulfill({ json: noteBatchSnapshot(status) })
     }
