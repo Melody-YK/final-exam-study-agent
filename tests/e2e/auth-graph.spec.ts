@@ -109,6 +109,50 @@ test('admin can update another users access controls and inspect engineering dia
   await expect(page.getByText(/api[_-]?key|object[_-]?key|system prompt/i)).toHaveCount(0)
 })
 
+test('admin invitation capacity refreshes after a concurrent last-seat race', async ({ page }) => {
+  await installMockApi(page, {
+    accountCapacity: 4,
+    accountRole: 'admin',
+    invitationCapacityRaceOnce: true,
+  })
+  await page.goto('/admin/users')
+
+  await expect(page.getByRole('heading', { name: '用户与访问' })).toBeVisible()
+  await page.getByRole('tab', { name: '邀请码' }).click()
+  const capacity = page.getByLabel('账号容量')
+  await expect(capacity).toContainText('活跃账号 2 / 4')
+  await expect(capacity).toContainText('剩余席位 1')
+
+  const openCreate = page.getByRole('button', { name: '创建邀请码' })
+  await expect(openCreate).toBeEnabled()
+  await openCreate.click()
+  const dialog = page.getByRole('dialog', { name: '创建邀请码' })
+  const capacityConflict = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' &&
+      response.url().endsWith('/api/v1/admin/invitations'),
+  )
+  await dialog.getByRole('button', { name: '创建' }).click()
+
+  const conflictResponse = await capacityConflict
+  expect(conflictResponse.status()).toBe(409)
+  const conflictProblem = await conflictResponse.json()
+  expect(conflictProblem).toEqual(
+    expect.objectContaining({
+      status: 409,
+      code: 'ACCOUNT_CAPACITY_REACHED',
+    }),
+  )
+  expect(JSON.stringify(conflictProblem)).not.toContain('created-invite-code')
+  await expect(dialog.getByRole('alert')).toContainText('邀请码未创建')
+  await expect(dialog.getByRole('alert')).toContainText('账号容量已满')
+
+  await expect(capacity).toContainText('剩余席位 0')
+  await expect(openCreate).toBeDisabled()
+  await expect(dialog.getByRole('button', { name: '创建' })).toBeDisabled()
+  await expect(page.getByText(/created-invite-code/)).toHaveCount(0)
+})
+
 test('admin can inspect the original upload and reject a pending document', async ({ page }) => {
   await installMockApi(page, { accountRole: 'admin' })
   await page.goto('/admin/reviews')

@@ -126,6 +126,44 @@ def test_note_workflow_capability_preserves_legacy_notes_and_hides_dormant_contr
     _assert_dormant_note_workflow_schemas_are_absent(schemas)
 
 
+def test_admin_account_capacity_contract_is_strict_and_documents_conflicts() -> None:
+    document = build_openapi_document()
+    paths = document["paths"]
+    schemas = document["components"]["schemas"]
+
+    diagnostics = schemas["AdminDiagnosticsResponse"]
+    expected_fields = {
+        "totals",
+        "runtime",
+        "active_accounts",
+        "account_capacity",
+        "available_account_seats",
+    }
+    assert diagnostics["additionalProperties"] is False
+    assert set(diagnostics["properties"]) == expected_fields
+    assert set(diagnostics["required"]) == expected_fields
+    assert diagnostics["properties"]["active_accounts"]["minimum"] == 0
+    assert diagnostics["properties"]["account_capacity"]["minimum"] == 1
+    assert diagnostics["properties"]["available_account_seats"]["minimum"] == 0
+
+    problem_schema = {"$ref": "#/components/schemas/ProblemDetails"}
+    capacity_conflict_operations = (
+        paths["/api/v1/auth/register"]["post"],
+        paths["/api/v1/admin/invitations"]["post"],
+        paths["/api/v1/admin/users/{account_id}"]["patch"],
+    )
+    for operation in capacity_conflict_operations:
+        assert operation["responses"]["409"]["content"]["application/json"]["schema"] == (
+            problem_schema
+        )
+
+    invitation = schemas["InvitationResponse"]
+    assert "code" not in invitation["properties"]
+    assert "code_hash" not in invitation["properties"]
+    invitation_items = schemas["AdminInvitationsResponse"]["properties"]["items"]["items"]
+    assert invitation_items == {"$ref": "#/components/schemas/InvitationResponse"}
+
+
 def test_committed_openapi_matches_generated_document() -> None:
     root = Path(__file__).resolve().parents[4]
     committed = json.loads(

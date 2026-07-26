@@ -90,6 +90,7 @@ class Settings(BaseSettings):
     provider_max_answer_chars: int = Field(default=1024 * 1024, ge=256)
     query_requests_per_minute: int = Field(default=30, ge=1, le=10_000)
     upload_requests_per_minute: int = Field(default=60, ge=1, le=10_000)
+    active_account_capacity: int = Field(default=10, ge=1, le=10_000)
 
     auth_provider: AuthProviderName | None = None
     auth_issuer: str | None = None

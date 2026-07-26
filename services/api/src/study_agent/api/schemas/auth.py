@@ -121,6 +121,9 @@ class AdminDiagnosticsResponse(BaseModel):
 
     totals: AdminTotalsResponse
     runtime: AdminRuntimeResponse
+    active_accounts: int = Field(ge=0)
+    account_capacity: int = Field(ge=1)
+    available_account_seats: int = Field(ge=0)
 
 
 __all__ = [

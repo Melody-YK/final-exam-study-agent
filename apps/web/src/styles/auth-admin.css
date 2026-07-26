@@ -437,13 +437,38 @@
 .admin-table-toolbar {
   align-items: center;
   display: flex;
+  gap: 16px;
   justify-content: space-between;
   margin-bottom: 14px;
 }
 
-.admin-table-toolbar p {
+.admin-table-toolbar__summary {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.admin-table-toolbar__summary p {
   color: var(--text-muted);
   font-size: 13px;
+}
+
+.admin-capacity-summary {
+  align-items: center;
+  color: var(--text);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  font-weight: 750;
+  gap: 6px 16px;
+}
+
+.admin-capacity-summary span:last-child {
+  color: var(--text-muted);
+}
+
+.admin-table-toolbar > .button {
+  flex: 0 0 auto;
 }
 
 .admin-table--users {
@@ -565,6 +590,11 @@
 
   .admin-page {
     padding: 24px 18px 40px;
+  }
+
+  .admin-table-toolbar {
+    align-items: flex-start;
+    flex-wrap: wrap;
   }
 
   .admin-metrics {

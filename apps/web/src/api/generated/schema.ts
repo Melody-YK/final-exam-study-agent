@@ -866,6 +866,12 @@ export interface components {
         };
         /** AdminDiagnosticsResponse */
         AdminDiagnosticsResponse: {
+            /** Account Capacity */
+            account_capacity: number;
+            /** Active Accounts */
+            active_accounts: number;
+            /** Available Account Seats */
+            available_account_seats: number;
             runtime: components["schemas"]["AdminRuntimeResponse"];
             totals: components["schemas"]["AdminTotalsResponse"];
         };
@@ -2454,6 +2460,15 @@ export interface operations {
                     "application/json": components["schemas"]["InvitationCreateResponse"];
                 };
             };
+            /** @description 账号容量已满 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -2536,6 +2551,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminAccountResponse"];
+                };
+            };
+            /** @description 账号状态或容量冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
                 };
             };
             /** @description Validation Error */
@@ -2640,6 +2664,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccountResponse"];
+                };
+            };
+            /** @description 邮箱或账号容量冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
                 };
             };
             /** @description Validation Error */

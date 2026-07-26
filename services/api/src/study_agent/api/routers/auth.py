@@ -6,7 +6,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request, Response, status
 
-from study_agent.api.errors import ApiProblem, ProblemCode
+from study_agent.api.errors import ApiProblem, ProblemCode, ProblemDetails
 from study_agent.api.schemas.auth import (
     AccountResponse,
     AdminAccountResponse,
@@ -49,6 +49,7 @@ SessionAccount = Annotated[AccountIdentity, Depends(get_session_account)]
     "/auth/register",
     response_model=AccountResponse,
     status_code=status.HTTP_201_CREATED,
+    responses={409: {"model": ProblemDetails, "description": "邮箱或账号容量冲突"}},
 )
 async def register(
     payload: RegisterRequest,
@@ -113,7 +114,11 @@ async def list_users(request: Request, identity: SessionAccount) -> AdminUsersRe
     return AdminUsersResponse(items=[_admin_account_response(account) for account in accounts])
 
 
-@router.patch("/admin/users/{account_id}", response_model=AdminAccountResponse)
+@router.patch(
+    "/admin/users/{account_id}",
+    response_model=AdminAccountResponse,
+    responses={409: {"model": ProblemDetails, "description": "账号状态或容量冲突"}},
+)
 async def update_user(
     account_id: str,
     payload: AdminAccountUpdateRequest,
@@ -138,6 +143,7 @@ async def update_user(
     "/admin/invitations",
     response_model=InvitationCreateResponse,
     status_code=status.HTTP_201_CREATED,
+    responses={409: {"model": ProblemDetails, "description": "账号容量已满"}},
 )
 async def create_invitation(
     payload: CreateInvitationRequest,
@@ -259,6 +265,9 @@ def _diagnostics_response(snapshot: AdminDiagnostics) -> AdminDiagnosticsRespons
             database=snapshot.database,
             demo_lab_enabled=snapshot.demo_lab_enabled,
         ),
+        active_accounts=snapshot.active_accounts,
+        account_capacity=snapshot.account_capacity,
+        available_account_seats=snapshot.available_account_seats,
     )
 
 
@@ -298,6 +307,11 @@ def _problem(exc: AccountServiceError) -> ApiProblem:
             409,
             ProblemCode.STATE_CONFLICT,
             "账号或邀请状态冲突",
+        ),
+        AccountServiceErrorCode.CAPACITY_REACHED: (
+            409,
+            ProblemCode.ACCOUNT_CAPACITY_REACHED,
+            "账号容量已满",
         ),
     }
     status_code, code, title = mapping[exc.code]

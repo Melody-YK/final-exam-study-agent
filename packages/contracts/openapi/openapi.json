@@ -146,6 +146,21 @@
       "AdminDiagnosticsResponse": {
         "additionalProperties": false,
         "properties": {
+          "account_capacity": {
+            "minimum": 1.0,
+            "title": "Account Capacity",
+            "type": "integer"
+          },
+          "active_accounts": {
+            "minimum": 0.0,
+            "title": "Active Accounts",
+            "type": "integer"
+          },
+          "available_account_seats": {
+            "minimum": 0.0,
+            "title": "Available Account Seats",
+            "type": "integer"
+          },
           "runtime": {
             "$ref": "#/components/schemas/AdminRuntimeResponse"
           },
@@ -155,7 +170,10 @@
         },
         "required": [
           "totals",
-          "runtime"
+          "runtime",
+          "active_accounts",
+          "account_capacity",
+          "available_account_seats"
         ],
         "title": "AdminDiagnosticsResponse",
         "type": "object"
@@ -4400,6 +4418,16 @@
             },
             "description": "Successful Response"
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "账号容量已满"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -4507,6 +4535,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "账号状态或容量冲突"
           },
           "422": {
             "content": {
@@ -4624,6 +4662,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "邮箱或账号容量冲突"
           },
           "422": {
             "content": {
