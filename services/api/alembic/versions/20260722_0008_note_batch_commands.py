@@ -175,6 +175,20 @@ def downgrade() -> None:
         "note_generation_outputs",
         type_="check",
     )
+    # The pre-0008 schema can retain only one output per Note. Keep the newest
+    # version deterministically before restoring its Note-level uniqueness.
+    op.execute(
+        sa.text(
+            "DELETE FROM note_generation_outputs WHERE id IN ("
+            "SELECT id FROM ("
+            "SELECT id, row_number() OVER ("
+            "PARTITION BY note_id, course_id, user_id "
+            "ORDER BY note_version DESC, created_at DESC, id DESC"
+            ") AS output_rank FROM note_generation_outputs"
+            ") AS ranked_outputs WHERE output_rank > 1"
+            ")"
+        )
+    )
     op.create_unique_constraint(
         "uq_note_generation_outputs_note",
         "note_generation_outputs",

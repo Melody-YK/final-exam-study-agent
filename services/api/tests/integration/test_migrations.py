@@ -281,6 +281,176 @@ async def test_note_workflow_migrations_preserve_legacy_note_across_0007_round_t
 
 
 @pytest.mark.integration
+async def test_0008_downgrade_keeps_latest_output_when_note_has_multiple_versions(
+    test_database_url: str,
+) -> None:
+    await upgrade_database(test_database_url)
+    await downgrade_database(test_database_url, "20260722_0008")
+    user_id = str(uuid4())
+    course_id = str(uuid4())
+    note_id = str(uuid4())
+    batch_id = str(uuid4())
+    first_item_id = str(uuid4())
+    latest_item_id = str(uuid4())
+    first_output_id = str(uuid4())
+    latest_output_id = str(uuid4())
+    section_path = json.dumps(["Migration"])
+    sha256 = "a" * 64
+    engine = create_async_engine(test_database_url)
+
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "INSERT INTO users (id, subject, authentication_method) "
+                    "VALUES (:id, :subject, 'local')"
+                ),
+                {"id": user_id, "subject": f"output-downgrade-{user_id}"},
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO courses (id, user_id, title, lifecycle, row_version) "
+                    "VALUES (:id, :user_id, 'Output downgrade', 'active', 1)"
+                ),
+                {"id": course_id, "user_id": user_id},
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO notes "
+                    "(id, user_id, course_id, section_path, title, body_markdown, version, "
+                    "generation, generated_by_model, status) "
+                    "VALUES (:id, :user_id, :course_id, CAST(:section_path AS jsonb), "
+                    "'Migration note', 'Latest body', 2, 2, false, 'ready')"
+                ),
+                {
+                    "id": note_id,
+                    "user_id": user_id,
+                    "course_id": course_id,
+                    "section_path": section_path,
+                },
+            )
+            for version in (1, 2):
+                await connection.execute(
+                    text(
+                        "INSERT INTO note_content_versions "
+                        "(note_id, version, user_id, course_id, title, section_path, "
+                        "body_markdown, content_ast, ast_schema_version, parser_version, "
+                        "body_sha256, source_set_sha256, coverage_manifest_sha256, "
+                        "note_version_sha256, created_by) "
+                        "VALUES (:note_id, :version, :user_id, :course_id, 'Migration note', "
+                        "CAST(:section_path AS jsonb), :body, CAST('{}' AS jsonb), '1.0', "
+                        "'migration-test', :sha256, :sha256, :sha256, :sha256, 'generated')"
+                    ),
+                    {
+                        "note_id": note_id,
+                        "version": version,
+                        "user_id": user_id,
+                        "course_id": course_id,
+                        "section_path": section_path,
+                        "body": f"Version {version}",
+                        "sha256": sha256,
+                    },
+                )
+            await connection.execute(
+                text(
+                    "INSERT INTO note_generation_batches "
+                    "(id, user_id, course_id, mode, status, state_version, event_sequence, "
+                    "cancel_epoch, command_kind, section_path) "
+                    "VALUES (:id, :user_id, :course_id, 'merged', 'queued', 1, 0, 0, "
+                    "'create', CAST(:section_path AS jsonb))"
+                ),
+                {
+                    "id": batch_id,
+                    "user_id": user_id,
+                    "course_id": course_id,
+                    "section_path": section_path,
+                },
+            )
+            for ordinal, item_id in enumerate((first_item_id, latest_item_id), start=1):
+                await connection.execute(
+                    text(
+                        "INSERT INTO note_generation_items "
+                        "(id, batch_id, user_id, course_id, ordinal, status, state_version, "
+                        "attempt, max_attempts, lease_version, cancel_epoch) "
+                        "VALUES (:id, :batch_id, :user_id, :course_id, :ordinal, 'queued', "
+                        "1, 0, 1, 0, 0)"
+                    ),
+                    {
+                        "id": item_id,
+                        "batch_id": batch_id,
+                        "user_id": user_id,
+                        "course_id": course_id,
+                        "ordinal": ordinal,
+                    },
+                )
+            for output_id, item_id, version in (
+                (first_output_id, first_item_id, 1),
+                (latest_output_id, latest_item_id, 2),
+            ):
+                await connection.execute(
+                    text(
+                        "INSERT INTO note_generation_outputs "
+                        "(id, batch_id, item_id, user_id, course_id, note_id, note_version) "
+                        "VALUES (:id, :batch_id, :item_id, :user_id, :course_id, :note_id, "
+                        ":note_version)"
+                    ),
+                    {
+                        "id": output_id,
+                        "batch_id": batch_id,
+                        "item_id": item_id,
+                        "user_id": user_id,
+                        "course_id": course_id,
+                        "note_id": note_id,
+                        "note_version": version,
+                    },
+                )
+    finally:
+        await engine.dispose()
+
+    try:
+        await downgrade_database(test_database_url, "7102eb21ee91")
+        engine = create_async_engine(test_database_url)
+        try:
+            async with engine.connect() as connection:
+                output_ids = list(
+                    (
+                        await connection.execute(
+                            text(
+                                "SELECT id FROM note_generation_outputs "
+                                "WHERE note_id = :note_id ORDER BY id"
+                            ),
+                            {"note_id": note_id},
+                        )
+                    ).scalars()
+                )
+                head = await connection.scalar(text("SELECT version_num FROM alembic_version"))
+
+            assert head == "7102eb21ee91"
+            assert output_ids == [latest_output_id]
+            with pytest.raises(IntegrityError, match="uq_note_generation_outputs_note"):
+                async with engine.begin() as connection:
+                    await connection.execute(
+                        text(
+                            "INSERT INTO note_generation_outputs "
+                            "(id, batch_id, item_id, user_id, course_id, note_id) "
+                            "VALUES (:id, :batch_id, :item_id, :user_id, :course_id, :note_id)"
+                        ),
+                        {
+                            "id": str(uuid4()),
+                            "batch_id": batch_id,
+                            "item_id": first_item_id,
+                            "user_id": user_id,
+                            "course_id": course_id,
+                            "note_id": note_id,
+                        },
+                    )
+        finally:
+            await engine.dispose()
+    finally:
+        await upgrade_database(test_database_url)
+
+
+@pytest.mark.integration
 async def test_downgrade_to_p3_nulls_real_revision_job_references_before_drop(
     test_database_url: str,
 ) -> None:
