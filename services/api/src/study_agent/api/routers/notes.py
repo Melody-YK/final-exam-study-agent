@@ -134,13 +134,7 @@ def _response(snapshot: NoteSnapshot) -> NoteResponse:
     )
 
 
-def _version(if_match: str | None) -> int:
-    if if_match is None:
-        raise ApiProblem(
-            status=428,
-            code=ProblemCode.PRECONDITION_REQUIRED,
-            title="需要 If-Match",
-        )
+def _version(if_match: str) -> int:
     match = _ETAG.fullmatch(if_match.strip())
     if match is None:
         raise ApiProblem(
@@ -233,7 +227,7 @@ async def update_note(
     payload: NotePatch,
     request: Request,
     response: Response,
-    if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+    if_match: Annotated[str, Header(alias="If-Match")],
 ) -> NoteResponse:
     try:
         snapshot = await _repository(request).update(

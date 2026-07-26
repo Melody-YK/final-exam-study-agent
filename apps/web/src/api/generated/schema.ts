@@ -1231,6 +1231,18 @@ export interface components {
          * @enum {string}
          */
         EtaUnavailableReason: "not_started" | "terminal" | "insufficient_history" | "retrying" | "provider_changed" | "outlier";
+        /**
+         * FieldError
+         * @description A validation issue tied to a request location.
+         */
+        FieldError: {
+            /** Code */
+            code: string;
+            /** Location */
+            location?: (string | number)[];
+            /** Message */
+            message: string;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -1973,6 +1985,38 @@ export interface components {
         ParseRetryRequest: {
             /** Failed Pages */
             failed_pages?: number[] | null;
+        };
+        /**
+         * ProblemDetails
+         * @description Serializable ``application/problem+json`` response body.
+         */
+        ProblemDetails: {
+            /** Code */
+            code: string;
+            /** Detail */
+            detail?: string | null;
+            /** Field Errors */
+            field_errors?: components["schemas"]["FieldError"][];
+            /** Instance */
+            instance?: string | null;
+            /** Retry After Ms */
+            retry_after_ms?: number | null;
+            /**
+             * Retryable
+             * @default false
+             */
+            retryable: boolean;
+            /** Status */
+            status: number;
+            /** Title */
+            title: string;
+            /** Trace Id */
+            trace_id: string;
+            /**
+             * Type
+             * @default about:blank
+             */
+            type: string;
         };
         /** QueryCreate */
         QueryCreate: {
@@ -3350,8 +3394,8 @@ export interface operations {
     update_note_api_v1_notes__note_id__patch: {
         parameters: {
             query?: never;
-            header?: {
-                "If-Match"?: string | null;
+            header: {
+                "If-Match": string;
             };
             path: {
                 note_id: string;
@@ -3420,7 +3464,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": string;
-                "If-Match"?: string | null;
+                "If-Match": string;
             };
             path: {
                 note_id: string;
@@ -3438,6 +3482,24 @@ export interface operations {
                     "application/json": components["schemas"]["LocalDemoNoteBatchSnapshot"];
                 };
             };
+            /** @description 幂等键或笔记版本状态冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description If-Match 与当前笔记版本不一致 */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -3445,6 +3507,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description 缺少必需的 If-Match 前置条件 */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
                 };
             };
         };

@@ -109,6 +109,9 @@ async def test_workflow_note_edit_can_create_idempotent_regeneration_batch(
             )
             assert missing_precondition.status_code == 428
             assert missing_precondition.json()["code"] == "PRECONDITION_REQUIRED"
+            assert missing_precondition.headers["content-type"].startswith(
+                "application/problem+json"
+            )
 
             stale = await client.post(
                 f"/api/v1/notes/{note_id}/regeneration-batches",

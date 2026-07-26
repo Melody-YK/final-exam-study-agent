@@ -56,11 +56,13 @@ def test_query_conversation_and_note_batch_contracts_are_present() -> None:
     get_batch = paths["/api/v1/note-batches/{batch_id}"]["get"]
     regenerate_batch = paths["/api/v1/notes/{note_id}/regeneration-batches"]["post"]
     regeneration_headers = {
-        parameter["name"]
+        parameter["name"]: parameter
         for parameter in regenerate_batch["parameters"]
         if parameter["in"] == "header"
     }
-    assert {"Idempotency-Key", "If-Match"} <= regeneration_headers
+    assert {"Idempotency-Key", "If-Match"} <= regeneration_headers.keys()
+    assert regeneration_headers["If-Match"]["required"] is True
+    assert {"409", "412", "428"} <= regenerate_batch["responses"].keys()
     assert "requestBody" not in regenerate_batch
     create_response = create_batch["responses"]["202"]["content"]["application/json"]["schema"]
     regeneration_response = regenerate_batch["responses"]["202"]["content"]["application/json"][

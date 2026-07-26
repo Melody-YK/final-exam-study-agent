@@ -7,7 +7,7 @@ from typing import Annotated, cast
 
 from fastapi import APIRouter, Header, Request, Response, status
 
-from study_agent.api.errors import ApiProblem, ProblemCode
+from study_agent.api.errors import ApiProblem, ProblemCode, ProblemDetails
 from study_agent.api.schemas.note_workflow import (
     LocalDemoNoteBatchSnapshot,
     MergedNoteBatchRequest,
@@ -121,13 +121,7 @@ def _accepted(
     return _public_snapshot(snapshot)
 
 
-def _version(if_match: str | None) -> int:
-    if if_match is None:
-        raise ApiProblem(
-            status=428,
-            code=ProblemCode.PRECONDITION_REQUIRED,
-            title="需要 If-Match",
-        )
+def _version(if_match: str) -> int:
     match = _ETAG.fullmatch(if_match.strip())
     if match is None:
         raise ApiProblem(
@@ -167,13 +161,18 @@ async def create_note_batch(
     "/notes/{note_id}/regeneration-batches",
     response_model=LocalDemoNoteBatchSnapshot,
     status_code=status.HTTP_202_ACCEPTED,
+    responses={
+        409: {"model": ProblemDetails, "description": "幂等键或笔记版本状态冲突"},
+        412: {"model": ProblemDetails, "description": "If-Match 与当前笔记版本不一致"},
+        428: {"model": ProblemDetails, "description": "缺少必需的 If-Match 前置条件"},
+    },
 )
 async def create_note_regeneration_batch(
     note_id: str,
     request: Request,
     response: Response,
     idempotency_key: IdempotencyKey,
-    if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+    if_match: Annotated[str, Header(alias="If-Match")],
 ) -> LocalDemoNoteBatchSnapshot:
     try:
         snapshot = await _service(request).create_regeneration_batch(
