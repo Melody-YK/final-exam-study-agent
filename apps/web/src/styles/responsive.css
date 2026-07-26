@@ -358,7 +358,9 @@
   }
 
   .lab-timings dl > div {
-    grid-template-columns: 90px minmax(0, 1fr);
+    align-items: stretch;
+    gap: 6px;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

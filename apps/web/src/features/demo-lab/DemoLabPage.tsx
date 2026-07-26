@@ -14,6 +14,45 @@ const routeLabels = {
   rerank: 'Rerank',
 } as const
 
+const timingStageOrder = ['dense', 'lexical', 'fusion', 'rerank', 'total'] as const
+
+const timingStageLabels: Record<(typeof timingStageOrder)[number], { detail: string; label: string }> = {
+  dense: {
+    detail: 'Dense · 按语义相似度召回资料片段',
+    label: '语义检索',
+  },
+  lexical: {
+    detail: 'BM25 · 按原文关键词召回资料片段',
+    label: '关键词检索',
+  },
+  fusion: {
+    detail: 'RRF · 合并语义与关键词候选排序',
+    label: '结果融合',
+  },
+  rerank: {
+    detail: 'Rerank · 再次按问题相关性排序',
+    label: '精细重排',
+  },
+  total: {
+    detail: 'Total · 含资料读取，不含 AI 回答生成',
+    label: '检索总耗时',
+  },
+}
+
+function orderedTimingEntries(timings: Record<string, number>): Array<readonly [string, number]> {
+  const knownEntries = timingStageOrder.reduce<Array<readonly [string, number]>>((entries, name) => {
+    const duration = timings[name]
+    if (duration !== undefined) {
+      entries.push([name, duration])
+    }
+    return entries
+  }, [])
+  const knownNames = new Set<string>(timingStageOrder)
+  const extraEntries = Object.entries(timings).filter(([name]) => !knownNames.has(name))
+
+  return [...knownEntries, ...extraEntries]
+}
+
 export function DemoLabPage() {
   const { courseId, capabilities, capabilitiesLoading } = useWorkspace()
   const enabled = capabilities?.demo_lab_enabled === true
@@ -99,9 +138,14 @@ export function DemoLabPage() {
               <Clock3 aria-hidden="true" size={17} />
             </header>
             <dl>
-              {Object.entries(trace.timings_ms).map(([name, duration]) => (
+              {orderedTimingEntries(trace.timings_ms).map(([name, duration]) => (
                 <div key={name}>
-                  <dt>{name}</dt>
+                  <dt>
+                    <span>{timingStageLabels[name as keyof typeof timingStageLabels]?.label ?? name}</span>
+                    {name in timingStageLabels ? (
+                      <small>{timingStageLabels[name as keyof typeof timingStageLabels].detail}</small>
+                    ) : null}
+                  </dt>
                   <dd>
                     <span style={{ width: `${Math.max(2, (duration / maxTiming) * 100)}%` }} />
                     <strong>{duration.toFixed(1)} ms</strong>
