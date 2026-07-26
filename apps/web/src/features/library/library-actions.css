@@ -1,0 +1,126 @@
+.ready-study-actions {
+  align-items: center;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px 24px;
+  justify-content: space-between;
+  margin: 0 -28px 18px;
+  padding: 14px 28px;
+}
+
+.ready-study-actions__overview {
+  align-items: center;
+  display: flex;
+  flex: 1 1 470px;
+  flex-wrap: wrap;
+  gap: 10px 20px;
+  min-width: 0;
+}
+
+.ready-study-actions h3 {
+  font-size: 14px;
+  line-height: 1.3;
+}
+
+.ready-study-actions__counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px 16px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ready-study-actions__counts li {
+  align-items: center;
+  color: var(--text-muted);
+  display: inline-flex;
+  font-size: 12px;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.ready-study-actions__counts li::before {
+  background: currentColor;
+  border-radius: 50%;
+  content: '';
+  height: 7px;
+  width: 7px;
+}
+
+.ready-study-actions__counts strong {
+  color: var(--text);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ready-study-actions__counts .is-ready {
+  color: var(--accent);
+}
+
+.ready-study-actions__counts .is-review {
+  color: var(--amber);
+}
+
+.ready-study-actions__counts .is-preparing {
+  color: var(--blue);
+}
+
+.ready-study-actions__counts .is-attention {
+  color: var(--red);
+}
+
+.ready-study-actions__links {
+  align-items: center;
+  display: flex;
+  flex: 1 1 520px;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.ready-study-actions__link {
+  text-decoration: none;
+}
+
+.ready-study-actions__status {
+  align-items: center;
+  color: var(--text-muted);
+  display: inline-flex;
+  font-size: 12px;
+  gap: 6px;
+  min-height: 38px;
+}
+
+@media (max-width: 720px) {
+  .ready-study-actions {
+    align-items: flex-start;
+    margin-inline: -14px;
+    padding-inline: 14px;
+  }
+
+  .ready-study-actions__overview {
+    align-items: flex-start;
+    flex-basis: 100%;
+    flex-direction: column;
+  }
+
+  .ready-study-actions__links {
+    flex-basis: 100%;
+    justify-content: flex-start;
+  }
+
+  .ready-study-actions__link {
+    flex: 1 1 160px;
+  }
+}
+
+@media (max-width: 420px) {
+  .ready-study-actions__link {
+    flex-basis: 100%;
+  }
+}

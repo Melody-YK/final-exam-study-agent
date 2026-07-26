@@ -54,17 +54,31 @@ def test_query_conversation_and_note_batch_contracts_are_present() -> None:
     assert "NoteBatchSnapshot" not in schemas
 
     get_batch = paths["/api/v1/note-batches/{batch_id}"]["get"]
+    regenerate_batch = paths["/api/v1/notes/{note_id}/regeneration-batches"]["post"]
+    regeneration_headers = {
+        parameter["name"]: parameter
+        for parameter in regenerate_batch["parameters"]
+        if parameter["in"] == "header"
+    }
+    assert {"Idempotency-Key", "If-Match"} <= regeneration_headers.keys()
+    assert regeneration_headers["If-Match"]["required"] is True
+    assert {"409", "412", "428"} <= regenerate_batch["responses"].keys()
+    assert "requestBody" not in regenerate_batch
     create_response = create_batch["responses"]["202"]["content"]["application/json"]["schema"]
+    regeneration_response = regenerate_batch["responses"]["202"]["content"]["application/json"][
+        "schema"
+    ]
     get_response = get_batch["responses"]["200"]["content"]["application/json"]["schema"]
     assert (
         create_response
+        == regeneration_response
         == get_response
         == {"$ref": "#/components/schemas/LocalDemoNoteBatchSnapshot"}
     )
 
     demo_snapshot = schemas["LocalDemoNoteBatchSnapshot"]
     assert demo_snapshot["properties"]["mode"]["const"] == "merged"
-    assert demo_snapshot["properties"]["command_kind"]["const"] == "create"
+    assert demo_snapshot["properties"]["command_kind"]["enum"] == ["create", "regeneration"]
     assert schemas["NoteBatchStatus"]["enum"] == [
         "queued",
         "running",

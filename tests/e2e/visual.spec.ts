@@ -113,7 +113,7 @@ test('primary views stay nonblank and free of overflow or control overlap', asyn
   await verifyView(page, testInfo, 'library')
   await verifyMobileLibraryClearance(page, testInfo)
 
-  await page.getByRole('link', { name: '问答' }).click()
+  await page.getByRole('link', { name: '问答', exact: true }).click()
   await page.getByLabel('课程问题').fill('什么是进程？')
   await page.getByRole('button', { name: '提交问题' }).click()
   await expect(page.getByText('已有来源')).toBeVisible()
@@ -128,9 +128,9 @@ test('primary views stay nonblank and free of overflow or control overlap', asyn
   await expect(page.getByLabel('笔记阅读视图')).toBeVisible()
   await verifyView(page, testInfo, 'notes')
 
-  await page.getByRole('link', { name: '知识图谱' }).click()
-  await expect(page.getByRole('heading', { name: '课程知识图谱' })).toBeVisible()
-  await verifyView(page, testInfo, 'knowledge-graph')
+  await page.getByRole('link', { name: '概念地图' }).click()
+  await expect(page.getByRole('heading', { name: '课程概念地图' })).toBeVisible()
+  await verifyView(page, testInfo, 'concept-map')
 
   await page.getByRole('link', { name: '资料' }).click()
   await page.getByRole('button', { name: '删除资料' }).first().click()

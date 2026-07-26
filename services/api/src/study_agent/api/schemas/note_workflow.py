@@ -21,9 +21,12 @@ from study_contracts import (
 
 
 class LocalDemoNoteBatchSnapshot(NoteBatchSnapshot):
-    """Public snapshot shape supported by the local merged/create demo route."""
+    """Public snapshot shape supported by local merged demo commands."""
 
-    command_kind: Literal[NoteBatchCommandKind.CREATE] = NoteBatchCommandKind.CREATE
+    command_kind: Literal[
+        NoteBatchCommandKind.CREATE,
+        NoteBatchCommandKind.REGENERATION,
+    ] = NoteBatchCommandKind.CREATE
     mode: Literal[NoteBatchMode.MERGED] = NoteBatchMode.MERGED
 
 

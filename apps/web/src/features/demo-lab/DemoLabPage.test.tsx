@@ -60,6 +60,38 @@ describe('DemoLabPage', () => {
     expect(screen.queryByText('输入 0 tokens')).not.toBeInTheDocument()
   })
 
+  it('explains retrieval timings in execution order', async () => {
+    vi.spyOn(studyApi, 'getLabTrace').mockResolvedValue(
+      labTrace({
+        timings_ms: {
+          total: 20,
+          rerank: 4,
+          fusion: 2,
+          lexical: 7,
+          dense: 6,
+        },
+      }),
+    )
+
+    renderInWorkspace(<DemoLabPage />)
+
+    await screen.findByText('语义检索')
+    expect(screen.getByText('Dense · 按语义相似度召回资料片段')).toBeInTheDocument()
+    expect(screen.getByText('BM25 · 按原文关键词召回资料片段')).toBeInTheDocument()
+    expect(screen.getByText('RRF · 合并语义与关键词候选排序')).toBeInTheDocument()
+    expect(screen.getByText('Rerank · 再次按问题相关性排序')).toBeInTheDocument()
+    expect(screen.getByText('Total · 含资料读取，不含 AI 回答生成')).toBeInTheDocument()
+
+    const terms = screen.getAllByRole('term').map((term) => term.textContent)
+    expect(terms).toEqual([
+      '语义检索Dense · 按语义相似度召回资料片段',
+      '关键词检索BM25 · 按原文关键词召回资料片段',
+      '结果融合RRF · 合并语义与关键词候选排序',
+      '精细重排Rerank · 再次按问题相关性排序',
+      '检索总耗时Total · 含资料读取，不含 AI 回答生成',
+    ])
+  })
+
   it('does not request a trace when the capability flag is closed', () => {
     const capabilities: RuntimeCapabilities = {
       ...availableCapabilities,

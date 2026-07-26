@@ -1204,6 +1204,43 @@
         "title": "EtaUnavailableReason",
         "type": "string"
       },
+      "FieldError": {
+        "additionalProperties": false,
+        "description": "A validation issue tied to a request location.",
+        "properties": {
+          "code": {
+            "minLength": 1,
+            "pattern": "^[A-Z][A-Z0-9_]*$",
+            "title": "Code",
+            "type": "string"
+          },
+          "location": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "message": {
+            "minLength": 1,
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "FieldError",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -2420,11 +2457,14 @@
       },
       "LocalDemoNoteBatchSnapshot": {
         "additionalProperties": false,
-        "description": "Public snapshot shape supported by the local merged/create demo route.",
+        "description": "Public snapshot shape supported by local merged demo commands.",
         "properties": {
           "command_kind": {
-            "const": "create",
             "default": "create",
+            "enum": [
+              "create",
+              "regeneration"
+            ],
             "title": "Command Kind",
             "type": "string"
           },
@@ -3000,6 +3040,17 @@
             "title": "Id",
             "type": "string"
           },
+          "origin_batch_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin Batch Id"
+          },
           "section_path": {
             "items": {
               "type": "string"
@@ -3042,6 +3093,7 @@
           "generation",
           "generated_by_model",
           "status",
+          "origin_batch_id",
           "sources",
           "created_at",
           "updated_at"
@@ -3289,6 +3341,93 @@
           }
         },
         "title": "ParseRetryRequest",
+        "type": "object"
+      },
+      "ProblemDetails": {
+        "additionalProperties": false,
+        "description": "Serializable ``application/problem+json`` response body.",
+        "properties": {
+          "code": {
+            "pattern": "^[A-Z][A-Z0-9_]*$",
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "field_errors": {
+            "items": {
+              "$ref": "#/components/schemas/FieldError"
+            },
+            "title": "Field Errors",
+            "type": "array"
+          },
+          "instance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instance"
+          },
+          "retry_after_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry After Ms"
+          },
+          "retryable": {
+            "default": false,
+            "title": "Retryable",
+            "type": "boolean"
+          },
+          "status": {
+            "maximum": 599.0,
+            "minimum": 400.0,
+            "title": "Status",
+            "type": "integer"
+          },
+          "title": {
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "trace_id": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Trace Id",
+            "type": "string"
+          },
+          "type": {
+            "default": "about:blank",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "status",
+          "code",
+          "trace_id"
+        ],
+        "title": "ProblemDetails",
         "type": "object"
       },
       "QueryCreate": {
@@ -5626,17 +5765,10 @@
           {
             "in": "header",
             "name": "If-Match",
-            "required": false,
+            "required": true,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "If-Match"
+              "title": "If-Match",
+              "type": "string"
             }
           }
         ],
@@ -5717,6 +5849,98 @@
         "summary": "Regenerate Note",
         "tags": [
           "notes"
+        ]
+      }
+    },
+    "/api/v1/notes/{note_id}/regeneration-batches": {
+      "post": {
+        "operationId": "create_note_regeneration_batch_api_v1_notes__note_id__regeneration_batches_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "note_id",
+            "required": true,
+            "schema": {
+              "title": "Note Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 512,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "title": "If-Match",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocalDemoNoteBatchSnapshot"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "幂等键或笔记版本状态冲突"
+          },
+          "412": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "If-Match 与当前笔记版本不一致"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "428": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "缺少必需的 If-Match 前置条件"
+          }
+        },
+        "summary": "Create Note Regeneration Batch",
+        "tags": [
+          "note-batches"
         ]
       }
     },

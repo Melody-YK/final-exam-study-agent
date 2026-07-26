@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from study_agent.config import AppMode, Settings
@@ -45,6 +45,11 @@ _EXAM_EXCERPT_CHARS = 96
 _OUTLINE_POINTS_PER_PAGE = 3
 _OUTLINE_POINTS_PER_NOTE = 30
 _OUTLINE_EXCERPT_CHARS = 72
+_COMPLETE_ENTRIES_PER_NOTE = 40
+_COMPLETE_SOURCE_CHARS_PER_NOTE = 12_000
+_COMPLETE_TRUNCATION_NOTICE = (
+    "内容已截断。完整讲义最多保留前 40 条完整来源内容。累计源文本不超过 12,000 字符。"
+)
 _HIGH_VALUE_MARKERS = (
     "定义",
     "概念",
@@ -94,6 +99,12 @@ class _RenderEntry:
 
 
 @dataclass(frozen=True, slots=True)
+class _RenderSelection:
+    entries: tuple[_RenderEntry, ...]
+    truncated: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class _RenderedEntry:
     chunk: _SourceChunk
     text: str
@@ -137,6 +148,10 @@ class _Material:
 
 class _SourceChangedError(RuntimeError):
     """The selected source no longer matches the batch's frozen snapshot."""
+
+
+class _NoteVersionConflictError(RuntimeError):
+    """The regeneration target no longer matches the current note version."""
 
 
 class DemoNoteRunner:
@@ -200,7 +215,7 @@ class DemoNoteRunner:
                     select(NoteGenerationBatchModel.id)
                     .where(
                         NoteGenerationBatchModel.status.in_(("queued", "running")),
-                        NoteGenerationBatchModel.command_kind == "create",
+                        NoteGenerationBatchModel.command_kind.in_(("create", "regeneration")),
                         NoteGenerationBatchModel.mode == "merged",
                     )
                     .order_by(NoteGenerationBatchModel.created_at, NoteGenerationBatchModel.id)
@@ -241,7 +256,7 @@ class DemoNoteRunner:
                     select(NoteGenerationBatchModel.id)
                     .where(
                         NoteGenerationBatchModel.status.in_(("queued", "running")),
-                        NoteGenerationBatchModel.command_kind == "create",
+                        NoteGenerationBatchModel.command_kind.in_(("create", "regeneration")),
                         NoteGenerationBatchModel.mode == "merged",
                     )
                     .order_by(NoteGenerationBatchModel.created_at, NoteGenerationBatchModel.id)
@@ -276,6 +291,13 @@ class DemoNoteRunner:
                 batch_id,
                 failure_code="NOTE_SOURCE_CHANGED",
                 failure_summary="所选资料在任务创建后发生变化, 请重新创建笔记任务。",
+                retryable_in_new_batch=True,
+            )
+        except _NoteVersionConflictError:
+            await self._mark_failure(
+                batch_id,
+                failure_code="NOTE_VERSION_CONFLICT",
+                failure_summary="笔记在任务创建后发生变化, 请重新发起重新生成。",
                 retryable_in_new_batch=True,
             )
         except Exception:
@@ -530,9 +552,52 @@ class DemoNoteRunner:
             )
             if item is None or item.status in {"succeeded", "failed", "cancelled"}:
                 return
+            target_note: NoteModel | None = None
+            if batch.command_kind == "regeneration":
+                if (
+                    batch.target_note_id is None
+                    or batch.target_note_version is None
+                    or batch.target_note_version_sha256 is None
+                ):
+                    raise _NoteVersionConflictError
+                target_note = await session.scalar(
+                    select(NoteModel)
+                    .where(
+                        NoteModel.id == batch.target_note_id,
+                        NoteModel.user_id == batch.user_id,
+                        NoteModel.course_id == batch.course_id,
+                    )
+                    .with_for_update(of=NoteModel)
+                )
+                target_version = await session.scalar(
+                    select(NoteContentVersionModel).where(
+                        NoteContentVersionModel.note_id == batch.target_note_id,
+                        NoteContentVersionModel.version == batch.target_note_version,
+                        NoteContentVersionModel.user_id == batch.user_id,
+                        NoteContentVersionModel.course_id == batch.course_id,
+                    )
+                )
+                if (
+                    target_note is None
+                    or target_note.version != batch.target_note_version
+                    or target_version is None
+                    or target_version.note_version_sha256 != batch.target_note_version_sha256
+                ):
+                    raise _NoteVersionConflictError
+            elif batch.command_kind != "create":
+                raise RuntimeError("unsupported note batch command")
             await self._assert_frozen_sources_unchanged(session, batch, material)
             now = self._now()
-            note_id = new_id()
+            note_id = target_note.id if target_note is not None else new_id()
+            note_version = (
+                batch.target_note_version + 1
+                if target_note is not None and batch.target_note_version is not None
+                else 1
+            )
+            note_title = target_note.title if target_note is not None else material.title
+            note_section_path = (
+                list(target_note.section_path) if target_note is not None else material.section_path
+            )
             body_sha256 = _sha256(rendered.body_markdown)
             selected_chunks = _unique_rendered_chunks(rendered.entries)
             source_payload = [
@@ -591,29 +656,45 @@ class DemoNoteRunner:
             version_sha256 = _canonical_hash(
                 {
                     "note_id": note_id,
-                    "version": 1,
+                    "version": note_version,
                     "body_sha256": body_sha256,
                     "source_set_sha256": source_set_sha256,
                     "coverage_manifest_sha256": coverage_manifest_sha256,
                 }
             )
 
-            session.add(
-                NoteModel(
-                    id=note_id,
-                    user_id=batch.user_id,
-                    course_id=batch.course_id,
-                    section_path=material.section_path,
-                    title=material.title,
-                    body_markdown=rendered.body_markdown,
-                    version=1,
-                    generation=1,
-                    generated_by_model=False,
-                    status="ready",
-                    created_at=now,
-                    updated_at=now,
+            if target_note is None:
+                session.add(
+                    NoteModel(
+                        id=note_id,
+                        user_id=batch.user_id,
+                        course_id=batch.course_id,
+                        section_path=note_section_path,
+                        title=note_title,
+                        body_markdown=rendered.body_markdown,
+                        version=note_version,
+                        generation=1,
+                        generated_by_model=False,
+                        status="ready",
+                        created_at=now,
+                        updated_at=now,
+                    )
                 )
-            )
+            else:
+                await session.execute(
+                    delete(NoteSourceModel).where(
+                        NoteSourceModel.note_id == target_note.id,
+                        NoteSourceModel.user_id == target_note.user_id,
+                        NoteSourceModel.course_id == target_note.course_id,
+                    )
+                )
+                target_note.body_markdown = rendered.body_markdown
+                target_note.version = note_version
+                target_note.generation += 1
+                target_note.generated_by_model = False
+                target_note.status = "ready"
+                target_note.failure_code = None
+                target_note.updated_at = now
             await session.flush()
             for chunk in selected_chunks:
                 session.add(
@@ -643,11 +724,11 @@ class DemoNoteRunner:
             session.add(
                 NoteContentVersionModel(
                     note_id=note_id,
-                    version=1,
+                    version=note_version,
                     user_id=batch.user_id,
                     course_id=batch.course_id,
-                    title=material.title,
-                    section_path=material.section_path,
+                    title=note_title,
+                    section_path=note_section_path,
                     body_markdown=rendered.body_markdown,
                     content_ast=rendered.content_ast,
                     ast_schema_version="1.0",
@@ -669,7 +750,7 @@ class DemoNoteRunner:
                     user_id=batch.user_id,
                     course_id=batch.course_id,
                     note_id=note_id,
-                    note_version=1,
+                    note_version=note_version,
                     created_at=now,
                 )
             )
@@ -748,7 +829,7 @@ class DemoNoteRunner:
                 session,
                 batch,
                 "note.item.succeeded",
-                {"item_id": item.id, "note_id": note_id, "note_version": 1},
+                {"item_id": item.id, "note_id": note_id, "note_version": note_version},
                 now,
             )
             await self._append_event(
@@ -1031,7 +1112,8 @@ def _render_demo_note(material: _Material) -> _RenderedNote:
     page_index = 0
     node_index = 0
     rendered_entries: list[_RenderedEntry] = []
-    for entry in _render_entries(material):
+    selection = _render_entries(material)
+    for entry in selection.entries:
         chunk = entry.chunk
         if chunk.document_id != current_document_id:
             current_document_id = chunk.document_id
@@ -1055,24 +1137,25 @@ def _render_demo_note(material: _Material) -> _RenderedNote:
         page_key = (chunk.document_id, chunk.page_ordinal)
         if page_key != current_page:
             current_page = page_key
-            page_index += 1
-            page_label = (
-                f"幻灯片 {chunk.page_ordinal}"
-                if chunk.media_type == _PPTX
-                else f"第 {chunk.page_ordinal} 页"
-            )
-            if material.style is NoteBatchStyle.OUTLINE:
-                page_label = f"{document_index}.{chunk.page_ordinal} {page_label}"
-            lines.extend([f"### {page_label}", ""])
-            ast_nodes.append(
-                {
-                    "id": f"heading-page-{page_index}",
-                    "type": "heading",
-                    "text": page_label,
-                    "level": 3,
-                    "provenance": "source_backed",
-                }
-            )
+            if material.style is not NoteBatchStyle.EXAM_FOCUS:
+                page_index += 1
+                page_label = (
+                    f"幻灯片 {chunk.page_ordinal}"
+                    if chunk.media_type == _PPTX
+                    else f"第 {chunk.page_ordinal} 页"
+                )
+                if material.style is NoteBatchStyle.OUTLINE:
+                    page_label = f"{document_index}.{chunk.page_ordinal} {page_label}"
+                lines.extend([f"### {page_label}", ""])
+                ast_nodes.append(
+                    {
+                        "id": f"heading-page-{page_index}",
+                        "type": "heading",
+                        "text": page_label,
+                        "level": 3,
+                        "provenance": "source_backed",
+                    }
+                )
         node_index += 1
         quote = entry.text
         if material.style is NoteBatchStyle.EXAM_FOCUS:
@@ -1093,6 +1176,16 @@ def _render_demo_note(material: _Material) -> _RenderedNote:
         rendered_entries.append(_RenderedEntry(chunk=chunk, text=quote, ast_node_id=ast_node_id))
     if node_index == 0:
         raise ValueError("cannot render an empty source-derived note")
+    if selection.truncated:
+        lines.extend([f"> {_COMPLETE_TRUNCATION_NOTICE}", ""])
+        ast_nodes.append(
+            {
+                "id": "complete-truncation-notice",
+                "type": "paragraph",
+                "text": _COMPLETE_TRUNCATION_NOTICE,
+                "provenance": "system_generated",
+            }
+        )
     return _RenderedNote(
         body_markdown="\n".join(lines).strip(),
         content_ast={"schema_version": "1.0", "nodes": ast_nodes},
@@ -1113,16 +1206,29 @@ def _unique_values(values: Iterable[str]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(values))
 
 
-def _render_entries(material: _Material) -> tuple[_RenderEntry, ...]:
+def _render_entries(material: _Material) -> _RenderSelection:
     if material.style is NoteBatchStyle.COMPLETE:
-        return tuple(
-            _RenderEntry(chunk=chunk, text=chunk.text.strip(), source_index=index)
-            for index, chunk in enumerate(material.chunks)
-            if chunk.text.strip()
-        )
+        return _complete_entries(material.chunks)
     if material.style is NoteBatchStyle.OUTLINE:
-        return _outline_entries(material.chunks)
-    return _exam_focus_entries(material.chunks)
+        return _RenderSelection(entries=_outline_entries(material.chunks))
+    return _RenderSelection(entries=_exam_focus_entries(material.chunks))
+
+
+def _complete_entries(chunks: tuple[_SourceChunk, ...]) -> _RenderSelection:
+    entries: list[_RenderEntry] = []
+    retained_source_chars = 0
+    for source_index, chunk in enumerate(chunks):
+        text = chunk.text.strip()
+        if not text:
+            continue
+        if (
+            len(entries) >= _COMPLETE_ENTRIES_PER_NOTE
+            or retained_source_chars + len(text) > _COMPLETE_SOURCE_CHARS_PER_NOTE
+        ):
+            return _RenderSelection(entries=tuple(entries), truncated=True)
+        entries.append(_RenderEntry(chunk=chunk, text=text, source_index=source_index))
+        retained_source_chars += len(text)
+    return _RenderSelection(entries=tuple(entries))
 
 
 def _outline_entries(chunks: tuple[_SourceChunk, ...]) -> tuple[_RenderEntry, ...]:

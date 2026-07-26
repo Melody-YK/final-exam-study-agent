@@ -22,6 +22,8 @@ from study_agent.modules.notes.service import (
     NoteSnapshot,
     NoteSourceSnapshot,
     NoteVersionConflict,
+    NoteVersionNotFound,
+    NoteWorkflowRegenerationRequired,
 )
 from study_agent.providers.factory import ProviderRegistry
 from study_agent.providers.protocols import Clock
@@ -71,6 +73,7 @@ class NoteResponse(BaseModel):
     generation: int
     generated_by_model: bool
     status: str
+    origin_batch_id: str | None
     sources: list[NoteSourceResponse]
     created_at: datetime
     updated_at: datetime
@@ -124,19 +127,14 @@ def _response(snapshot: NoteSnapshot) -> NoteResponse:
         generation=snapshot.generation,
         generated_by_model=snapshot.generated_by_model,
         status=snapshot.status,
+        origin_batch_id=snapshot.origin_batch_id,
         sources=[_source_response(source) for source in snapshot.sources],
         created_at=snapshot.created_at,
         updated_at=snapshot.updated_at,
     )
 
 
-def _version(if_match: str | None) -> int:
-    if if_match is None:
-        raise ApiProblem(
-            status=428,
-            code=ProblemCode.PRECONDITION_REQUIRED,
-            title="需要 If-Match",
-        )
+def _version(if_match: str) -> int:
     match = _ETAG.fullmatch(if_match.strip())
     if match is None:
         raise ApiProblem(
@@ -229,7 +227,7 @@ async def update_note(
     payload: NotePatch,
     request: Request,
     response: Response,
-    if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+    if_match: Annotated[str, Header(alias="If-Match")],
 ) -> NoteResponse:
     try:
         snapshot = await _repository(request).update(
@@ -246,6 +244,13 @@ async def update_note(
             title="笔记版本冲突",
             detail=f"当前版本为 {exc.current_version}",
         ) from exc
+    except NoteVersionNotFound as exc:
+        raise ApiProblem(
+            status=409,
+            code=ProblemCode.NOTE_VERSION_NOT_FOUND,
+            title="笔记版本快照缺失",
+            detail="当前工作流笔记缺少可用于后续操作的版本快照。",
+        ) from exc
     except LookupError as exc:
         raise ApiProblem(
             status=404,
@@ -260,6 +265,13 @@ async def update_note(
 async def regenerate_note(note_id: str, request: Request, response: Response) -> NoteResponse:
     try:
         snapshot = await _service(request).regenerate(await _principal(request), note_id)
+    except NoteWorkflowRegenerationRequired as exc:
+        raise ApiProblem(
+            status=409,
+            code=ProblemCode.STATE_CONFLICT,
+            title="工作流笔记需要批次重新生成",
+            detail="该笔记由持久批次工作流管理, 请使用批次重新生成。",
+        ) from exc
     except NoteGenerationError as exc:
         raise _generation_problem(exc) from exc
     except NoteVersionConflict as exc:

@@ -78,6 +78,10 @@ async def test_note_if_match_edit_preserves_sources_and_exposes_conflict(
             )
 
         before = await client.get("/api/v1/notes/note-1")
+        missing_precondition = await client.patch(
+            "/api/v1/notes/note-1",
+            json={"body_markdown": "缺少版本条件的覆盖"},
+        )
         updated = await client.patch(
             "/api/v1/notes/note-1",
             headers={"If-Match": '"1"'},
@@ -93,6 +97,9 @@ async def test_note_if_match_edit_preserves_sources_and_exposes_conflict(
     assert before.status_code == 200
     assert before.headers["etag"] == '"1"'
     assert before.json()["sources"][0]["id"] == "note-source-1"
+    assert missing_precondition.status_code == 428
+    assert missing_precondition.json()["code"] == "PRECONDITION_REQUIRED"
+    assert missing_precondition.headers["content-type"].startswith("application/problem+json")
     assert updated.status_code == 200
     assert updated.headers["etag"] == '"2"'
     assert updated.json()["body_markdown"] == "用户编辑后的笔记"

@@ -332,6 +332,10 @@
     grid-template-columns: 1fr;
   }
 
+  .note-style-option {
+    min-height: 0;
+  }
+
   .note-sources {
     border: 1px solid var(--border);
     border-radius: 7px;
@@ -354,7 +358,9 @@
   }
 
   .lab-timings dl > div {
-    grid-template-columns: 90px minmax(0, 1fr);
+    align-items: stretch;
+    gap: 6px;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

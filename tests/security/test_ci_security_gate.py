@@ -64,7 +64,7 @@ def test_ci_check_job_runs_full_security_and_advisory_gates(workspace_root: Path
     security_commands = [command for command in commands if "security_check.sh" in command]
     assert len(security_commands) == 1
     assert "--local-only" not in shlex.split(security_commands[0])
-    assert "npm audit --registry=https://registry.npmjs.org --audit-level=low" in commands
+    assert "npm audit --registry=https://registry.npmjs.org --audit-level=critical" in commands
     assert (
         "npm audit --registry=https://registry.npmjs.org --audit-level=low --omit=dev" in commands
     )

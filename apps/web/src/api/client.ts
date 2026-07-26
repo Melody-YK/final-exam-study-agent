@@ -370,6 +370,20 @@ export class StudyApiClient {
     return this.request(`/note-batches/${batchId}`)
   }
 
+  createNoteRegenerationBatch(
+    noteId: string,
+    version: number,
+    commandKey?: string,
+  ): Promise<NoteBatchSnapshot> {
+    return this.request(`/notes/${noteId}/regeneration-batches`, {
+      method: 'POST',
+      headers: {
+        'If-Match': `"${version}"`,
+        'Idempotency-Key': commandKey ?? idempotencyKey('note-batch-regenerate'),
+      },
+    })
+  }
+
   updateNote(noteId: string, bodyMarkdown: string, version: number): Promise<NoteRecord> {
     return this.request(`/notes/${noteId}`, {
       method: 'PATCH',

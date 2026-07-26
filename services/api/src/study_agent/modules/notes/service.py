@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from typing import cast
@@ -13,6 +15,8 @@ from study_agent.identity.principal import Principal
 from study_agent.infrastructure.db.models import (
     CourseModel,
     DocumentModel,
+    NoteContentVersionModel,
+    NoteGenerationOutputModel,
     NoteModel,
     NoteSourceModel,
     RevisionChunkModel,
@@ -38,6 +42,14 @@ class NoteGenerationError(RuntimeError):
     def __init__(self, code: str) -> None:
         super().__init__(code)
         self.code = code
+
+
+class NoteVersionNotFound(RuntimeError):
+    """A workflow-managed Note is missing its immutable current version."""
+
+
+class NoteWorkflowRegenerationRequired(RuntimeError):
+    """A workflow-managed Note must regenerate through a durable batch."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +80,7 @@ class NoteSnapshot:
     generation: int
     generated_by_model: bool
     status: str
+    origin_batch_id: str | None
     sources: tuple[NoteSourceSnapshot, ...]
     created_at: datetime
     updated_at: datetime
@@ -118,6 +131,13 @@ class NoteRepository:
             note = await self._locked(session, principal, note_id)
             if note.version != expected_version:
                 raise NoteVersionConflict(note.version)
+            origin_batch_id = await self._origin_batch_id(session, note)
+            current_version: NoteContentVersionModel | None = None
+            if origin_batch_id is not None:
+                current_version = await self._content_version(session, note, note.version)
+                if current_version is None:
+                    raise NoteVersionNotFound
+            body_changed = body_markdown is not None
             if title is not None:
                 normalized_title = title.strip()
                 if not normalized_title:
@@ -128,7 +148,44 @@ class NoteRepository:
                 if not normalized_body:
                     raise ValueError("note body must not be blank")
                 note.body_markdown = normalized_body
-            note.version += 1
+            next_version = note.version + 1
+            if current_version is not None:
+                body_sha256 = hashlib.sha256(note.body_markdown.encode("utf-8")).hexdigest()
+                note_version_sha256 = _canonical_hash(
+                    {
+                        "note_id": note.id,
+                        "version": next_version,
+                        "body_sha256": body_sha256,
+                        "source_set_sha256": current_version.source_set_sha256,
+                        "coverage_manifest_sha256": current_version.coverage_manifest_sha256,
+                    }
+                )
+                session.add(
+                    NoteContentVersionModel(
+                        note_id=note.id,
+                        version=next_version,
+                        user_id=note.user_id,
+                        course_id=note.course_id,
+                        title=note.title,
+                        section_path=list(note.section_path),
+                        body_markdown=note.body_markdown,
+                        content_ast=(
+                            _user_edit_ast(note.body_markdown)
+                            if body_changed
+                            else current_version.content_ast
+                        ),
+                        ast_schema_version=current_version.ast_schema_version,
+                        parser_version=(
+                            "local-edit-v1" if body_changed else current_version.parser_version
+                        ),
+                        body_sha256=body_sha256,
+                        source_set_sha256=current_version.source_set_sha256,
+                        coverage_manifest_sha256=current_version.coverage_manifest_sha256,
+                        note_version_sha256=note_version_sha256,
+                        created_by="user",
+                    )
+                )
+            note.version = next_version
             await session.flush()
             await session.refresh(note)
             return await self._snapshot(session, note)
@@ -265,6 +322,7 @@ class NoteRepository:
         return note
 
     async def _snapshot(self, session: AsyncSession, note: NoteModel) -> NoteSnapshot:
+        origin_batch_id = await self._origin_batch_id(session, note)
         sources = (
             await session.scalars(
                 select(NoteSourceModel)
@@ -327,9 +385,48 @@ class NoteRepository:
             generation=note.generation,
             generated_by_model=note.generated_by_model,
             status=note.status,
+            origin_batch_id=origin_batch_id,
             sources=tuple(source_snapshots),
             created_at=note.created_at,
             updated_at=note.updated_at,
+        )
+
+    @staticmethod
+    async def _origin_batch_id(session: AsyncSession, note: NoteModel) -> str | None:
+        return cast(
+            str | None,
+            await session.scalar(
+                select(NoteGenerationOutputModel.batch_id)
+                .where(
+                    NoteGenerationOutputModel.note_id == note.id,
+                    NoteGenerationOutputModel.user_id == note.user_id,
+                    NoteGenerationOutputModel.course_id == note.course_id,
+                )
+                .order_by(
+                    NoteGenerationOutputModel.note_version,
+                    NoteGenerationOutputModel.created_at,
+                    NoteGenerationOutputModel.id,
+                )
+                .limit(1)
+            ),
+        )
+
+    @staticmethod
+    async def _content_version(
+        session: AsyncSession,
+        note: NoteModel,
+        version: int,
+    ) -> NoteContentVersionModel | None:
+        return cast(
+            NoteContentVersionModel | None,
+            await session.scalar(
+                select(NoteContentVersionModel).where(
+                    NoteContentVersionModel.note_id == note.id,
+                    NoteContentVersionModel.version == version,
+                    NoteContentVersionModel.user_id == note.user_id,
+                    NoteContentVersionModel.course_id == note.course_id,
+                )
+            ),
         )
 
     async def _sources_current(
@@ -411,6 +508,31 @@ class NoteRepository:
             )
 
 
+def _canonical_hash(payload: dict[str, object]) -> str:
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _user_edit_ast(body_markdown: str) -> dict[str, object]:
+    return {
+        "schema_version": "1.0",
+        "nodes": [
+            {
+                "id": "user-edit-body",
+                "type": "paragraph",
+                "text": body_markdown,
+                "provenance": "user_authored_unverified",
+            }
+        ],
+    }
+
+
 class NoteService:
     def __init__(
         self,
@@ -451,6 +573,8 @@ class NoteService:
         current = await self._repository.get(principal, note_id)
         if current is None:
             raise LookupError("note is unavailable")
+        if current.origin_batch_id is not None:
+            raise NoteWorkflowRegenerationRequired
         question = self._generation_question(current.section_path, current.title)
         retrieved, answer = await self._generate(principal, current.course_id, question)
         return await self._repository.regenerate(

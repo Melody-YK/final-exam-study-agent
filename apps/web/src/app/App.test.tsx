@@ -40,7 +40,7 @@ describe('App', () => {
     expect(await screen.findByRole('heading', { name: '操作系统' })).toBeInTheDocument()
     expect(screen.getByRole('navigation', { name: '学习视图' })).toBeInTheDocument()
     expect(screen.getByRole('navigation', { name: '移动学习视图' })).toBeInTheDocument()
-    expect(screen.getAllByRole('link', { name: '知识图谱' })).toHaveLength(2)
+    expect(screen.getAllByRole('link', { name: '概念地图' })).toHaveLength(2)
     expect(screen.queryByRole('link', { name: 'Lab' })).not.toBeInTheDocument()
     expect(localStorage.getItem('study-agent.course-id:account-1')).toBe('course-1')
     expect(studyApi.createCourse).toHaveBeenCalledWith('操作系统')

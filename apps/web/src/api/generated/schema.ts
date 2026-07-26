@@ -522,6 +522,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/notes/{note_id}/regeneration-batches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Note Regeneration Batch */
+        post: operations["create_note_regeneration_batch_api_v1_notes__note_id__regeneration_batches_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/parse-jobs/{job_id}": {
         parameters: {
             query?: never;
@@ -1214,6 +1231,18 @@ export interface components {
          * @enum {string}
          */
         EtaUnavailableReason: "not_started" | "terminal" | "insufficient_history" | "retrying" | "provider_changed" | "outlier";
+        /**
+         * FieldError
+         * @description A validation issue tied to a request location.
+         */
+        FieldError: {
+            /** Code */
+            code: string;
+            /** Location */
+            location?: (string | number)[];
+            /** Message */
+            message: string;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -1661,15 +1690,15 @@ export interface components {
         };
         /**
          * LocalDemoNoteBatchSnapshot
-         * @description Public snapshot shape supported by the local merged/create demo route.
+         * @description Public snapshot shape supported by local merged demo commands.
          */
         LocalDemoNoteBatchSnapshot: {
             /**
              * Command Kind
              * @default create
-             * @constant
+             * @enum {string}
              */
-            command_kind: "create";
+            command_kind: "create" | "regeneration";
             /** Completed At */
             completed_at?: string | null;
             /** Completed Items */
@@ -1851,6 +1880,8 @@ export interface components {
             generation: number;
             /** Id */
             id: string;
+            /** Origin Batch Id */
+            origin_batch_id: string | null;
             /** Section Path */
             section_path: string[];
             /** Sources */
@@ -1954,6 +1985,38 @@ export interface components {
         ParseRetryRequest: {
             /** Failed Pages */
             failed_pages?: number[] | null;
+        };
+        /**
+         * ProblemDetails
+         * @description Serializable ``application/problem+json`` response body.
+         */
+        ProblemDetails: {
+            /** Code */
+            code: string;
+            /** Detail */
+            detail?: string | null;
+            /** Field Errors */
+            field_errors?: components["schemas"]["FieldError"][];
+            /** Instance */
+            instance?: string | null;
+            /** Retry After Ms */
+            retry_after_ms?: number | null;
+            /**
+             * Retryable
+             * @default false
+             */
+            retryable: boolean;
+            /** Status */
+            status: number;
+            /** Title */
+            title: string;
+            /** Trace Id */
+            trace_id: string;
+            /**
+             * Type
+             * @default about:blank
+             */
+            type: string;
         };
         /** QueryCreate */
         QueryCreate: {
@@ -3331,8 +3394,8 @@ export interface operations {
     update_note_api_v1_notes__note_id__patch: {
         parameters: {
             query?: never;
-            header?: {
-                "If-Match"?: string | null;
+            header: {
+                "If-Match": string;
             };
             path: {
                 note_id: string;
@@ -3392,6 +3455,67 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_note_regeneration_batch_api_v1_notes__note_id__regeneration_batches_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+                "If-Match": string;
+            };
+            path: {
+                note_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LocalDemoNoteBatchSnapshot"];
+                };
+            };
+            /** @description 幂等键或笔记版本状态冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description If-Match 与当前笔记版本不一致 */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description 缺少必需的 If-Match 前置条件 */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
                 };
             };
         };

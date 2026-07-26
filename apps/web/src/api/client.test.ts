@@ -314,6 +314,27 @@ describe('StudyApiClient', () => {
     expect(fetchMock.mock.calls[1]?.[0]).toBe('/api/v1/note-batches/note-batch-1')
   })
 
+  it('starts an exact-version idempotent note regeneration batch', async () => {
+    const snapshot = { id: 'note-batch-regenerated' } as NoteBatchSnapshot
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(snapshot), {
+        status: 202,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const client = new StudyApiClient('/api/v1')
+
+    await client.createNoteRegenerationBatch('note-1', 3, 'note-regenerate-command-1')
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const headers = new Headers(init.headers)
+    expect(url).toBe('/api/v1/notes/note-1/regeneration-batches')
+    expect(init.method).toBe('POST')
+    expect(headers.get('If-Match')).toBe('"3"')
+    expect(headers.get('Idempotency-Key')).toBe('note-regenerate-command-1')
+  })
+
   it('maps an API ProblemDetails response without replacing its code or trace', async () => {
     const apiProblem = problem({
       status: 409,

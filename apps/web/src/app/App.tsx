@@ -1,6 +1,6 @@
 import { QueryClientProvider, useQueryClient } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
-import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router'
 
 import { ErrorNotice } from '../components/ui/ErrorNotice'
 import { AdminShell } from '../features/admin/AdminShell'

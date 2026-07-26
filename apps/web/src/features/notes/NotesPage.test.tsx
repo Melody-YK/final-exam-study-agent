@@ -89,6 +89,7 @@ describe('NotesPage', () => {
     const editor = screen.getByLabelText('笔记正文')
     await user.clear(editor)
     await user.type(editor, '# 更新正文')
+    expect(screen.getByRole('button', { name: '重新生成' })).toBeDisabled()
     await user.click(screen.getByRole('button', { name: '保存' }))
 
     await waitFor(() =>
@@ -231,6 +232,213 @@ describe('NotesPage', () => {
     expect(screen.getByLabelText('笔记生成进度')).toHaveTextContent('succeeded')
   })
 
+  it('regenerates a workflow note through a durable batch and selects its new output', async () => {
+    const capabilities: RuntimeCapabilities = {
+      ...availableCapabilities,
+      provider: { status: 'not_configured', label: '未配置回答模型' },
+    }
+    const workflowNote = noteRecord({
+      id: 'workflow-note',
+      origin_batch_id: 'origin-batch',
+      generated_by_model: false,
+      title: '原批次笔记',
+    })
+    const regenerated = noteRecord({
+      id: workflowNote.id,
+      origin_batch_id: workflowNote.origin_batch_id,
+      generated_by_model: false,
+      title: workflowNote.title,
+      body_markdown: `# ${workflowNote.title}\n\n新正文`,
+      version: 2,
+      generation: 2,
+    })
+    vi.spyOn(studyApi, 'listNotes')
+      .mockResolvedValueOnce([workflowNote])
+      .mockResolvedValue([regenerated])
+    const legacyRegenerate = vi.spyOn(studyApi, 'regenerateNote')
+    const createRegeneration = vi
+      .spyOn(studyApi, 'createNoteRegenerationBatch')
+      .mockResolvedValue(
+        noteBatchSnapshot({
+          id: 'regeneration-batch',
+          command_kind: 'regeneration',
+          target_note_id: workflowNote.id,
+          target_note_version: workflowNote.version,
+          target_note_version_sha256: 'a'.repeat(64),
+        }),
+      )
+    let finishBatch!: (snapshot: NoteBatchSnapshot) => void
+    vi.spyOn(studyApi, 'getNoteBatch').mockImplementation(
+      () => new Promise((resolve) => {
+        finishBatch = resolve
+      }),
+    )
+    const { user } = renderInWorkspace(<NotesPage />, { workspace: { capabilities } })
+
+    await screen.findByLabelText('笔记阅读视图')
+    expect(screen.getByRole('button', { name: '重新生成' })).toBeEnabled()
+    await user.click(screen.getByRole('button', { name: '重新生成' }))
+
+    await waitFor(() =>
+      expect(createRegeneration).toHaveBeenCalledWith(
+        workflowNote.id,
+        workflowNote.version,
+        expect.stringMatching(/^note-batch-regenerate-/),
+      ),
+    )
+    expect(legacyRegenerate).not.toHaveBeenCalled()
+    expect(await screen.findByLabelText('笔记生成进度')).toHaveTextContent('running')
+    expect(screen.getByRole('button', { name: '重新生成' })).toBeDisabled()
+    const succeeded = noteBatchSnapshot({
+      id: 'regeneration-batch',
+      command_kind: 'regeneration',
+      target_note_id: workflowNote.id,
+      target_note_version: workflowNote.version,
+      target_note_version_sha256: 'a'.repeat(64),
+      status: 'succeeded',
+    })
+    finishBatch({
+      ...succeeded,
+      items: succeeded.items.map((item) => ({ ...item, note_id: workflowNote.id })),
+    })
+
+    await waitFor(() => expect(studyApi.listNotes).toHaveBeenCalledTimes(2))
+    expect(await screen.findByRole('button', { name: /原批次笔记/ })).toHaveAttribute(
+      'aria-current',
+      'page',
+    )
+    expect(screen.getAllByRole('button', { name: /原批次笔记/ })).toHaveLength(1)
+    expect(screen.getByText('版本 2 · 生成 2')).toBeInTheDocument()
+    expect(screen.getByLabelText('笔记阅读视图')).toHaveTextContent('新正文')
+  })
+
+  it('keeps the regeneration command key until a workflow batch is accepted', async () => {
+    const workflowNote = noteRecord({ origin_batch_id: 'origin-batch' })
+    vi.spyOn(studyApi, 'listNotes').mockResolvedValue([workflowNote])
+    const createRegeneration = vi
+      .spyOn(studyApi, 'createNoteRegenerationBatch')
+      .mockRejectedValueOnce(new Error('连接中断'))
+      .mockResolvedValue(
+        noteBatchSnapshot({
+          id: 'regeneration-batch',
+          command_kind: 'regeneration',
+          target_note_id: workflowNote.id,
+          target_note_version: workflowNote.version,
+          target_note_version_sha256: 'a'.repeat(64),
+        }),
+      )
+    vi.spyOn(studyApi, 'getNoteBatch').mockImplementation(
+      () => new Promise<NoteBatchSnapshot>(() => undefined),
+    )
+    const { user } = renderInWorkspace(<NotesPage />)
+
+    await screen.findByLabelText('笔记阅读视图')
+    await user.click(screen.getByRole('button', { name: '重新生成' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('连接中断')
+    await user.click(screen.getByRole('button', { name: '重新生成' }))
+
+    await waitFor(() => expect(createRegeneration).toHaveBeenCalledTimes(2))
+    expect(createRegeneration.mock.calls[0]?.[2]).toBe(createRegeneration.mock.calls[1]?.[2])
+  })
+
+  it('scopes regeneration command keys to the note and version target', async () => {
+    const first = noteRecord({
+      id: 'workflow-note-1',
+      origin_batch_id: 'origin-batch-1',
+      title: '第一篇批次笔记',
+    })
+    const second = noteRecord({
+      id: 'workflow-note-2',
+      origin_batch_id: 'origin-batch-2',
+      title: '第二篇批次笔记',
+    })
+    vi.spyOn(studyApi, 'listNotes').mockResolvedValue([first, second])
+    const createRegeneration = vi
+      .spyOn(studyApi, 'createNoteRegenerationBatch')
+      .mockRejectedValue(new Error('连接中断'))
+    const { user } = renderInWorkspace(<NotesPage />)
+
+    await screen.findByLabelText('笔记阅读视图')
+    await user.click(screen.getByRole('button', { name: '重新生成' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('连接中断')
+    await user.click(screen.getByRole('button', { name: /第二篇批次笔记/ }))
+    await user.click(screen.getByRole('button', { name: '重新生成' }))
+    await waitFor(() => expect(createRegeneration).toHaveBeenCalledTimes(2))
+
+    expect(createRegeneration.mock.calls[0]?.[2]).not.toBe(
+      createRegeneration.mock.calls[1]?.[2],
+    )
+  })
+
+  it('keeps legacy note regeneration on the immediate provider endpoint', async () => {
+    const initial = noteRecord({ origin_batch_id: null })
+    const updated = noteRecord({
+      origin_batch_id: null,
+      body_markdown: '# Provider 重新生成\n\n更新正文',
+      version: 2,
+      generation: 2,
+    })
+    vi.spyOn(studyApi, 'listNotes').mockResolvedValue([initial])
+    const legacyRegenerate = vi.spyOn(studyApi, 'regenerateNote').mockResolvedValue(updated)
+    const createRegeneration = vi.spyOn(studyApi, 'createNoteRegenerationBatch')
+    const { user } = renderInWorkspace(<NotesPage />)
+
+    await screen.findByLabelText('笔记阅读视图')
+    await user.click(screen.getByRole('button', { name: '重新生成' }))
+
+    await waitFor(() => expect(legacyRegenerate).toHaveBeenCalledWith(initial.id))
+    expect(createRegeneration).not.toHaveBeenCalled()
+    expect(await screen.findByLabelText('笔记阅读视图')).toHaveTextContent('更新正文')
+  })
+
+  it('previews all template contracts without starting a generation batch', async () => {
+    vi.spyOn(studyApi, 'listNotes').mockResolvedValue([])
+    vi.spyOn(studyApi, 'listDocuments').mockResolvedValue([documentRecord()])
+    const createBatch = vi.spyOn(studyApi, 'createNoteBatch')
+    const getBatch = vi.spyOn(studyApi, 'getNoteBatch')
+    const { user } = renderInWorkspace(<NotesPage />)
+    await screen.findByText('暂无笔记')
+
+    await user.click(screen.getByRole('button', { name: '新建笔记' }))
+
+    expect(await screen.findAllByRole('radio')).toHaveLength(3)
+    const exam = screen.getByRole('radio', { name: /考前速记/ })
+    const outline = screen.getByRole('radio', { name: /结构提纲/ })
+    const complete = screen.getByRole('radio', { name: /完整讲义/ })
+    expect(exam).toBeChecked()
+    expect(outline).not.toBeChecked()
+    expect(complete).not.toBeChecked()
+
+    expect(screen.getByText('最短 · 最多 12 条')).toBeInTheDocument()
+    expect(screen.getByText('定义、条件、区别和公式优先')).toBeInTheDocument()
+    expect(screen.getByText('中等 · 最多 30 条')).toBeInTheDocument()
+    expect(screen.getByText('按资料和页码快速梳理层级')).toBeInTheDocument()
+    expect(screen.getByText('最长 · 最多 40 条 / 12,000 字符')).toBeInTheDocument()
+    expect(screen.getByText('按来源顺序保留完整上下文')).toBeInTheDocument()
+
+    const examSample = screen.getByLabelText('考前速记结构示例')
+    const outlineSample = screen.getByLabelText('结构提纲结构示例')
+    const completeSample = screen.getByLabelText('完整讲义结构示例')
+    expect(examSample.children).toHaveLength(3)
+    expect(examSample).toHaveTextContent('资料名称• 高频定义或公式• 关键条件与区别')
+    expect(outlineSample.children).toHaveLength(3)
+    expect(outlineSample).toHaveTextContent('1. 资料名称1.1 第 1 页1. 关键知识点')
+    expect(completeSample.children).toHaveLength(3)
+    expect(completeSample).toHaveTextContent('资料名称第 1 页来源正文段落')
+    expect(examSample).toHaveAttribute('aria-current', 'true')
+    expect(outlineSample).not.toHaveAttribute('aria-current')
+    expect(completeSample).not.toHaveAttribute('aria-current')
+
+    await user.click(outline)
+
+    expect(outline).toBeChecked()
+    expect(examSample).not.toHaveAttribute('aria-current')
+    expect(outlineSample).toHaveAttribute('aria-current', 'true')
+    expect(completeSample).not.toHaveAttribute('aria-current')
+    expect(createBatch).not.toHaveBeenCalled()
+    expect(getBatch).not.toHaveBeenCalled()
+  })
+
   it('omits optional title and section fields from a merged batch', async () => {
     vi.spyOn(studyApi, 'listNotes').mockResolvedValue([])
     vi.spyOn(studyApi, 'listDocuments').mockResolvedValue([documentRecord()])
@@ -320,7 +528,9 @@ describe('NotesPage', () => {
   it('restores and polls the active batch stored for the current course', async () => {
     localStorage.setItem('study-agent.note-batch:course-1', 'note-batch-restored')
     localStorage.setItem('study-agent.note-batch:another-course', 'note-batch-other')
-    vi.spyOn(studyApi, 'listNotes').mockResolvedValue([])
+    vi.spyOn(studyApi, 'listNotes').mockResolvedValue([
+      noteRecord({ origin_batch_id: 'origin-batch' }),
+    ])
     const getBatch = vi.spyOn(studyApi, 'getNoteBatch').mockResolvedValue(
       noteBatchSnapshot({ id: 'note-batch-restored' }),
     )
@@ -330,6 +540,7 @@ describe('NotesPage', () => {
     await waitFor(() => expect(getBatch).toHaveBeenCalledWith('note-batch-restored'))
     expect(await screen.findByLabelText('笔记生成进度')).toHaveTextContent('running')
     expect(screen.getByRole('button', { name: '新建笔记' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '重新生成' })).toBeDisabled()
   })
 
   it('clears a stale restored batch after a not-found response', async () => {
@@ -437,11 +648,14 @@ describe('NotesPage', () => {
         generation: { status: 'unavailable', label: '异步笔记生成未启用' },
       },
     }
-    vi.spyOn(studyApi, 'listNotes').mockResolvedValue([])
+    vi.spyOn(studyApi, 'listNotes').mockResolvedValue([
+      noteRecord({ origin_batch_id: 'origin-batch' }),
+    ])
 
     renderInWorkspace(<NotesPage />, { workspace: { capabilities } })
 
-    await screen.findByText('暂无笔记')
+    await screen.findByLabelText('笔记阅读视图')
     expect(screen.getByRole('button', { name: '新建笔记' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '重新生成' })).toBeDisabled()
   })
 })

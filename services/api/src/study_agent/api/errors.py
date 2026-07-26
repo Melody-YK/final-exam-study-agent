@@ -191,6 +191,23 @@ def sanitize_problem_detail(detail: str | None) -> str | None:
 
 async def request_validation_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     trace_id = get_trace_id() or new_trace_id()
+    if any(
+        error.get("type") == "missing" and tuple(error.get("loc", ()))[:2] == ("header", "If-Match")
+        for error in exc.errors()
+    ):
+        problem = ProblemDetails(
+            type="https://study-agent.invalid/problems/precondition-required",
+            title="需要 If-Match",
+            status=428,
+            code=ProblemCode.PRECONDITION_REQUIRED.value,
+            instance=request.url.path,
+            trace_id=trace_id,
+        )
+        return JSONResponse(
+            status_code=428,
+            content=problem.model_dump(mode="json"),
+            media_type="application/problem+json",
+        )
     field_errors = [
         FieldError(
             location=list(error.get("loc", ())),

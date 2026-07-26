@@ -122,6 +122,7 @@ export function noteRecord(overrides: Partial<NoteRecord> = {}): NoteRecord {
     version: 1,
     generation: 1,
     generated_by_model: true,
+    origin_batch_id: null,
     status: 'ready',
     sources: [
       {
