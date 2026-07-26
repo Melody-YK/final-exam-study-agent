@@ -47,11 +47,31 @@ const TERMINAL_ITEM_STATUSES = new Set(['succeeded', 'failed', 'cancelled'])
 const NOTE_STYLE_OPTIONS: ReadonlyArray<{
   value: NoteBatchStyle
   label: string
-  description: string
+  density: string
+  intendedUse: string
+  structure: readonly [string, string, string]
 }> = [
-  { value: 'exam_focus', label: '考前速记', description: '按页提炼为紧凑要点' },
-  { value: 'outline', label: '结构提纲', description: '按资料层级组织内容' },
-  { value: 'complete', label: '完整讲义', description: '保留更完整的资料正文' },
+  {
+    value: 'exam_focus',
+    label: '考前速记',
+    density: '最短 · 最多 12 条',
+    intendedUse: '定义、条件、区别和公式优先',
+    structure: ['资料名称', '• 高频定义或公式', '• 关键条件与区别'],
+  },
+  {
+    value: 'outline',
+    label: '结构提纲',
+    density: '中等 · 最多 30 条',
+    intendedUse: '按资料和页码快速梳理层级',
+    structure: ['1. 资料名称', '1.1 第 1 页', '1. 关键知识点'],
+  },
+  {
+    value: 'complete',
+    label: '完整讲义',
+    density: '最长 · 最多 40 条 / 12,000 字符',
+    intendedUse: '按来源顺序保留完整上下文',
+    structure: ['资料名称', '第 1 页', '来源正文段落'],
+  },
 ]
 
 function noteStyleLabel(style: NoteBatchStyle): string {
@@ -337,9 +357,21 @@ function CreateNoteDialog({
                   type="radio"
                   value={option.value}
                 />
-                <span>
-                  <strong>{option.label}</strong>
-                  <small>{option.description}</small>
+                <span className="note-style-option__details">
+                  <span className="note-style-option__heading">
+                    <strong>{option.label}</strong>
+                    <span className="note-style-option__density">{option.density}</span>
+                  </span>
+                  <small>{option.intendedUse}</small>
+                  <span
+                    aria-current={style === option.value ? 'true' : undefined}
+                    aria-label={`${option.label}结构示例`}
+                    className="note-style-option__sample"
+                  >
+                    {option.structure.map((line) => (
+                      <code key={line}>{line}</code>
+                    ))}
+                  </span>
                 </span>
               </label>
             ))}

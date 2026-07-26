@@ -36,6 +36,7 @@ from study_agent.infrastructure.db.session import Database
 from study_agent.main import create_app
 from study_agent.modules.courses.repository import CourseRepository
 from study_agent.modules.jobs.clock import SystemClock
+from study_agent.modules.notes import demo_runner as demo_runner_module
 from study_agent.modules.notes.batch_service import (
     NoteBatchService,
     NoteBatchServiceError,
@@ -71,6 +72,11 @@ class _StyleArtifacts:
     covered_pages: frozenset[int]
     skipped_pages: frozenset[int]
     source_set_sha256: str
+
+
+_COMPLETE_TRUNCATION_NOTICE = (
+    "内容已截断。完整讲义最多保留前 40 条完整来源内容。累计源文本不超过 12,000 字符。"
+)
 
 
 def _settings(database_url: str, root: Path) -> Settings:
@@ -210,6 +216,125 @@ async def _seed_style_document(
     return course.id, seeded.document_id, seeded.revision_id, tuple(source_texts)
 
 
+def _sized_source_text(index: int, size: int) -> str:
+    prefix = f"entry-{index:02d}:"
+    assert len(prefix) <= size
+    return prefix + ("x" * (size - len(prefix)))
+
+
+def _render_complete(source_texts: tuple[str, ...]) -> demo_runner_module._RenderedNote:
+    chunks = tuple(
+        demo_runner_module._SourceChunk(
+            input_id="input-1",
+            document_id="document-1",
+            revision_id="revision-1",
+            deletion_epoch=0,
+            document_name="source.pdf",
+            media_type="application/pdf",
+            chunk_id=f"chunk-{index:02d}",
+            ordinal=index,
+            text=text,
+            page_ordinal=((index - 1) // 4) + 1,
+            content_sha256=sha256(text.encode()).hexdigest(),
+        )
+        for index, text in enumerate(source_texts, start=1)
+    )
+    return demo_runner_module._render_demo_note(
+        demo_runner_module._Material(
+            title="预算边界",
+            style=NoteBatchStyle.COMPLETE,
+            section_path=[],
+            inputs=(),
+            chunks=chunks,
+            units=(),
+        )
+    )
+
+
+def _assert_complete_render(
+    rendered: demo_runner_module._RenderedNote,
+    source_texts: tuple[str, ...],
+    *,
+    retained_count: int,
+    truncated: bool,
+) -> None:
+    retained = tuple(text.strip() for text in source_texts[:retained_count])
+    assert tuple(entry.text for entry in rendered.entries) == retained
+    assert tuple(entry.chunk.chunk_id for entry in rendered.entries) == tuple(
+        f"chunk-{index:02d}" for index in range(1, retained_count + 1)
+    )
+
+    source_nodes = {
+        str(node["id"]): node
+        for node in rendered.content_ast["nodes"]
+        if node["type"] == "paragraph" and node["provenance"] == "source_backed"
+    }
+    assert len(source_nodes) == retained_count
+    for entry in rendered.entries:
+        node = source_nodes[entry.ast_node_id]
+        assert node["text"] == entry.text
+        assert entry.text == entry.chunk.text.strip()
+        assert entry.text in rendered.body_markdown
+
+    truncation_nodes = [
+        node
+        for node in rendered.content_ast["nodes"]
+        if node["type"] == "paragraph"
+        and node["provenance"] == "system_generated"
+        and node["text"] == _COMPLETE_TRUNCATION_NOTICE
+    ]
+    expected_notice_count = int(truncated)
+    assert rendered.body_markdown.count(_COMPLETE_TRUNCATION_NOTICE) == expected_notice_count
+    assert len(truncation_nodes) == expected_notice_count
+
+
+@pytest.mark.parametrize(
+    ("entry_count", "retained_count", "truncated"),
+    ((39, 39, False), (40, 40, False), (41, 40, True)),
+)
+def test_complete_note_entry_budget_keeps_the_largest_whole_prefix(
+    entry_count: int,
+    retained_count: int,
+    truncated: bool,
+) -> None:
+    source_texts = tuple(_sized_source_text(index, 80) for index in range(1, entry_count + 1))
+
+    rendered = _render_complete(source_texts)
+
+    _assert_complete_render(
+        rendered,
+        source_texts,
+        retained_count=retained_count,
+        truncated=truncated,
+    )
+    assert sum(len(entry.text) for entry in rendered.entries) <= 12_000
+
+
+@pytest.mark.parametrize(
+    ("entry_count", "entry_size", "retained_count", "truncated"),
+    ((10, 1_199, 10, False), (10, 1_200, 10, False), (11, 1_200, 10, True)),
+)
+def test_complete_note_character_budget_keeps_the_largest_whole_prefix(
+    entry_count: int,
+    entry_size: int,
+    retained_count: int,
+    truncated: bool,
+) -> None:
+    source_texts = tuple(
+        _sized_source_text(index, entry_size) for index in range(1, entry_count + 1)
+    )
+
+    rendered = _render_complete(source_texts)
+
+    _assert_complete_render(
+        rendered,
+        source_texts,
+        retained_count=retained_count,
+        truncated=truncated,
+    )
+    assert sum(len(entry.text) for entry in rendered.entries) <= 12_000
+
+
 @pytest.mark.integration
 async def test_note_batch_demo_runs_without_providers_and_persists_preview(
     test_database_url: str,
@@ -277,9 +402,8 @@ async def test_note_batch_demo_runs_without_providers_and_persists_preview(
             assert note["generated_by_model"] is False
             body_markdown = note["body_markdown"]
             assert "## chapter-1.pdf" in body_markdown
-            assert "### 第 1 页" in body_markdown
             assert "## chapter-2.pptx" in body_markdown
-            assert "### 幻灯片 1" in body_markdown
+            assert not any(line.startswith("### ") for line in body_markdown.splitlines())
             assert "Source-derived local demo note" not in body_markdown
             assert "进程是操作系统进行资源分配的基本单位" in body_markdown
             assert "临界区需要互斥访问共享资源" in body_markdown
@@ -341,6 +465,10 @@ async def test_note_batch_demo_runs_without_providers_and_persists_preview(
             assert version is not None
             assert version.parser_version == "local-demo-v1"
             NoteContentAstV1.model_validate(version.content_ast)
+            assert not any(
+                node["type"] == "heading" and node.get("level") == 3
+                for node in version.content_ast["nodes"]
+            )
             events = list(
                 await session.scalars(
                     select(NoteGenerationEventModel)
@@ -441,6 +569,39 @@ async def test_note_batch_styles_render_distinct_source_backed_previews(
             NoteContentAstV1.model_validate(version.content_ast)
             assert f"笔记模板: {label}" in note.body_markdown
             assert all(chunk.id not in note.body_markdown for chunk in raw_chunks)
+            truncation_nodes = [
+                node
+                for node in version.content_ast["nodes"]
+                if node["type"] == "paragraph"
+                and node["provenance"] == "system_generated"
+                and node["text"] == _COMPLETE_TRUNCATION_NOTICE
+            ]
+            expected_truncation_count = int(style is NoteBatchStyle.COMPLETE)
+            assert note.body_markdown.count(_COMPLETE_TRUNCATION_NOTICE) == (
+                expected_truncation_count
+            )
+            assert len(truncation_nodes) == expected_truncation_count
+
+            document_heading_nodes = [
+                node
+                for node in version.content_ast["nodes"]
+                if node["type"] == "heading" and node.get("level") == 2
+            ]
+            page_heading_nodes = [
+                node
+                for node in version.content_ast["nodes"]
+                if node["type"] == "heading" and node.get("level") == 3
+            ]
+            assert document_heading_nodes
+            markdown_page_headings = [
+                line for line in note.body_markdown.splitlines() if line.startswith("### ")
+            ]
+            if style is NoteBatchStyle.EXAM_FOCUS:
+                assert not page_heading_nodes
+                assert not markdown_page_headings
+            else:
+                assert page_heading_nodes
+                assert len(markdown_page_headings) == len(page_heading_nodes)
 
             source_nodes = [
                 node
@@ -529,13 +690,14 @@ async def test_note_batch_styles_render_distinct_source_backed_previews(
         )
 
         complete = artifacts[NoteBatchStyle.COMPLETE]
-        assert len(complete.source_node_texts) == 64
-        assert complete.source_count == 64
-        assert complete.covered_pages == frozenset(range(1, 17))
-        assert not complete.skipped_pages
+        assert len(complete.source_node_texts) == 40
+        assert complete.source_count == 40
+        assert complete.covered_pages == frozenset(range(1, 11))
+        assert complete.skipped_pages == frozenset(range(11, 17))
         assert set(complete.covered_entry_counts_by_page.values()) == {4}
-        assert set(complete.source_node_texts) == set(source_texts)
-        assert all(source in complete.body for source in source_texts)
+        assert complete.source_node_texts == source_texts[:40]
+        assert all(source in complete.body for source in source_texts[:40])
+        assert all(source not in complete.body for source in source_texts[40:])
         assert len(exam.body) < len(complete.body)
         assert len(outline.body) < len(complete.body)
     finally:

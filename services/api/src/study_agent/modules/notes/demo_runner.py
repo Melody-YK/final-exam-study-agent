@@ -45,6 +45,11 @@ _EXAM_EXCERPT_CHARS = 96
 _OUTLINE_POINTS_PER_PAGE = 3
 _OUTLINE_POINTS_PER_NOTE = 30
 _OUTLINE_EXCERPT_CHARS = 72
+_COMPLETE_ENTRIES_PER_NOTE = 40
+_COMPLETE_SOURCE_CHARS_PER_NOTE = 12_000
+_COMPLETE_TRUNCATION_NOTICE = (
+    "内容已截断。完整讲义最多保留前 40 条完整来源内容。累计源文本不超过 12,000 字符。"
+)
 _HIGH_VALUE_MARKERS = (
     "定义",
     "概念",
@@ -91,6 +96,12 @@ class _RenderEntry:
     text: str
     source_index: int
     sentence_index: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class _RenderSelection:
+    entries: tuple[_RenderEntry, ...]
+    truncated: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1101,7 +1112,8 @@ def _render_demo_note(material: _Material) -> _RenderedNote:
     page_index = 0
     node_index = 0
     rendered_entries: list[_RenderedEntry] = []
-    for entry in _render_entries(material):
+    selection = _render_entries(material)
+    for entry in selection.entries:
         chunk = entry.chunk
         if chunk.document_id != current_document_id:
             current_document_id = chunk.document_id
@@ -1125,24 +1137,25 @@ def _render_demo_note(material: _Material) -> _RenderedNote:
         page_key = (chunk.document_id, chunk.page_ordinal)
         if page_key != current_page:
             current_page = page_key
-            page_index += 1
-            page_label = (
-                f"幻灯片 {chunk.page_ordinal}"
-                if chunk.media_type == _PPTX
-                else f"第 {chunk.page_ordinal} 页"
-            )
-            if material.style is NoteBatchStyle.OUTLINE:
-                page_label = f"{document_index}.{chunk.page_ordinal} {page_label}"
-            lines.extend([f"### {page_label}", ""])
-            ast_nodes.append(
-                {
-                    "id": f"heading-page-{page_index}",
-                    "type": "heading",
-                    "text": page_label,
-                    "level": 3,
-                    "provenance": "source_backed",
-                }
-            )
+            if material.style is not NoteBatchStyle.EXAM_FOCUS:
+                page_index += 1
+                page_label = (
+                    f"幻灯片 {chunk.page_ordinal}"
+                    if chunk.media_type == _PPTX
+                    else f"第 {chunk.page_ordinal} 页"
+                )
+                if material.style is NoteBatchStyle.OUTLINE:
+                    page_label = f"{document_index}.{chunk.page_ordinal} {page_label}"
+                lines.extend([f"### {page_label}", ""])
+                ast_nodes.append(
+                    {
+                        "id": f"heading-page-{page_index}",
+                        "type": "heading",
+                        "text": page_label,
+                        "level": 3,
+                        "provenance": "source_backed",
+                    }
+                )
         node_index += 1
         quote = entry.text
         if material.style is NoteBatchStyle.EXAM_FOCUS:
@@ -1163,6 +1176,16 @@ def _render_demo_note(material: _Material) -> _RenderedNote:
         rendered_entries.append(_RenderedEntry(chunk=chunk, text=quote, ast_node_id=ast_node_id))
     if node_index == 0:
         raise ValueError("cannot render an empty source-derived note")
+    if selection.truncated:
+        lines.extend([f"> {_COMPLETE_TRUNCATION_NOTICE}", ""])
+        ast_nodes.append(
+            {
+                "id": "complete-truncation-notice",
+                "type": "paragraph",
+                "text": _COMPLETE_TRUNCATION_NOTICE,
+                "provenance": "system_generated",
+            }
+        )
     return _RenderedNote(
         body_markdown="\n".join(lines).strip(),
         content_ast={"schema_version": "1.0", "nodes": ast_nodes},
@@ -1183,16 +1206,29 @@ def _unique_values(values: Iterable[str]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(values))
 
 
-def _render_entries(material: _Material) -> tuple[_RenderEntry, ...]:
+def _render_entries(material: _Material) -> _RenderSelection:
     if material.style is NoteBatchStyle.COMPLETE:
-        return tuple(
-            _RenderEntry(chunk=chunk, text=chunk.text.strip(), source_index=index)
-            for index, chunk in enumerate(material.chunks)
-            if chunk.text.strip()
-        )
+        return _complete_entries(material.chunks)
     if material.style is NoteBatchStyle.OUTLINE:
-        return _outline_entries(material.chunks)
-    return _exam_focus_entries(material.chunks)
+        return _RenderSelection(entries=_outline_entries(material.chunks))
+    return _RenderSelection(entries=_exam_focus_entries(material.chunks))
+
+
+def _complete_entries(chunks: tuple[_SourceChunk, ...]) -> _RenderSelection:
+    entries: list[_RenderEntry] = []
+    retained_source_chars = 0
+    for source_index, chunk in enumerate(chunks):
+        text = chunk.text.strip()
+        if not text:
+            continue
+        if (
+            len(entries) >= _COMPLETE_ENTRIES_PER_NOTE
+            or retained_source_chars + len(text) > _COMPLETE_SOURCE_CHARS_PER_NOTE
+        ):
+            return _RenderSelection(entries=tuple(entries), truncated=True)
+        entries.append(_RenderEntry(chunk=chunk, text=text, source_index=source_index))
+        retained_source_chars += len(text)
+    return _RenderSelection(entries=tuple(entries))
 
 
 def _outline_entries(chunks: tuple[_SourceChunk, ...]) -> tuple[_RenderEntry, ...]:

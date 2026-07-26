@@ -391,6 +391,54 @@ describe('NotesPage', () => {
     expect(await screen.findByLabelText('笔记阅读视图')).toHaveTextContent('更新正文')
   })
 
+  it('previews all template contracts without starting a generation batch', async () => {
+    vi.spyOn(studyApi, 'listNotes').mockResolvedValue([])
+    vi.spyOn(studyApi, 'listDocuments').mockResolvedValue([documentRecord()])
+    const createBatch = vi.spyOn(studyApi, 'createNoteBatch')
+    const getBatch = vi.spyOn(studyApi, 'getNoteBatch')
+    const { user } = renderInWorkspace(<NotesPage />)
+    await screen.findByText('暂无笔记')
+
+    await user.click(screen.getByRole('button', { name: '新建笔记' }))
+
+    expect(await screen.findAllByRole('radio')).toHaveLength(3)
+    const exam = screen.getByRole('radio', { name: /考前速记/ })
+    const outline = screen.getByRole('radio', { name: /结构提纲/ })
+    const complete = screen.getByRole('radio', { name: /完整讲义/ })
+    expect(exam).toBeChecked()
+    expect(outline).not.toBeChecked()
+    expect(complete).not.toBeChecked()
+
+    expect(screen.getByText('最短 · 最多 12 条')).toBeInTheDocument()
+    expect(screen.getByText('定义、条件、区别和公式优先')).toBeInTheDocument()
+    expect(screen.getByText('中等 · 最多 30 条')).toBeInTheDocument()
+    expect(screen.getByText('按资料和页码快速梳理层级')).toBeInTheDocument()
+    expect(screen.getByText('最长 · 最多 40 条 / 12,000 字符')).toBeInTheDocument()
+    expect(screen.getByText('按来源顺序保留完整上下文')).toBeInTheDocument()
+
+    const examSample = screen.getByLabelText('考前速记结构示例')
+    const outlineSample = screen.getByLabelText('结构提纲结构示例')
+    const completeSample = screen.getByLabelText('完整讲义结构示例')
+    expect(examSample.children).toHaveLength(3)
+    expect(examSample).toHaveTextContent('资料名称• 高频定义或公式• 关键条件与区别')
+    expect(outlineSample.children).toHaveLength(3)
+    expect(outlineSample).toHaveTextContent('1. 资料名称1.1 第 1 页1. 关键知识点')
+    expect(completeSample.children).toHaveLength(3)
+    expect(completeSample).toHaveTextContent('资料名称第 1 页来源正文段落')
+    expect(examSample).toHaveAttribute('aria-current', 'true')
+    expect(outlineSample).not.toHaveAttribute('aria-current')
+    expect(completeSample).not.toHaveAttribute('aria-current')
+
+    await user.click(outline)
+
+    expect(outline).toBeChecked()
+    expect(examSample).not.toHaveAttribute('aria-current')
+    expect(outlineSample).toHaveAttribute('aria-current', 'true')
+    expect(completeSample).not.toHaveAttribute('aria-current')
+    expect(createBatch).not.toHaveBeenCalled()
+    expect(getBatch).not.toHaveBeenCalled()
+  })
+
   it('omits optional title and section fields from a merged batch', async () => {
     vi.spyOn(studyApi, 'listNotes').mockResolvedValue([])
     vi.spyOn(studyApi, 'listDocuments').mockResolvedValue([documentRecord()])

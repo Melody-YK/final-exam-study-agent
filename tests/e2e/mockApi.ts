@@ -90,16 +90,18 @@ function generatedNote(
   const rendered = {
     exam_focus: {
       label: '考前速记',
-      content: '- 进程是资源分配的基本单位。\n- 线程是调度的基本单位。',
+      content:
+        '## 进程与线程.pdf\n\n- 进程是资源分配的基本单位。\n- 线程是调度的基本单位。',
     },
     outline: {
       label: '结构提纲',
-      content: '1. 进程与线程\n2. 调度与同步\n3. 死锁处理',
+      content:
+        '## 1. 进程与线程.pdf\n\n### 1.1 第 1 页\n\n1. 进程与线程\n2. 调度与同步\n3. 死锁处理',
     },
     complete: {
       label: '完整讲义',
       content:
-        '进程是资源分配的基本单位，线程是调度的基本单位。完整讲义保留资料中的定义、例子和上下文。',
+        '## 进程与线程.pdf\n\n### 第 1 页\n\n进程是资源分配的基本单位，线程是调度的基本单位。完整讲义按来源顺序保留资料中的定义、例子和上下文。',
     },
   }[style]
   return {
@@ -108,7 +110,7 @@ function generatedNote(
     origin_batch_id: 'note-batch-e2e',
     section_path: sectionPath,
     title,
-    body_markdown: `# ${title}\n\n> 笔记模板: ${rendered.label}\n\n## 核心内容\n\n${rendered.content}`,
+    body_markdown: `# ${title}\n\n> 笔记模板: ${rendered.label}\n\n${rendered.content}`,
     generation: 1,
     created_at: '2026-07-19T05:40:00Z',
     updated_at: '2026-07-19T05:40:00Z',
