@@ -11,7 +11,7 @@ import {
   ShieldCheck,
   Users,
 } from 'lucide-react'
-import { Link, NavLink, Navigate, Route, Routes, useNavigate } from 'react-router-dom'
+import { Link, NavLink, Navigate, Route, Routes, useNavigate } from 'react-router'
 
 import { studyApi } from '../../api/client'
 import { useAuth } from '../../app/auth'

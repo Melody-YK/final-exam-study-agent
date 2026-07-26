@@ -1,5 +1,5 @@
 import { BookOpen, FileSearch, Library, MessageSquareText, Network } from 'lucide-react'
-import { NavLink } from 'react-router-dom'
+import { NavLink } from 'react-router'
 
 const destinations = [
   { to: '/', label: '资料', icon: Library, end: true },

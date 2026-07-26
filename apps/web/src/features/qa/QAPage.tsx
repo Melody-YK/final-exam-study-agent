@@ -12,7 +12,7 @@ import {
   ShieldCheck,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router'
 
 import { ApiError, studyApi } from '../../api/client'
 import type {

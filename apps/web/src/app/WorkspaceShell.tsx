@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { ChevronDown, CloudOff, LogOut, ShieldCheck, UserRound, Wifi } from 'lucide-react'
-import { Link, Routes, Route, useNavigate } from 'react-router-dom'
+import { Link, Routes, Route, useNavigate } from 'react-router'
 
 import { studyApi } from '../api/client'
 import { IconButton } from '../components/ui/IconButton'

@@ -1,7 +1,7 @@
 import { useMutation } from '@tanstack/react-query'
 import { ArrowRight, BookOpenCheck, LockKeyhole, UserPlus } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
-import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
+import { Link, Navigate, useLocation, useNavigate } from 'react-router'
 
 import { studyApi } from '../../api/client'
 import { ErrorNotice } from '../../components/ui/ErrorNotice'

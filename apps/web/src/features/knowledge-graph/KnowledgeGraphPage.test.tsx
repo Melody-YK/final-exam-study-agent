@@ -1,6 +1,6 @@
 import { screen, waitFor, within } from '@testing-library/react'
 import type { ReactNode } from 'react'
-import { useLocation } from 'react-router-dom'
+import { useLocation } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { renderInWorkspace } from '../../test/render'

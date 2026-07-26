@@ -20,7 +20,7 @@ import {
   Network,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router'
 
 import { useWorkspace } from '../../app/WorkspaceContext'
 import { ErrorNotice } from '../../components/ui/ErrorNotice'
