@@ -320,6 +320,11 @@ async def test_worker_commands_are_leased_idempotent_and_artifact_scoped(
         )
         assert completed.status_code == 200
         assert completed.json()["status"] == "succeeded"
+        assert completed.json()["progress"] == {
+            "phase": "completed",
+            "completed_pages": 1,
+            "total_pages": 1,
+        }
         completed_replay = await client.post(
             f"/worker/v1/jobs/{job_id}:complete",
             json=complete_body,

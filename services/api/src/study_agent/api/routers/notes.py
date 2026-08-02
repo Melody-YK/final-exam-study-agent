@@ -17,6 +17,7 @@ from study_agent.infrastructure.db.session import Database
 from study_agent.modules.answering.retrieval import QueryEvidence
 from study_agent.modules.notes.service import (
     NoteGenerationError,
+    NoteKnowledgePointSnapshot,
     NoteRepository,
     NoteService,
     NoteSnapshot,
@@ -63,6 +64,12 @@ class NoteSourceResponse(BaseModel):
     unavailable_reason: str | None
 
 
+class NoteKnowledgePointResponse(BaseModel):
+    id: str
+    text: str
+    source_ids: list[str]
+
+
 class NoteResponse(BaseModel):
     id: str
     course_id: str
@@ -75,6 +82,7 @@ class NoteResponse(BaseModel):
     status: str
     origin_batch_id: str | None
     sources: list[NoteSourceResponse]
+    knowledge_points: list[NoteKnowledgePointResponse]
     created_at: datetime
     updated_at: datetime
 
@@ -116,6 +124,16 @@ def _source_response(source: NoteSourceSnapshot) -> NoteSourceResponse:
     )
 
 
+def _knowledge_point_response(
+    point: NoteKnowledgePointSnapshot,
+) -> NoteKnowledgePointResponse:
+    return NoteKnowledgePointResponse(
+        id=point.id,
+        text=point.text,
+        source_ids=list(point.source_ids),
+    )
+
+
 def _response(snapshot: NoteSnapshot) -> NoteResponse:
     return NoteResponse(
         id=snapshot.id,
@@ -129,6 +147,7 @@ def _response(snapshot: NoteSnapshot) -> NoteResponse:
         status=snapshot.status,
         origin_batch_id=snapshot.origin_batch_id,
         sources=[_source_response(source) for source in snapshot.sources],
+        knowledge_points=[_knowledge_point_response(point) for point in snapshot.knowledge_points],
         created_at=snapshot.created_at,
         updated_at=snapshot.updated_at,
     )

@@ -431,6 +431,8 @@ async def test_note_batch_demo_runs_without_providers_and_persists_preview(
             assert "进程是操作系统进行资源分配的基本单位" in body_markdown
             assert "临界区需要互斥访问共享资源" in body_markdown
             assert len(note["sources"]) == 2
+            assert len(note["knowledge_points"]) == 2
+            assert all(point["source_ids"] for point in note["knowledge_points"])
             assert all(source["chunk_id"] not in body_markdown for source in note["sources"])
             markdown_sources = [
                 source for source in note["sources"] if source["document_id"] == document_ids[1]
@@ -477,6 +479,9 @@ async def test_note_batch_demo_runs_without_providers_and_persists_preview(
                 "SOURCE_UNAVAILABLE"
             )
             assert sources_by_document[document_ids[1]]["available"] is True
+            events_response = await client.get(f"/api/v1/note-batches/{batch_id}/events?once=true")
+            assert events_response.status_code == 200
+            assert "event: note.batch.succeeded" in events_response.text
 
         async with database.session(principal) as session:
             assert (

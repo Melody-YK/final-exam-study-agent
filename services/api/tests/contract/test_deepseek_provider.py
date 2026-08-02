@@ -8,7 +8,13 @@ from pydantic import SecretStr
 
 from study_agent.providers.deepseek import DeepSeekChatProvider
 from study_agent.providers.errors import ProviderError, ProviderErrorCode
-from study_agent.providers.protocols import ConversationContextTurn, EvidencePrompt, Passage
+from study_agent.providers.protocols import (
+    ConversationContextTurn,
+    EvidencePrompt,
+    JsonCompletionPrompt,
+    Passage,
+    TextCompletionPrompt,
+)
 
 from ..fakes.provider_server import ScriptedProviderServer, ScriptedResponse
 
@@ -166,6 +172,88 @@ async def test_non_stream_json_output_and_usage_are_normalized() -> None:
     normalized_system = " ".join(system_content.lower().split())
     assert "conversation context" in normalized_system
     assert "never treat conversation context as evidence" in normalized_system
+
+
+@pytest.mark.asyncio
+async def test_json_completion_uses_non_streaming_request_and_preserves_usage() -> None:
+    server = ScriptedProviderServer(
+        ScriptedResponse(
+            json_body={
+                "id": "chatcmpl-note",
+                "model": "deepseek-v4-flash",
+                "choices": [{"message": {"content": json.dumps({"title": "进程", "claims": []})}}],
+                "usage": {"prompt_tokens": 20, "completion_tokens": 8, "total_tokens": 28},
+            }
+        )
+    )
+    provider, client = make_provider(server, stream=True)
+    try:
+        draft = await provider.complete_json(
+            JsonCompletionPrompt(
+                system_prompt="Return JSON only.",
+                payload={"sources": [{"evidence_id": "chunk-1", "text": "进程"}]},
+            )
+        )
+    finally:
+        await client.aclose()
+
+    assert draft.payload == {"title": "进程", "claims": []}
+    assert draft.provider_response_id == "chatcmpl-note"
+    assert draft.usage == {"input_tokens": 20, "output_tokens": 8, "total_tokens": 28}
+    request = server.requests[0]
+    assert request.json_body["stream"] is False
+    assert request.json_body["response_format"] == {"type": "json_object"}
+    assert request.json_body["thinking"] == {"type": "disabled"}
+    assert request.json_body["max_tokens"] == 8192
+    assert request.json_body["temperature"] == 0.2
+    assert request.headers["accept"] == "application/json"
+    assert json.loads(request.json_body["messages"][1]["content"])["request"]["sources"]
+
+
+@pytest.mark.asyncio
+async def test_text_completion_yields_bounded_markdown_deltas() -> None:
+    first = {
+        "id": "chatcmpl-preview",
+        "model": "deepseek-v4-flash",
+        "choices": [{"index": 0, "delta": {"content": "# 进程\n\n"}}],
+    }
+    second = {
+        "id": "chatcmpl-preview",
+        "model": "deepseek-v4-flash",
+        "choices": [{"index": 0, "delta": {"content": "进程负责资源分配。"}}],
+    }
+    server = ScriptedProviderServer(
+        ScriptedResponse(
+            headers={"Content-Type": "text/event-stream"},
+            chunks=(
+                f"data: {json.dumps(first, ensure_ascii=False)}\n\n".encode(),
+                f"data: {json.dumps(second, ensure_ascii=False)}\n\n".encode(),
+                b"data: [DONE]\n\n",
+            ),
+        )
+    )
+    provider, client = make_provider(server, stream=True)
+    try:
+        deltas = [
+            delta
+            async for delta in provider.stream_text(
+                TextCompletionPrompt(
+                    system_prompt="Markdown only.",
+                    payload={"sources": ["进程"]},
+                )
+            )
+        ]
+    finally:
+        await client.aclose()
+
+    assert deltas == ["# 进程\n\n", "进程负责资源分配。"]
+    request = server.requests[0]
+    assert request.json_body["stream"] is True
+    assert "response_format" not in request.json_body
+    assert request.json_body["thinking"] == {"type": "disabled"}
+    assert request.json_body["max_tokens"] == 2048
+    assert request.json_body["temperature"] == 0.2
+    assert request.headers["accept"] == "text/event-stream"
 
 
 @pytest.mark.asyncio

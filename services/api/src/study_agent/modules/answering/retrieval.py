@@ -19,7 +19,7 @@ from study_agent.infrastructure.db.models import (
     UserModel,
 )
 from study_agent.infrastructure.db.session import Database
-from study_agent.modules.answering.types import AuthorizedEvidence
+from study_agent.modules.answering.types import AuthorizedEvidence, ConceptEvidenceContext
 from study_agent.modules.ingestion.index_runner import EmbeddingModelIdentity
 from study_agent.modules.retrieval.hybrid import Evidence as RetrievalEvidence
 from study_agent.modules.retrieval.hybrid import HybridRetriever
@@ -50,6 +50,7 @@ class QueryEvidence(Protocol):
         question: str,
         *,
         document_ids: frozenset[str] | None,
+        concept_context: ConceptEvidenceContext | None = None,
     ) -> RetrievedEvidence: ...
 
     async def sources_are_current(
@@ -86,6 +87,7 @@ class PostgresQueryEvidence:
         question: str,
         *,
         document_ids: frozenset[str] | None,
+        concept_context: ConceptEvidenceContext | None = None,
     ) -> RetrievedEvidence:
         active = await self._active_index(principal, course_id)
         if active is None:
@@ -124,13 +126,98 @@ class PostgresQueryEvidence:
             )
         except LookupError:
             return RetrievedEvidence(active_index=False, candidates=())
-        candidates = await self._authorize(principal, course_id, evidence_set.evidence)
+        hybrid_candidates = await self._authorize(principal, course_id, evidence_set.evidence)
+        anchor_candidates: tuple[AuthorizedEvidence, ...] = ()
+        if concept_context is not None:
+            anchored = await self._anchor_evidence(
+                principal,
+                course_id,
+                concept_context,
+                document_ids=document_ids,
+            )
+            anchor_candidates = await self._authorize(principal, course_id, anchored)
+        candidates_by_id: dict[str, AuthorizedEvidence] = {}
+        for candidate in (*anchor_candidates, *hybrid_candidates):
+            candidates_by_id.setdefault(candidate.evidence.chunk_id, candidate)
+        candidates = tuple(candidates_by_id.values())[:8]
         return RetrievedEvidence(
             active_index=True,
             candidates=candidates,
             retrieval_trace_id=evidence_set.trace_id,
             active_lexical_index_id=active.manifest_id,
         )
+
+    async def _anchor_evidence(
+        self,
+        principal: Principal,
+        course_id: str,
+        context: ConceptEvidenceContext,
+        *,
+        document_ids: frozenset[str] | None,
+    ) -> tuple[RetrievalEvidence, ...]:
+        statement = (
+            select(
+                RevisionChunkModel,
+                DocumentModel.id.label("document_id"),
+            )
+            .join(
+                DocumentModel,
+                and_(
+                    DocumentModel.active_revision_id == RevisionChunkModel.revision_id,
+                    DocumentModel.course_id == course_id,
+                ),
+            )
+            .join(CourseModel, CourseModel.id == DocumentModel.course_id)
+            .join(UserModel, UserModel.id == CourseModel.user_id)
+            .where(
+                RevisionChunkModel.id.in_(anchor.chunk_id for anchor in context.anchors),
+                DocumentModel.id.in_(anchor.document_id for anchor in context.anchors),
+                DocumentModel.deleted_at.is_(None),
+                DocumentModel.corpus_role == "corpus",
+                DocumentModel.status == "ready",
+                DocumentModel.review_status == "approved",
+                CourseModel.deleted_at.is_(None),
+                UserModel.subject == principal.subject,
+                UserModel.authentication_method == principal.authentication_method.value,
+            )
+        )
+        if document_ids is not None:
+            statement = statement.where(DocumentModel.id.in_(document_ids))
+        async with self._database.session(principal) as session:
+            rows = (await session.execute(statement)).all()
+        by_chunk = {str(row[0].id): row for row in rows}
+        label = context.label.strip().casefold()
+        anchored: list[RetrievalEvidence] = []
+        for anchor in context.anchors:
+            row = by_chunk.get(anchor.chunk_id)
+            if row is None:
+                continue
+            chunk = row[0]
+            if (
+                str(row.document_id) != anchor.document_id
+                or str(chunk.revision_id) != anchor.revision_id
+                or label not in str(chunk.text).casefold()
+            ):
+                continue
+            anchored.append(
+                RetrievalEvidence(
+                    chunk_id=str(chunk.id),
+                    course_id=course_id,
+                    document_id=str(row.document_id),
+                    revision_id=str(chunk.revision_id),
+                    text=str(chunk.text),
+                    locator_kind=str(chunk.locator_kind),
+                    page_ordinal=int(chunk.page_ordinal),
+                    section_path=tuple(chunk.section_path),
+                    fused_score=1.0,
+                    dense_rank=None,
+                    dense_score=None,
+                    lexical_rank=None,
+                    lexical_score=None,
+                    rerank_score=None,
+                )
+            )
+        return tuple(anchored)
 
     async def sources_are_current(
         self,

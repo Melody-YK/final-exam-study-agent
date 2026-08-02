@@ -1,12 +1,14 @@
 import type {
   AdminAccount,
   AdminAccountUpdate,
+  AdminCourses,
   AdminDiagnostics,
   AdminDocument,
   AdminDocumentReviewRequest,
   AdminDocuments,
   AdminInvitationCreate,
   AdminInvitations,
+  AdminNotes,
   AdminUserList,
   AuthUser,
   CitationSource,
@@ -22,6 +24,7 @@ import type {
   DocumentRecord,
   DocumentUploadCreated,
   EventEnvelope,
+  KnowledgeGraphResponse,
   LabTrace,
   LoginRequest,
   MergedNoteBatchRequest,
@@ -32,6 +35,7 @@ import type {
   ParseRetryRequest,
   ProblemDetails,
   QueryCreate,
+  QueryConceptContext,
   QuerySnapshot,
   RegisterRequest,
   RuntimeCapabilities,
@@ -64,6 +68,20 @@ const EVENT_TYPES = [
   'query.failed',
   'retrieval.completed',
   'retrieval.started',
+  'note.batch.created',
+  'note.batch.running',
+  'note.batch.cancelling',
+  'note.batch.succeeded',
+  'note.batch.failed',
+  'note.batch.cancelled',
+  'note.item.leased',
+  'note.item.running',
+  'note.item.phase',
+  'note.item.succeeded',
+  'note.item.failed',
+  'note.item.cancelling',
+  'note.item.cancelled',
+  'note.preview.delta',
   'stream.reset',
 ] as const
 
@@ -321,6 +339,20 @@ export class StudyApiClient {
     return `${this.baseUrl}/admin/documents/${encodeURIComponent(documentId)}/content`
   }
 
+  listAdminCourses(): Promise<AdminCourses> {
+    return this.request('/admin/courses')
+  }
+
+  listAdminCourseNotes(courseId: string): Promise<AdminNotes> {
+    return this.request(`/admin/courses/${encodeURIComponent(courseId)}/notes`)
+  }
+
+  getAdminCourseKnowledgeGraph(courseId: string): Promise<KnowledgeGraphResponse> {
+    return this.request(
+      `/admin/courses/${encodeURIComponent(courseId)}/knowledge-graph?node_limit=14&edge_limit=30`,
+    )
+  }
+
   createConversation(courseId: string, title?: string): Promise<ConversationRecord> {
     return this.request(`/courses/${courseId}/conversations`, {
       method: 'POST',
@@ -336,12 +368,18 @@ export class StudyApiClient {
     return this.request(`/conversations/${conversationId}/queries?limit=${limit}`)
   }
 
-  createQuery(courseId: string, question: string, conversationId?: string): Promise<QuerySnapshot> {
+  createQuery(
+    courseId: string,
+    question: string,
+    conversationId?: string,
+    conceptContext?: QueryConceptContext,
+  ): Promise<QuerySnapshot> {
     return this.request(`/courses/${courseId}/queries`, {
       method: 'POST',
       body: jsonBody<QueryCreate>({
         question,
         ...(conversationId === undefined ? {} : { conversation_id: conversationId }),
+        ...(conceptContext === undefined ? {} : { concept_context: conceptContext }),
       }),
     })
   }
@@ -439,6 +477,10 @@ export class StudyApiClient {
     onError?: () => void,
     onOpen?: () => void,
   ): () => void {
+    if (typeof EventSource === 'undefined') {
+      onError?.()
+      return () => undefined
+    }
     const stream = new EventSource(`${this.baseUrl}${path}`)
     stream.onopen = () => onOpen?.()
     const handleEvent = (message: MessageEvent<string>) => {

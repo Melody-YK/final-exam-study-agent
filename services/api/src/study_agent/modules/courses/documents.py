@@ -814,5 +814,5 @@ class DocumentService:
             status=409,
             code=ProblemCode.DOCUMENT_DUPLICATE,
             title="资料已存在",
-            detail="相同内容与语料角色的资料已经上传。",
+            detail="相同内容的资料已经上传。",
         )

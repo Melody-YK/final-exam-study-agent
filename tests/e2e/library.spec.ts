@@ -7,12 +7,13 @@ test.beforeEach(async ({ page }) => {
   await page.goto('/')
 })
 
-test('library exposes parse/index states and no-provider boundary', async ({ page }) => {
+test('library exposes user-facing states and no-provider boundary', async ({ page }) => {
   await expect(page.getByRole('heading', { name: '课程资料' })).toBeVisible()
   await expect(page.getByText('仅资料模式')).toBeVisible()
-  await expect(page.getByText('可问答')).toBeVisible()
-  await expect(page.getByText('待索引')).toBeVisible()
-  await expect(page.getByText('部分失败')).toBeVisible()
+  const readyRow = page.getByRole('row').filter({ hasText: '进程与线程.pdf' })
+  await expect(readyRow.getByText('可学习')).toBeVisible()
+  await expect(page.getByText('待管理员审核')).toBeVisible()
+  await expect(page.getByText('处理失败')).toBeVisible()
 
   const studyActions = page.getByRole('region', { name: '学习就绪入口' })
   await expect(studyActions.getByRole('listitem', { name: '可学习 1' })).toBeVisible()
@@ -43,7 +44,7 @@ test('library exposes parse/index states and no-provider boundary', async ({ pag
   await expect(page.getByRole('heading', { name: '课程资料' })).toBeVisible()
 
   await page.getByRole('button', { name: '重试失败页' }).click()
-  await expect(page.getByText('等待 Worker')).toBeVisible()
+  await expect(page.getByText('处理中')).toBeVisible()
 
   await page.getByRole('button', { name: '删除资料' }).first().click()
   await expect(page.getByRole('dialog', { name: /删除/ })).toBeVisible()
@@ -53,15 +54,22 @@ test('library exposes parse/index states and no-provider boundary', async ({ pag
 
 test('Markdown upload performs the declared three-step flow with a normalized MIME', async ({ page }) => {
   let declaredMediaType: string | undefined
+  let declaredCorpusRole: string | undefined
   page.on('request', (request) => {
     if (
       request.method() === 'POST' &&
       request.url().endsWith('/api/v1/courses/course-e2e/documents')
     ) {
-      declaredMediaType = (request.postDataJSON() as { media_type?: string }).media_type
+      const declaration = request.postDataJSON() as {
+        corpus_role?: string
+        media_type?: string
+      }
+      declaredMediaType = declaration.media_type
+      declaredCorpusRole = declaration.corpus_role
     }
   })
   await page.getByRole('button', { name: '添加资料' }).click()
+  await expect(page.getByLabel('资料角色')).toHaveCount(0)
   await page.locator('input[type="file"]').setInputFiles({
     name: '复习提纲.md',
     mimeType: '',
@@ -70,8 +78,10 @@ test('Markdown upload performs the declared three-step flow with a normalized MI
   await page.getByRole('button', { name: '上传' }).click()
   await expect(page.getByRole('dialog')).not.toBeVisible()
   await expect(page.getByText('复习提纲.md')).toBeVisible()
-  await expect(page.getByText('等待 Worker')).toBeVisible()
+  const uploadedRow = page.getByRole('row').filter({ hasText: '复习提纲.md' })
+  await expect(uploadedRow.getByText('待管理员审核')).toBeVisible()
   expect(declaredMediaType).toBe('text/markdown')
+  expect(declaredCorpusRole).toBe('corpus')
 })
 
 test('unsupported presentation is rejected before an upload request', async ({ page }) => {

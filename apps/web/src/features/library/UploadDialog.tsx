@@ -2,7 +2,7 @@ import { FileUp, LoaderCircle, X } from 'lucide-react'
 import { useRef, useState, type FormEvent } from 'react'
 
 import { studyApi } from '../../api/client'
-import type { CorpusRole, DocumentRecord } from '../../api/types'
+import type { DocumentRecord } from '../../api/types'
 import { ErrorNotice } from '../../components/ui/ErrorNotice'
 import { Modal } from '../../components/ui/Modal'
 
@@ -20,14 +20,6 @@ interface FileSelectionError {
   error: Error
   title: string
 }
-
-const roles: Array<{ value: CorpusRole; label: string }> = [
-  { value: 'corpus', label: '课程资料' },
-  { value: 'questions', label: '题目' },
-  { value: 'gold_answers', label: '答案（不入索引）' },
-  { value: 'ocr_gold', label: 'OCR 标注（不入索引）' },
-  { value: 'excluded', label: '排除' },
-]
 
 interface UploadDialogProps {
   courseId: string
@@ -74,7 +66,6 @@ export function UploadDialog({
   onUploaded,
 }: UploadDialogProps) {
   const [file, setFile] = useState<File | null>(null)
-  const [role, setRole] = useState<CorpusRole>('corpus')
   const [progress, setProgress] = useState(0)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<unknown>(null)
@@ -127,7 +118,7 @@ export function UploadDialog({
       const document = await studyApi.uploadDocument(
         courseId,
         file,
-        role,
+        'corpus',
         setProgress,
         controller.signal,
       )
@@ -198,20 +189,6 @@ export function UploadDialog({
         {fileError ? (
           <ErrorNotice error={fileError.error} title={fileError.title} />
         ) : null}
-        <label className="field" htmlFor="corpus-role">
-          <span>资料角色</span>
-          <select
-            id="corpus-role"
-            onChange={(event) => setRole(event.target.value as CorpusRole)}
-            value={role}
-          >
-            {roles.map((item) => (
-              <option key={item.value} value={item.value}>
-                {item.label}
-              </option>
-            ))}
-          </select>
-        </label>
         <div
           aria-label={`上传进度 ${progress}%`}
           aria-valuemax={100}

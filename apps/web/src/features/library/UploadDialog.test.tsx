@@ -40,6 +40,7 @@ describe('UploadDialog', () => {
     expect(
       screen.getByText('Markdown 将按标题和段落定位来源，单个文件最大 5 MB。'),
     ).toBeVisible()
+    expect(screen.queryByLabelText('资料角色')).not.toBeInTheDocument()
   })
 
   it.each([
@@ -136,7 +137,7 @@ describe('UploadDialog', () => {
     expect(upload).not.toHaveBeenCalled()
   })
 
-  it('passes the selected role and aborts an in-flight upload on cancel', async () => {
+  it('uses the learning role and aborts an in-flight upload on cancel', async () => {
     let uploadSignal: AbortSignal | undefined
     vi.spyOn(studyApi, 'uploadDocument').mockImplementation(
       (_courseId, _file, _role, onProgress, signal) => {
@@ -151,7 +152,6 @@ describe('UploadDialog', () => {
     })
 
     await user.upload(screen.getByLabelText(/选择文件/), file)
-    await user.selectOptions(screen.getByLabelText('资料角色'), 'questions')
     await user.click(screen.getByRole('button', { name: '上传' }))
 
     await waitFor(() =>
@@ -163,7 +163,7 @@ describe('UploadDialog', () => {
     expect(studyApi.uploadDocument).toHaveBeenCalledWith(
       'course-1',
       file,
-      'questions',
+      'corpus',
       expect.any(Function),
       expect.any(AbortSignal),
     )

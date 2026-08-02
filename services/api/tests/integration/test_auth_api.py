@@ -124,7 +124,7 @@ async def _assert_seat_usage(
 
 
 @pytest.mark.integration
-async def test_first_account_inherits_local_courses_and_admin_role_is_enforced(
+async def test_first_account_becomes_admin_without_learning_workspace_access(
     test_database_url: str,
     tmp_path: Path,
 ) -> None:
@@ -172,18 +172,12 @@ async def test_first_account_inherits_local_courses_and_admin_role_is_enforced(
             inherited_course = await client.get(f"/api/v1/courses/{legacy_course.id}")
             inherited_courses = await client.get("/api/v1/courses")
             assert me.json() == registered_admin.json()
-            assert protected.status_code == 200
-            assert protected.json() == {"subject": "local-user", "scopes": ["admin"]}
-            assert inherited_course.status_code == 200
-            assert inherited_course.json()["title"] == "历史课程"
-            assert inherited_courses.status_code == 200
-            assert inherited_courses.json() == [
-                {
-                    "id": legacy_course.id,
-                    "title": "历史课程",
-                    "lifecycle": "active",
-                }
-            ]
+            assert protected.status_code == 403
+            assert protected.json()["code"] == "AUTH_FORBIDDEN"
+            assert inherited_course.status_code == 403
+            assert inherited_course.json()["code"] == "AUTH_FORBIDDEN"
+            assert inherited_courses.status_code == 403
+            assert inherited_courses.json()["code"] == "AUTH_FORBIDDEN"
 
             invitation = await client.post(
                 "/api/v1/admin/invitations",

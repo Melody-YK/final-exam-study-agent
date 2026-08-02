@@ -130,7 +130,7 @@ describe('StudyApiClient', () => {
     )
   })
 
-  it('omits conversation_id for an atomic first query and includes it for an existing thread', async () => {
+  it('sends only the optional conversation and graph context fields that are provided', async () => {
     const snapshot = answeredSnapshot()
     const fetchMock = vi.fn().mockImplementation(async () =>
       Promise.resolve(
@@ -145,15 +145,39 @@ describe('StudyApiClient', () => {
 
     await client.createQuery('course-1', '首次提问')
     await client.createQuery('course-1', '追问', 'conversation-1')
+    await client.createQuery('course-1', '图谱提问', undefined, {
+      label: '进程',
+      anchors: [
+        {
+          document_id: 'document-1',
+          revision_id: 'revision-1',
+          chunk_id: 'chunk-1',
+        },
+      ],
+    })
 
     const firstInit = fetchMock.mock.calls[0]?.[1] as RequestInit
     const followUpInit = fetchMock.mock.calls[1]?.[1] as RequestInit
+    const graphInit = fetchMock.mock.calls[2]?.[1] as RequestInit
     expect(JSON.parse(String(firstInit.body))).toEqual({
       question: '首次提问',
     })
     expect(JSON.parse(String(followUpInit.body))).toEqual({
       question: '追问',
       conversation_id: 'conversation-1',
+    })
+    expect(JSON.parse(String(graphInit.body))).toEqual({
+      question: '图谱提问',
+      concept_context: {
+        label: '进程',
+        anchors: [
+          {
+            document_id: 'document-1',
+            revision_id: 'revision-1',
+            chunk_id: 'chunk-1',
+          },
+        ],
+      },
     })
   })
 
@@ -196,6 +220,29 @@ describe('StudyApiClient', () => {
       '/api/v1/notes/note%2F1/sources/source%2F1/preview',
       '/api/v1/courses/course%2F1/knowledge-graph/sources/revision%2F1/chunk%2F1/preview',
     ])
+  })
+
+  it('uses admin-scoped read routes for user course content', async () => {
+    const fetchMock = vi.fn().mockImplementation(
+      async () =>
+        new Response('{}', {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const client = new StudyApiClient('/api/v1')
+
+    await client.listAdminCourses()
+    await client.listAdminCourseNotes('course/1')
+    await client.getAdminCourseKnowledgeGraph('course/1')
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      '/api/v1/admin/courses',
+      '/api/v1/admin/courses/course%2F1/notes',
+      '/api/v1/admin/courses/course%2F1/knowledge-graph?node_limit=14&edge_limit=30',
+    ])
+    expect(fetchMock.mock.calls.every(([, init]) => init.credentials === 'include')).toBe(true)
   })
 
   it('hashes and completes the browser upload sequence without bypassing the API', async () => {
@@ -485,6 +532,7 @@ describe('StudyApiClient', () => {
         sequence: 3,
         occurred_at: '2026-07-19T04:00:00Z',
         trace_id: 'trace-sse',
+        event_type: 'job.page_checkpointed',
         data: { status: 'parsing' },
       }),
     )

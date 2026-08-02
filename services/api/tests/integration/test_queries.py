@@ -33,7 +33,7 @@ from study_agent.infrastructure.db.session import Database
 from study_agent.main import create_app
 from study_agent.modules.answering.queries import QueryRepository
 from study_agent.modules.answering.retrieval import RetrievedEvidence
-from study_agent.modules.answering.types import AuthorizedEvidence
+from study_agent.modules.answering.types import AuthorizedEvidence, ConceptEvidenceContext
 from study_agent.modules.courses.repository import CourseRepository
 from study_agent.providers.factory import ProviderRegistry
 from study_agent.providers.protocols import EvidencePrompt, StructuredAnswerDraft
@@ -143,6 +143,7 @@ class FakeQueryEvidence:
         self.current = current
         self.calls = 0
         self.questions: list[str] = []
+        self.concept_contexts: list[ConceptEvidenceContext | None] = []
 
     async def retrieve(
         self,
@@ -151,9 +152,11 @@ class FakeQueryEvidence:
         question: str,
         *,
         document_ids: frozenset[str] | None,
+        concept_context: ConceptEvidenceContext | None,
     ) -> RetrievedEvidence:
         self.calls += 1
         self.questions.append(question)
+        self.concept_contexts.append(concept_context)
         assert document_ids is None
         return self.result
 
@@ -480,7 +483,19 @@ async def test_query_persists_answer_snapshot_and_aggregated_sse(
         )
         created = await client.post(
             f"/api/v1/courses/{course_id}/queries",
-            json={"question": "什么是进程?"},
+            json={
+                "question": "什么是进程?",
+                "concept_context": {
+                    "label": "进程",
+                    "anchors": [
+                        {
+                            "document_id": document_id,
+                            "revision_id": revision_id,
+                            "chunk_id": chunk_id,
+                        }
+                    ],
+                },
+            },
         )
 
         assert created.status_code == 202
@@ -490,6 +505,46 @@ async def test_query_persists_answer_snapshot_and_aggregated_sse(
         assert query["trace"]["retrieval_snapshot_id"]
         assert query["trace"]["retrieval_trace_id"] is None
         assert query["usage"]["total_tokens"] == 30
+        assert evidence.concept_contexts[0] is not None
+        assert evidence.concept_contexts[0].label == "进程"
+
+        invalid_context = await client.post(
+            f"/api/v1/courses/{course_id}/queries",
+            json={
+                "question": "错误锚点",
+                "concept_context": {
+                    "label": "进程",
+                    "anchors": [
+                        {
+                            "document_id": document_id,
+                            "revision_id": "stale-revision",
+                            "chunk_id": chunk_id,
+                        }
+                    ],
+                },
+            },
+        )
+        duplicate_context = await client.post(
+            f"/api/v1/courses/{course_id}/queries",
+            json={
+                "question": "重复锚点",
+                "concept_context": {
+                    "label": "进程",
+                    "anchors": [
+                        {
+                            "document_id": document_id,
+                            "revision_id": revision_id,
+                            "chunk_id": chunk_id,
+                        },
+                        {
+                            "document_id": document_id,
+                            "revision_id": revision_id,
+                            "chunk_id": chunk_id,
+                        },
+                    ],
+                },
+            },
+        )
 
         async with database.session(principal) as session:
             document = await session.get(DocumentModel, document_id)
@@ -518,6 +573,8 @@ async def test_query_persists_answer_snapshot_and_aggregated_sse(
     assert source_changed.status_code == 202
     assert source_changed.json()["status"] == "abstained"
     assert source_changed.json()["answer"]["refusal"]["code"] == "SOURCE_CHANGED"
+    assert invalid_context.status_code == 404
+    assert duplicate_context.status_code == 422
     assert len(provider.requests) == 2
     assert evidence.calls == 2
     await database.dispose()

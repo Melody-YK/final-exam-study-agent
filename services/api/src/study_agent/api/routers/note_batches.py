@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import re
+from collections.abc import AsyncIterator
 from typing import Annotated, cast
 
-from fastapi import APIRouter, Header, Request, Response, status
+from fastapi import APIRouter, Header, Query, Request, Response, status
+from starlette.responses import StreamingResponse
 
 from study_agent.api.errors import ApiProblem, ProblemCode, ProblemDetails
 from study_agent.api.schemas.note_workflow import (
@@ -16,14 +18,17 @@ from study_agent.config import Settings
 from study_agent.identity.principal import Principal
 from study_agent.identity.session import get_request_principal
 from study_agent.infrastructure.db.session import Database
+from study_agent.modules.jobs.waiter import ClaimWaiter
 from study_agent.modules.notes.batch_service import (
     NoteBatchService,
     NoteBatchServiceError,
     NoteBatchServiceErrorCode,
 )
 from study_agent.modules.notes.demo_runner import DemoNoteRunner
+from study_agent.modules.notes.events import NoteGenerationEventReader
+from study_agent.observability.trace import new_trace_id
 from study_agent.providers.protocols import Clock
-from study_contracts import NoteBatchSnapshot
+from study_contracts import JobEventEnvelope, NoteBatchSnapshot
 
 router = APIRouter(prefix="/api/v1", tags=["note-batches"])
 IdempotencyKey = Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=512)]
@@ -194,6 +199,87 @@ async def get_note_batch(batch_id: str, request: Request) -> LocalDemoNoteBatchS
     except NoteBatchServiceError as exc:
         raise _problem(exc) from exc
     return _public_snapshot(snapshot)
+
+
+@router.get("/note-batches/{batch_id}/events")
+async def stream_note_batch_events(
+    batch_id: str,
+    request: Request,
+    last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
+    once: Annotated[bool, Query()] = False,
+) -> StreamingResponse:
+    try:
+        after_sequence = 0 if last_event_id is None else int(last_event_id)
+    except ValueError as exc:
+        raise ApiProblem(
+            status=422,
+            code=ProblemCode.INVALID_REQUEST,
+            title="Last-Event-ID 无效",
+        ) from exc
+    if after_sequence < 0:
+        raise ApiProblem(
+            status=422,
+            code=ProblemCode.INVALID_REQUEST,
+            title="Last-Event-ID 无效",
+        )
+    principal = await _principal(request)
+    reader = NoteGenerationEventReader(
+        cast(Database, request.app.state.database),
+        cast(Clock, request.app.state.clock),
+    )
+    initial = await reader.events_after(principal, batch_id, after_sequence)
+    if initial is None:
+        raise ApiProblem(
+            status=404,
+            code=ProblemCode.RESOURCE_NOT_FOUND,
+            title="笔记生成批次不存在",
+        )
+    heartbeat_seconds = cast(Settings, request.app.state.settings).sse_heartbeat_seconds
+
+    async def generate() -> AsyncIterator[str]:
+        nonlocal after_sequence
+        events = initial
+        while True:
+            for event in events:
+                after_sequence = event.sequence
+                yield (
+                    f"id: {event.sequence}\n"
+                    f"event: {event.event_type}\n"
+                    f"data: {event.model_dump_json()}\n\n"
+                )
+            yield ": heartbeat\n\n"
+            if once or await request.is_disconnected():
+                return
+            await cast(ClaimWaiter, request.app.state.claim_waiter).wait(heartbeat_seconds)
+            try:
+                next_events = await reader.events_after(principal, batch_id, after_sequence)
+            except ApiProblem as exc:
+                if exc.code is not ProblemCode.EVENT_HISTORY_EXPIRED:
+                    raise
+                reset = JobEventEnvelope(
+                    sequence=max(1, after_sequence),
+                    occurred_at=cast(Clock, request.app.state.clock).now(),
+                    trace_id=new_trace_id(),
+                    event_type="stream.reset",
+                    data={
+                        "code": ProblemCode.EVENT_HISTORY_EXPIRED.value,
+                        "action": "read_snapshot",
+                    },
+                )
+                yield f"event: stream.reset\ndata: {reset.model_dump_json()}\n\n"
+                return
+            if next_events is None:
+                return
+            events = next_events
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 __all__ = ["router"]

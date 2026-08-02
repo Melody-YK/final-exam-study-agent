@@ -27,6 +27,10 @@ Hash、用途和 attribution 由 `evals/manifests/public.json` 管理。fixture 
 | Pillow | HPND |
 | pypdf | BSD-3-Clause |
 
+## Optional PDF Text Repair
+
+Poppler `pdftotext` 使用 `GPL-2.0-only OR GPL-3.0-only`。它作为宿主机可选外部可执行文件调用，本仓库不内置或分发 Poppler；缺失时解析器会沿用已有质量门和 OCR 回退路径。
+
 ## Web Runtime
 
 | Dependency | License family |

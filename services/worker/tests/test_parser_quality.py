@@ -1,15 +1,44 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
-from study_contracts import PageQualityStatus
-from study_worker.parsers.normalize import normalize_page
+from study_contracts import BlockType, PageQualityStatus
+from study_worker.parsers.normalize import RawBlock, RawBoundingBox, RawPage, normalize_page
 from study_worker.parsers.pdf_native import PDFNativeParser
 from study_worker.parsers.protocols import ParseRequest
-from study_worker.parsers.quality import evaluate_page_quality
+from study_worker.parsers.quality import evaluate_page_quality, native_text_mapping_is_corrupted
 from tests.fixtures.build_documents import build_documents, sha256
+
+
+def _native_page(
+    text: str,
+    *,
+    source_kind: Literal["page", "slide", "section"] = "page",
+    text_mapping_corrupted: bool | None = None,
+) -> RawPage:
+    return RawPage(
+        ordinal=1,
+        width=100,
+        height=100,
+        source_kind=source_kind,
+        native_text_present=True,
+        metadata=(
+            {"text_mapping_corrupted": text_mapping_corrupted}
+            if text_mapping_corrupted is not None
+            else {}
+        ),
+        blocks=[
+            RawBlock(
+                type=BlockType.PARAGRAPH,
+                text=text,
+                bbox=RawBoundingBox(x0=0, top=0, x1=100, bottom=100),
+                reading_order=0,
+            )
+        ],
+    )
 
 
 @pytest.mark.asyncio
@@ -39,6 +68,88 @@ async def test_quality_marks_native_text_and_requires_ocr_for_image_only_page(
     assert second_quality.requires_ocr is True
     assert [issue.code for issue in second_quality.issues] == ["OCR_REQUIRED"]
     assert second_quality.issues[0].retryable is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "资" * 80 + "学" * 12 + "操" * 6 + "使" * 4,
+        "资," * 30 + "学," * 4,
+    ],
+)
+def test_pdf_cjk_mapping_detector_flags_corrupted_character_mapping(text: str) -> None:
+    assert native_text_mapping_is_corrupted(text) is True
+
+
+@pytest.mark.parametrize("source_kind", ["section", "slide"])
+def test_generic_quality_does_not_apply_pdf_cjk_mapping_detector(
+    source_kind: Literal["section", "slide"],
+) -> None:
+    text = "资" * 80 + "学" * 12 + "操" * 6 + "使" * 4
+    assert native_text_mapping_is_corrupted(text) is True
+
+    quality = evaluate_page_quality(_native_page(text, source_kind=source_kind))
+
+    assert quality.status is PageQualityStatus.PASSED
+    assert quality.requires_ocr is False
+
+
+def test_quality_requires_ocr_when_parser_marks_text_mapping_as_corrupted() -> None:
+    quality = evaluate_page_quality(
+        _native_page(
+            "资" * 80 + "学" * 12 + "操" * 6 + "使" * 4,
+            text_mapping_corrupted=True,
+        )
+    )
+
+    assert quality.status is PageQualityStatus.FAILED
+    assert quality.text_layer == "native"
+    assert quality.requires_ocr is True
+    assert [issue.code for issue in quality.issues] == ["OCR_REQUIRED"]
+    assert quality.issues[0].retryable is True
+
+
+def test_quality_accepts_repaired_page_when_corruption_marker_is_false() -> None:
+    quality = evaluate_page_quality(
+        _native_page(
+            "修复后的文本由解析器确认可用。",
+            text_mapping_corrupted=False,
+        )
+    )
+
+    assert quality.status is PageQualityStatus.PASSED
+    assert quality.requires_ocr is False
+
+
+def test_quality_accepts_valid_chinese_prose() -> None:
+    raw_page = _native_page(
+        "操作系统通过进程调度协调处理器资源, 并使用虚拟内存隔离不同程序的地址空间。"
+        "文件系统负责持久化数据, 访问控制则限制用户能够执行的操作。"
+    )
+
+    quality = evaluate_page_quality(raw_page)
+
+    assert (
+        native_text_mapping_is_corrupted("\n".join(block.text for block in raw_page.blocks))
+        is False
+    )
+    assert quality.status is PageQualityStatus.PASSED
+    assert quality.requires_ocr is False
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "哈" * 23,
+        "天地玄黄宇" * 12,
+    ],
+)
+def test_quality_accepts_legitimate_repeated_cjk_snippets(text: str) -> None:
+    quality = evaluate_page_quality(_native_page(text))
+
+    assert native_text_mapping_is_corrupted(text) is False
+    assert quality.status is PageQualityStatus.PASSED
+    assert quality.requires_ocr is False
 
 
 @pytest.mark.asyncio

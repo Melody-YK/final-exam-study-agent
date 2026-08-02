@@ -24,7 +24,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router'
 
 import { studyApi } from '../../api/client'
-import type { SourcePreview } from '../../api/types'
+import type { QueryConceptContext, SourcePreview } from '../../api/types'
 import { useWorkspace } from '../../app/WorkspaceContext'
 import { ErrorNotice } from '../../components/ui/ErrorNotice'
 import { PageHeader } from '../../components/ui/PageHeader'
@@ -89,10 +89,34 @@ export function describeGraphRelationship(
 }
 
 function conceptQuestion(label: string): string {
-  const prefix = '请解释“'
-  const suffix = '”，并结合课程资料说明它与相关概念的联系。'
+  const prefix = '根据当前课程资料，概括“'
+  const suffix = '”在课程内容中的含义，并说明它与直接关联概念的联系。'
   const availableLabelLength = 2000 - prefix.length - suffix.length
   return `${prefix}${label.trim().slice(0, availableLabelLength)}${suffix}`
+}
+
+function conceptContext(node: KnowledgeGraphNode): QueryConceptContext | undefined {
+  if (node.kind !== 'concept') return undefined
+  const seen = new Set<string>()
+  const anchors = [...(node.occurrences ?? [])]
+    .toSorted(
+      (left, right) =>
+        right.count - left.count ||
+        left.page_ordinal - right.page_ordinal ||
+        left.chunk_ordinal - right.chunk_ordinal,
+    )
+    .filter((occurrence) => {
+      if (seen.has(occurrence.chunk_id)) return false
+      seen.add(occurrence.chunk_id)
+      return true
+    })
+    .slice(0, 4)
+    .map((occurrence) => ({
+      document_id: occurrence.document_id,
+      revision_id: occurrence.revision_id,
+      chunk_id: occurrence.chunk_id,
+    }))
+  return anchors.length > 0 ? { label: node.label, anchors } : undefined
 }
 
 export function KnowledgeGraphPage() {
@@ -134,13 +158,18 @@ export function KnowledgeGraphPage() {
           <p>{graph.active_document_count === 0 ? '当前课程没有已就绪资料。' : '当前资料中的概念频次不足。'}</p>
         </section>
       ) : graph ? (
-        <GraphExperience key={`${graph.course_id}:${graph.source_chunk_count}`} graph={graph} />
+        <KnowledgeGraphViewer key={`${graph.course_id}:${graph.source_chunk_count}`} graph={graph} />
       ) : null}
     </div>
   )
 }
 
-function GraphExperience({ graph }: { graph: KnowledgeGraphResponse }) {
+interface KnowledgeGraphViewerProps {
+  graph: KnowledgeGraphResponse
+  readOnly?: boolean
+}
+
+export function KnowledgeGraphViewer({ graph, readOnly = false }: KnowledgeGraphViewerProps) {
   const [selectedNodeId, setSelectedNodeId] = useState(graph.nodes[0]?.id ?? null)
   const [viewMode, setViewMode] = useState<'all' | 'related'>('all')
   const navigate = useNavigate()
@@ -269,15 +298,23 @@ function GraphExperience({ graph }: { graph: KnowledgeGraphResponse }) {
         {selectedNode ? (
           <NodeDetails
             node={selectedNode}
-            onAskConcept={() =>
-              navigate('/qa', {
-                state: {
-                  suggestedQuestion: conceptQuestion(selectedNode.label),
-                  startNewConversation: true,
-                },
-              })
+            onAskConcept={
+              readOnly
+                ? undefined
+                : () => {
+                    const context = conceptContext(selectedNode)
+                    navigate('/qa', {
+                      state: {
+                        suggestedQuestion: conceptQuestion(selectedNode.label),
+                        startNewConversation: true,
+                        ...(context ? { conceptContext: context } : {}),
+                      },
+                    })
+                  }
             }
-            onOpenOccurrence={(occurrence) => previewMutation.mutate(occurrence)}
+            onOpenOccurrence={
+              readOnly ? undefined : (occurrence) => previewMutation.mutate(occurrence)
+            }
             previewError={previewMutation.error}
             previewErrorChunkId={
               previewMutation.isError ? previewMutation.variables?.chunk_id : undefined
@@ -289,7 +326,7 @@ function GraphExperience({ graph }: { graph: KnowledgeGraphResponse }) {
           />
         ) : null}
       </section>
-      <SourceViewer onClose={() => setPreview(null)} source={preview} />
+      {readOnly ? null : <SourceViewer onClose={() => setPreview(null)} source={preview} />}
     </>
   )
 }
@@ -372,8 +409,8 @@ function NodeDetails({
   relationships,
 }: {
   node: KnowledgeGraphNode
-  onAskConcept: () => void
-  onOpenOccurrence: (occurrence: KnowledgeGraphOccurrence) => void
+  onAskConcept?: () => void
+  onOpenOccurrence?: (occurrence: KnowledgeGraphOccurrence) => void
   previewError: unknown
   previewErrorChunkId?: string
   previewLoadingChunkId?: string
@@ -385,7 +422,7 @@ function NodeDetails({
         <span>{nodeKindLabels[node.kind]}</span>
         <h3>{node.label}</h3>
       </header>
-      {node.kind === 'concept' ? (
+      {node.kind === 'concept' && onAskConcept ? (
         <button
           className="button button--primary button--small knowledge-graph-details__ask"
           onClick={onAskConcept}
@@ -451,20 +488,24 @@ function NodeDetails({
                   </span>
                 </div>
                 <p>{occurrence.excerpt}</p>
-                <button
-                  className="button button--small knowledge-graph-occurrence-open"
-                  disabled={previewLoadingChunkId !== undefined}
-                  onClick={() => onOpenOccurrence(occurrence)}
-                  type="button"
-                >
-                  {previewLoadingChunkId === occurrence.chunk_id ? (
-                    <LoaderCircle aria-hidden="true" className="spin" size={14} />
-                  ) : (
-                    <Eye aria-hidden="true" size={14} />
-                  )}
-                  查看原文
-                </button>
-                {previewError && previewErrorChunkId === occurrence.chunk_id ? (
+                {onOpenOccurrence ? (
+                  <button
+                    className="button button--small knowledge-graph-occurrence-open"
+                    disabled={previewLoadingChunkId !== undefined}
+                    onClick={() => onOpenOccurrence(occurrence)}
+                    type="button"
+                  >
+                    {previewLoadingChunkId === occurrence.chunk_id ? (
+                      <LoaderCircle aria-hidden="true" className="spin" size={14} />
+                    ) : (
+                      <Eye aria-hidden="true" size={14} />
+                    )}
+                    查看原文
+                  </button>
+                ) : null}
+                {onOpenOccurrence &&
+                previewError &&
+                previewErrorChunkId === occurrence.chunk_id ? (
                   <ErrorNotice error={previewError} title="原文不可用" />
                 ) : null}
               </li>

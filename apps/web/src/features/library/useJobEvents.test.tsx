@@ -24,6 +24,7 @@ describe('useJobEvents', () => {
           sequence: 1,
           occurred_at: '2026-07-19T04:00:00Z',
           trace_id: 'trace-1',
+          event_type: 'job.heartbeat',
           data: { status: 'parsing' },
         })
       return close
@@ -48,5 +49,37 @@ describe('useJobEvents', () => {
     rerender({ jobs: [] })
     expect(result.current).toBe('idle')
     expect(close).toHaveBeenCalledOnce()
+  })
+
+  it('reports each terminal job event once', () => {
+    const queryClient = createTestQueryClient()
+    const onTerminal = vi.fn()
+    let emitEvent: () => void = () => undefined
+    vi.spyOn(studyApi, 'subscribe').mockImplementation((_path, onEvent) => {
+      emitEvent = () =>
+        onEvent({
+          stream_version: '1',
+          sequence: 7,
+          occurred_at: '2026-07-19T04:00:00Z',
+          trace_id: 'trace-terminal',
+          event_type: 'job.succeeded',
+          data: { page_count: 10 },
+        })
+      return vi.fn()
+    })
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    )
+
+    renderHook(() => useJobEvents('course-1', ['job-1'], onTerminal), { wrapper })
+
+    act(emitEvent)
+    act(emitEvent)
+    expect(onTerminal).toHaveBeenCalledOnce()
+    expect(onTerminal).toHaveBeenCalledWith({
+      jobId: 'job-1',
+      eventType: 'job.succeeded',
+      data: { page_count: 10 },
+    })
   })
 })

@@ -6,6 +6,7 @@ later layer, which keeps deterministic fakes out of application registration.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol, runtime_checkable
@@ -46,6 +47,32 @@ class EvidencePrompt:
 
 @dataclass(frozen=True, slots=True)
 class StructuredAnswerDraft:
+    payload: dict[str, object]
+    model: str
+    provider_response_id: str | None = None
+    usage: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class JsonCompletionPrompt:
+    """A provider-neutral request for one non-streaming JSON completion."""
+
+    system_prompt: str
+    payload: dict[str, object]
+    response_schema_version: str = "1.0"
+
+
+@dataclass(frozen=True, slots=True)
+class TextCompletionPrompt:
+    """A provider-neutral request for a user-visible streaming draft."""
+
+    system_prompt: str
+    payload: dict[str, object]
+    response_schema_version: str = "1.0"
+
+
+@dataclass(frozen=True, slots=True)
+class StructuredJsonDraft:
     payload: dict[str, object]
     model: str
     provider_response_id: str | None = None
@@ -100,6 +127,16 @@ class EmbeddingProvider(Protocol):
 @runtime_checkable
 class ChatProvider(Protocol):
     async def answer(self, request: EvidencePrompt) -> StructuredAnswerDraft: ...
+
+
+@runtime_checkable
+class JsonCompletionProvider(Protocol):
+    async def complete_json(self, request: JsonCompletionPrompt) -> StructuredJsonDraft: ...
+
+
+@runtime_checkable
+class TextCompletionProvider(Protocol):
+    def stream_text(self, request: TextCompletionPrompt) -> AsyncIterator[str]: ...
 
 
 @runtime_checkable

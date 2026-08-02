@@ -45,7 +45,10 @@ async def get_request_principal(request: Request) -> Principal:
             return provider.resolve(request.client.host)
         except PermissionError as exc:
             raise _auth_required() from exc
-    return (await get_session_account(request)).principal
+    principal = (await get_session_account(request)).principal
+    if "admin" in principal.scopes:
+        raise _auth_forbidden()
+    return principal
 
 
 def _auth_required() -> ApiProblem:
@@ -53,6 +56,14 @@ def _auth_required() -> ApiProblem:
         status=401,
         code=ProblemCode.AUTH_REQUIRED,
         title="需要身份验证",
+    )
+
+
+def _auth_forbidden() -> ApiProblem:
+    return ApiProblem(
+        status=403,
+        code=ProblemCode.AUTH_FORBIDDEN,
+        title="管理员不能访问学习工作区",
     )
 
 

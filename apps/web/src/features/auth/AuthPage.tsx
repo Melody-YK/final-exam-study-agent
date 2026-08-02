@@ -15,6 +15,11 @@ interface RedirectState {
   from?: string
 }
 
+function destinationFor(role: 'admin' | 'user', requested: string): string {
+  if (role === 'admin') return requested.startsWith('/admin') ? requested : '/admin'
+  return requested.startsWith('/admin') ? '/' : requested
+}
+
 export function AuthPage({ mode }: AuthPageProps) {
   const { user, setCurrentUser } = useAuth()
   const navigate = useNavigate()
@@ -38,11 +43,13 @@ export function AuthPage({ mode }: AuthPageProps) {
         : studyApi.login({ email: email.trim(), password }),
     onSuccess: (account) => {
       setCurrentUser(account)
-      navigate(destination, { replace: true })
+      navigate(destinationFor(account.role, destination), { replace: true })
     },
   })
 
-  if (user !== null) return <Navigate replace to="/" />
+  if (user !== null) {
+    return <Navigate replace to={destinationFor(user.role, destination)} />
+  }
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()

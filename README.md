@@ -12,6 +12,9 @@
 - Node.js 24+
 - uv
 - Docker Desktop / Docker Compose
+- Poppler `pdftotext`（建议安装；低内存修复部分 PDF 的损坏中文文字层）
+
+macOS 可用 `brew install poppler`，Ubuntu/Debian 可用 `sudo apt-get install poppler-utils`；通过 `pdftotext -v` 检查是否可用。
 
 ## 开发命令
 

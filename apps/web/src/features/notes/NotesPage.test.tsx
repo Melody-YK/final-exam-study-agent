@@ -93,6 +93,68 @@ describe('NotesPage', () => {
     expect(studyApi.getNoteSourcePreview).toHaveBeenCalledWith('note-1', 'note-source-1')
   })
 
+  it('separates note switching from the current note heading outline', async () => {
+    const note = noteRecord({
+      body_markdown: '# 进程\n\n概念总览。\n\n## 调度\n\n调度决定下一个运行任务。\n\n### 时间片\n\n轮转分配 CPU 时间。',
+    })
+    vi.spyOn(studyApi, 'listNotes').mockResolvedValue([note])
+    const scrollIntoView = vi.fn()
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView,
+    })
+    const { user } = renderInWorkspace(<NotesPage />)
+
+    const switcher = await screen.findByLabelText('切换笔记')
+    expect(within(switcher).getByRole('button', { name: /进程基础/ })).toBeInTheDocument()
+    const outline = screen.getByRole('navigation', { name: '正文目录' })
+    expect(within(outline).getByRole('link', { name: '进程' })).toHaveAttribute(
+      'href',
+      '#note-heading-1-进程',
+    )
+    expect(within(outline).getByRole('link', { name: '调度' })).toHaveAttribute(
+      'href',
+      '#note-heading-5-调度',
+    )
+    expect(screen.getByRole('heading', { name: '调度' })).toHaveAttribute(
+      'id',
+      'note-heading-5-调度',
+    )
+
+    await user.click(within(outline).getByRole('link', { name: '调度' }))
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'start' })
+  })
+
+  it('groups notes by section path and filters the switcher by search', async () => {
+    const first = noteRecord({
+      id: 'note-process',
+      section_path: ['第一章', '进程管理'],
+      title: '进程基础',
+    })
+    const second = noteRecord({
+      id: 'note-index',
+      section_path: ['第二章', '数据库'],
+      title: '索引笔记',
+      body_markdown: '# 索引\n\nB+ 树可以加速查询。',
+    })
+    vi.spyOn(studyApi, 'listNotes').mockResolvedValue([first, second])
+    const { user } = renderInWorkspace(<NotesPage />)
+
+    const switcher = await screen.findByLabelText('切换笔记')
+    expect(within(switcher).getByText('第一章')).toBeInTheDocument()
+    expect(within(switcher).getByText('进程管理')).toBeInTheDocument()
+    expect(within(switcher).getByText('第二章')).toBeInTheDocument()
+    expect(within(switcher).getByRole('button', { name: '索引笔记' })).toBeInTheDocument()
+
+    const search = within(switcher).getByRole('searchbox', { name: '搜索笔记' })
+    await user.type(search, '索引')
+    expect(within(switcher).getByRole('button', { name: '索引笔记' })).toBeInTheDocument()
+    expect(within(switcher).queryByRole('button', { name: '进程基础' })).not.toBeInTheDocument()
+
+    await user.click(within(switcher).getByRole('button', { name: '清除笔记搜索' }))
+    expect(within(switcher).getByRole('button', { name: '进程基础' })).toBeInTheDocument()
+  })
+
   it('moves legacy source mappings out of the visible note body', async () => {
     const note = noteRecord({
       body_markdown:

@@ -171,7 +171,7 @@ async def get_runtime_capabilities(request: Request) -> RuntimeCapabilitiesRespo
     generation_capability = CapabilityResponse(
         status="available" if generation_ready else "unavailable",
         label=(
-            "本地来源派生笔记演示已就绪"
+            "本地来源派生笔记演示已就绪 (已配置模型时使用 DeepSeek, 否则使用来源摘录兜底)"
             if generation_ready
             else "异步笔记生成功能未启用或缺少受信 Runner"
         ),

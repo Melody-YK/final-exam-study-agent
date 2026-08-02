@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import type { Page, Route } from '@playwright/test'
 
 const courseId = 'course-e2e'
+const secondaryCourseId = 'course-data-structures-e2e'
 const transparentPng = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+7Z1xWQAAAABJRU5ErkJggg==',
   'base64',
@@ -77,8 +78,121 @@ function note(version = 1) {
         unavailable_reason: null,
       },
     ],
+    knowledge_points: [
+      {
+        id: 'knowledge-point-e2e',
+        text: '进程是资源分配的基本单位。',
+        source_ids: ['note-source-e2e'],
+      },
+    ],
     created_at: '2026-07-19T05:00:00Z',
     updated_at: '2026-07-19T05:10:00Z',
+  }
+}
+
+function adminNote(
+  id: string,
+  targetCourseId: string,
+  title: string,
+  bodyMarkdown: string,
+  sectionPath: string[],
+) {
+  return {
+    id,
+    course_id: targetCourseId,
+    section_path: sectionPath,
+    title,
+    body_markdown: bodyMarkdown,
+    version: 1,
+    generation: 1,
+    generated_by_model: true,
+    status: 'ready',
+    created_at: '2026-07-22T07:00:00Z',
+    updated_at: '2026-07-23T09:00:00Z',
+  }
+}
+
+function adminKnowledgeGraph({
+  targetCourseId,
+  courseTitle,
+  documentId,
+  documentName,
+  conceptId,
+  conceptLabel,
+}: {
+  targetCourseId: string
+  courseTitle: string
+  documentId: string
+  documentName: string
+  conceptId: string
+  conceptLabel: string
+}) {
+  return {
+    course_id: targetCourseId,
+    tokenizer_version: 'jieba-v1',
+    active_document_count: 1,
+    included_document_count: 1,
+    source_chunk_count: 6,
+    node_limit: 14,
+    edge_limit: 30,
+    truncated: false,
+    nodes: [
+      {
+        id: `course:${targetCourseId}`,
+        kind: 'course',
+        label: courseTitle,
+        document_id: null,
+        revision_id: null,
+        page_count: null,
+        frequency: null,
+        document_count: null,
+        occurrence_count: null,
+        occurrences: [],
+        occurrences_truncated: false,
+      },
+      {
+        id: `document:${documentId}`,
+        kind: 'document',
+        label: documentName,
+        document_id: documentId,
+        revision_id: `revision:${documentId}`,
+        page_count: 20,
+        frequency: null,
+        document_count: null,
+        occurrence_count: null,
+        occurrences: [],
+        occurrences_truncated: false,
+      },
+      {
+        id: `concept:${conceptId}`,
+        kind: 'concept',
+        label: conceptLabel,
+        document_id: null,
+        revision_id: null,
+        page_count: null,
+        frequency: 8,
+        document_count: 1,
+        occurrence_count: 1,
+        occurrences: [],
+        occurrences_truncated: false,
+      },
+    ],
+    edges: [
+      {
+        id: `edge:contains:${documentId}`,
+        source: `course:${targetCourseId}`,
+        target: `document:${documentId}`,
+        kind: 'contains',
+        weight: 1,
+      },
+      {
+        id: `edge:mentions:${conceptId}`,
+        source: `document:${documentId}`,
+        target: `concept:${conceptId}`,
+        kind: 'mentions',
+        weight: 8,
+      },
+    ],
   }
 }
 
@@ -233,7 +347,94 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
       admin_note: null,
       created_at: '2026-07-21T08:00:00Z',
     },
+    {
+      id: 'account-student-b-e2e',
+      email: 'lilin@example.com',
+      display_name: '李琳',
+      role: 'user' as const,
+      status: 'active' as const,
+      admin_note: null,
+      created_at: '2026-07-22T08:00:00Z',
+    },
   ]
+  const adminCourses = [
+    {
+      id: courseId,
+      title: '操作系统',
+      lifecycle: 'active',
+      owner_account_id: 'account-student-e2e',
+      owner_email: 'student@example.com',
+      owner_display_name: '复习同学',
+      owner_subject: 'student@example.com',
+      document_count: 3,
+      note_count: 1,
+      created_at: '2026-07-20T08:00:00Z',
+      updated_at: '2026-07-24T08:00:00Z',
+    },
+    {
+      id: secondaryCourseId,
+      title: '数据结构',
+      lifecycle: 'active',
+      owner_account_id: 'account-student-b-e2e',
+      owner_email: 'lilin@example.com',
+      owner_display_name: '李琳',
+      owner_subject: 'lilin@example.com',
+      document_count: 1,
+      note_count: 1,
+      created_at: '2026-07-21T08:30:00Z',
+      updated_at: '2026-07-25T08:30:00Z',
+    },
+  ]
+  const adminNotes = new Map([
+    [
+      courseId,
+      [
+        adminNote(
+          'note-e2e',
+          courseId,
+          '进程管理',
+          '# 进程管理\n\n进程是资源分配的基本单位。',
+          ['第二章', '进程管理'],
+        ),
+      ],
+    ],
+    [
+      secondaryCourseId,
+      [
+        adminNote(
+          'note-data-structures-e2e',
+          secondaryCourseId,
+          'AVL 树复习笔记',
+          '# AVL 树复习笔记\n\n平衡因子用于判断旋转方向。',
+          ['第六章', '平衡树'],
+        ),
+      ],
+    ],
+  ])
+  const adminGraphs = new Map([
+    [
+      courseId,
+      adminKnowledgeGraph({
+        targetCourseId: courseId,
+        courseTitle: '操作系统',
+        documentId: 'document-ready',
+        documentName: '进程与线程.pdf',
+        conceptId: 'process',
+        conceptLabel: '进程',
+      }),
+    ],
+    [
+      secondaryCourseId,
+      adminKnowledgeGraph({
+        targetCourseId: secondaryCourseId,
+        courseTitle: '数据结构',
+        documentId: 'document-tree-slides',
+        documentName: '树与图.pptx',
+        conceptId: 'balance-factor',
+        conceptLabel: '平衡因子',
+      }),
+    ],
+  ])
   const registrationInviteCode = 'e2e-invite-code-123456'
   let invitationSequence = 1
   let invitations: MockInvitation[] = [
@@ -350,6 +551,20 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
       error_code: 'OCR_PROFILE_UNAVAILABLE',
     }),
   ]
+  let secondaryAdminDocuments = [
+    document({
+      id: 'document-tree-slides',
+      course_id: secondaryCourseId,
+      filename: '树与图.pptx',
+      media_type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      status: 'ready',
+      review_status: 'approved',
+      active_revision_id: 'revision-tree-slides',
+      preview_revision_id: null,
+      indexable: true,
+      page_count: 20,
+    }),
+  ]
   type MockReviewMetadata = {
     review_note: string | null
     reviewed_by_account_id: string | null
@@ -357,6 +572,7 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
     reviewed_at: string | null
   }
   const reviewMetadata = new Map<string, MockReviewMetadata>()
+  const allAdminDocuments = () => [...documents, ...secondaryAdminDocuments]
   const adminDocument = (item: (typeof documents)[number]) => {
     const review = reviewMetadata.get(item.id) ?? {
       review_note: null,
@@ -364,14 +580,15 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
       reviewed_by_email: null,
       reviewed_at: null,
     }
+    const secondaryCourse = item.course_id === secondaryCourseId
     return {
       id: item.id,
       course_id: item.course_id,
-      course_title: '操作系统',
-      owner_account_id: 'account-student-e2e',
-      owner_email: 'student@example.com',
-      owner_display_name: '复习同学',
-      owner_subject: 'student@example.com',
+      course_title: secondaryCourse ? '数据结构' : '操作系统',
+      owner_account_id: secondaryCourse ? 'account-student-b-e2e' : 'account-student-e2e',
+      owner_email: secondaryCourse ? 'lilin@example.com' : 'student@example.com',
+      owner_display_name: secondaryCourse ? '李琳' : '复习同学',
+      owner_subject: secondaryCourse ? 'lilin@example.com' : 'student@example.com',
       filename: item.filename,
       media_type: item.media_type,
       size_bytes: item.id === 'document-preview' ? 524_288 : 262_144,
@@ -487,7 +704,7 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
     }
   }
 
-  if (options.seedCourseSelection !== false) {
+  if (accountRole !== 'admin' && options.seedCourseSelection !== false) {
     await page.addInitScript(
       (id) => localStorage.setItem('study-agent.course-id:account-e2e', id),
       courseId,
@@ -710,9 +927,11 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
           totals: {
             accounts: adminAccounts.length,
             active_sessions: authenticated ? 1 : 0,
-            courses: 1,
-            documents: documents.length,
-            notes: generatedNoteRecord ? 2 : 1,
+            courses: adminCourses.length,
+            documents: allAdminDocuments().length,
+            notes:
+              Array.from(adminNotes.values()).reduce((total, items) => total + items.length, 0) +
+              (generatedNoteRecord ? 1 : 0),
           },
           runtime: {
             app_mode: 'local',
@@ -722,6 +941,50 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
         },
       })
     }
+    if (method === 'GET' && path === '/admin/courses') {
+      if (!authenticated || accountRole !== 'admin') {
+        return route.fulfill({
+          status: 403,
+          json: problem(403, 'FORBIDDEN', '权限不足'),
+        })
+      }
+      return route.fulfill({ json: { items: adminCourses } })
+    }
+    const adminCourseNotesMatch = path.match(/^\/admin\/courses\/([^/]+)\/notes$/)
+    if (method === 'GET' && adminCourseNotesMatch !== null) {
+      if (!authenticated || accountRole !== 'admin') {
+        return route.fulfill({
+          status: 403,
+          json: problem(403, 'FORBIDDEN', '权限不足'),
+        })
+      }
+      const requestedCourseId = decodeURIComponent(adminCourseNotesMatch[1]!)
+      if (!adminCourses.some((course) => course.id === requestedCourseId)) {
+        return route.fulfill({
+          status: 404,
+          json: problem(404, 'RESOURCE_NOT_FOUND', '课程不存在'),
+        })
+      }
+      return route.fulfill({ json: { items: adminNotes.get(requestedCourseId) ?? [] } })
+    }
+    const adminCourseGraphMatch = path.match(/^\/admin\/courses\/([^/]+)\/knowledge-graph$/)
+    if (method === 'GET' && adminCourseGraphMatch !== null) {
+      if (!authenticated || accountRole !== 'admin') {
+        return route.fulfill({
+          status: 403,
+          json: problem(403, 'FORBIDDEN', '权限不足'),
+        })
+      }
+      const requestedCourseId = decodeURIComponent(adminCourseGraphMatch[1]!)
+      const graph = adminGraphs.get(requestedCourseId)
+      if (graph === undefined) {
+        return route.fulfill({
+          status: 404,
+          json: problem(404, 'RESOURCE_NOT_FOUND', '课程不存在'),
+        })
+      }
+      return route.fulfill({ json: graph })
+    }
     if (method === 'GET' && path === '/admin/documents') {
       if (!authenticated || accountRole !== 'admin') {
         return route.fulfill({
@@ -730,7 +993,7 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
         })
       }
       const reviewStatus = url.searchParams.get('review_status')
-      const items = documents
+      const items = allAdminDocuments()
         .filter((item) => reviewStatus === null || item.review_status === reviewStatus)
         .map(adminDocument)
       return route.fulfill({ json: { items } })
@@ -744,7 +1007,7 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
         })
       }
       const documentId = decodeURIComponent(adminDocumentContentMatch[1]!)
-      const current = documents.find((item) => item.id === documentId)
+      const current = allAdminDocuments().find((item) => item.id === documentId)
       if (current === undefined) {
         return route.fulfill({
           status: 404,
@@ -769,7 +1032,7 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
         })
       }
       const documentId = decodeURIComponent(adminDocumentReviewMatch[1]!)
-      const current = documents.find((item) => item.id === documentId)
+      const current = allAdminDocuments().find((item) => item.id === documentId)
       if (current === undefined) {
         return route.fulfill({
           status: 404,
@@ -806,6 +1069,16 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
             }
           : item,
       )
+      secondaryAdminDocuments = secondaryAdminDocuments.map((item) =>
+        item.id === documentId
+          ? {
+              ...item,
+              review_status: payload.review_status,
+              indexable: payload.review_status === 'approved' && item.corpus_role === 'corpus',
+              updated_at: '2026-07-24T08:10:00Z',
+            }
+          : item,
+      )
       reviewMetadata.set(documentId, {
         review_note: reviewNote,
         reviewed_by_account_id: mockAccount.id,
@@ -813,7 +1086,7 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
         reviewed_at: '2026-07-24T08:10:00Z',
       })
       return route.fulfill({
-        json: adminDocument(documents.find((item) => item.id === documentId)!),
+        json: adminDocument(allAdminDocuments().find((item) => item.id === documentId)!),
       })
     }
 
@@ -1008,6 +1281,14 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
       const payload = request.postDataJSON() as {
         question: string
         conversation_id?: string | null
+        concept_context?: {
+          label: string
+          anchors: Array<{
+            document_id: string
+            revision_id: string
+            chunk_id: string
+          }>
+        }
       }
       let conversation: MockConversation | undefined
       if (typeof payload.conversation_id === 'string') {

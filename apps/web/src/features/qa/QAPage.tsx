@@ -19,6 +19,7 @@ import type {
   Citation,
   CitationSource,
   ConversationRecord,
+  QueryConceptContext,
   QuerySnapshot,
 } from '../../api/types'
 import { useWorkspace } from '../../app/WorkspaceContext'
@@ -39,16 +40,55 @@ const stages = [
   { key: 'validation', label: '校验引用' },
 ] as const
 
-function suggestedQuestionFromRouteState(state: unknown): string | null {
+interface SuggestedQueryDraft {
+  question: string
+  conceptContext?: QueryConceptContext
+}
+
+function conceptContextFromRouteState(value: unknown): QueryConceptContext | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const candidate = value as Record<string, unknown>
+  const label = typeof candidate.label === 'string' ? candidate.label.trim() : ''
+  if (!label || label.length > 1024 || !Array.isArray(candidate.anchors)) return undefined
+  if (candidate.anchors.length === 0 || candidate.anchors.length > 4) return undefined
+  const anchors = candidate.anchors.flatMap((value) => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return []
+    const anchor = value as Record<string, unknown>
+    if (
+      typeof anchor.document_id !== 'string' ||
+      typeof anchor.revision_id !== 'string' ||
+      typeof anchor.chunk_id !== 'string' ||
+      !anchor.document_id.trim() ||
+      !anchor.revision_id.trim() ||
+      !anchor.chunk_id.trim()
+    )
+      return []
+    return [
+      {
+        document_id: anchor.document_id,
+        revision_id: anchor.revision_id,
+        chunk_id: anchor.chunk_id,
+      },
+    ]
+  })
+  if (anchors.length !== candidate.anchors.length) return undefined
+  if (new Set(anchors.map((anchor) => anchor.chunk_id)).size !== anchors.length) return undefined
+  return { label, anchors }
+}
+
+function suggestedQueryFromRouteState(state: unknown): SuggestedQueryDraft | null {
   if (typeof state !== 'object' || state === null || Array.isArray(state)) return null
   const candidate = state as Record<string, unknown>
   if (candidate.startNewConversation !== true || typeof candidate.suggestedQuestion !== 'string') {
     return null
   }
   const suggestedQuestion = candidate.suggestedQuestion.trim()
-  return suggestedQuestion.length > 0 && suggestedQuestion.length <= 2000
-    ? suggestedQuestion
-    : null
+  if (suggestedQuestion.length === 0 || suggestedQuestion.length > 2000) return null
+  const conceptContext = conceptContextFromRouteState(candidate.conceptContext)
+  return {
+    question: suggestedQuestion,
+    ...(conceptContext ? { conceptContext } : {}),
+  }
 }
 
 function activeStageIndex(snapshot: QuerySnapshot | undefined): number {
@@ -223,7 +263,11 @@ function QueryTurn({
           <ShieldCheck aria-hidden="true" size={20} />
           <div>
             <StatusBadge tone="warning">依据不足</StatusBadge>
-            <p>{answer.refusal?.message ?? '当前课程资料没有足够依据回答该问题。'}</p>
+            <p>
+              {answer.refusal?.message === 'evidence is insufficient'
+                ? '当前课程资料没有足够依据回答该问题。'
+                : (answer.refusal?.message ?? '当前课程资料没有足够依据回答该问题。')}
+            </p>
           </div>
         </article>
       ) : null}
@@ -255,11 +299,14 @@ export function QAPage() {
   const queryClient = useQueryClient()
   const location = useLocation()
   const navigate = useNavigate()
-  const routeSuggestedQuestion = suggestedQuestionFromRouteState(location.state)
-  const [question, setQuestion] = useState(() => routeSuggestedQuestion ?? '')
+  const routeDraft = useMemo(() => suggestedQueryFromRouteState(location.state), [location.state])
+  const [question, setQuestion] = useState(() => routeDraft?.question ?? '')
+  const [conceptContext, setConceptContext] = useState<QueryConceptContext | undefined>(
+    () => routeDraft?.conceptContext,
+  )
   const [requestedConversationId, setRequestedConversationId] = useState<
     string | null | undefined
-  >(() => (routeSuggestedQuestion === null ? undefined : null))
+  >(() => (routeDraft === null ? undefined : null))
   const [source, setSource] = useState<{
     courseId: string
     queryId: string
@@ -269,7 +316,7 @@ export function QAPage() {
   const providerReady = capabilities?.provider.status === 'available'
 
   useEffect(() => {
-    if (routeSuggestedQuestion === null) return
+    if (routeDraft === null) return
     void navigate(
       {
         pathname: location.pathname,
@@ -278,7 +325,7 @@ export function QAPage() {
       },
       { replace: true, state: null },
     )
-  }, [location.hash, location.pathname, location.search, navigate, routeSuggestedQuestion])
+  }, [location.hash, location.pathname, location.search, navigate, routeDraft])
 
   const conversations = useQuery({
     queryKey: ['conversations', courseId],
@@ -336,11 +383,19 @@ export function QAPage() {
   })
 
   const createQuery = useMutation({
-    mutationFn: async (prompt: string) => {
+    mutationFn: async ({
+      prompt,
+      context,
+    }: {
+      prompt: string
+      context?: QueryConceptContext
+    }) => {
       const targetConversation = selectedConversation
-      const snapshot = targetConversation
-        ? await studyApi.createQuery(courseId, prompt, targetConversation.id)
-        : await studyApi.createQuery(courseId, prompt)
+      const snapshot = context
+        ? await studyApi.createQuery(courseId, prompt, targetConversation?.id, context)
+        : targetConversation
+          ? await studyApi.createQuery(courseId, prompt, targetConversation.id)
+          : await studyApi.createQuery(courseId, prompt)
       return { conversation: targetConversation, prompt, snapshot }
     },
     onSuccess: ({ conversation, prompt, snapshot }) => {
@@ -379,6 +434,7 @@ export function QAPage() {
       )
       setRequestedConversationId(snapshot.conversation_id)
       setQuestion('')
+      setConceptContext(undefined)
     },
   })
 
@@ -418,7 +474,7 @@ export function QAPage() {
       return
     setSource(null)
     createQuery.reset()
-    createQuery.mutate(prompt)
+    createQuery.mutate({ prompt, context: conceptContext })
   }
 
   return (
@@ -546,7 +602,16 @@ export function QAPage() {
           disabled={!providerReady || capabilitiesLoading}
           id="course-question"
           maxLength={2000}
-          onChange={(event) => setQuestion(event.target.value)}
+          onChange={(event) => {
+            const value = event.target.value
+            setQuestion(value)
+            if (
+              conceptContext &&
+              !value.toLocaleLowerCase().includes(conceptContext.label.toLocaleLowerCase())
+            ) {
+              setConceptContext(undefined)
+            }
+          }}
           placeholder={providerReady ? '输入课程问题' : 'Provider 不可用'}
           rows={2}
           value={question}

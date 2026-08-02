@@ -9,9 +9,11 @@ from enum import StrEnum
 from itertools import combinations
 
 from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from study_agent.identity.principal import Principal
 from study_agent.infrastructure.db.models import (
+    AccountModel,
     CourseModel,
     DocumentModel,
     DocumentRevisionModel,
@@ -19,6 +21,7 @@ from study_agent.infrastructure.db.models import (
     UserModel,
 )
 from study_agent.infrastructure.db.session import Database
+from study_agent.modules.auth.service import AccountIdentity, AccountRole, AccountStatus
 from study_agent.modules.retrieval.tokenizer import ChineseTokenizer
 
 MAX_GRAPH_NODES = 100
@@ -27,6 +30,7 @@ MAX_DOCUMENT_NODES = 24
 MAX_SOURCE_CHUNKS = 4_000
 MAX_OCCURRENCES_PER_CONCEPT = 12
 MIN_CONCEPT_FREQUENCY = 2
+_ADMIN_KNOWLEDGE_GRAPH_ACTOR = "admin-knowledge-graph"
 
 _STOP_WORDS = frozenset(
     {
@@ -128,6 +132,10 @@ class KnowledgeGraphNotFound(LookupError):
     """The principal cannot access the requested active course."""
 
 
+class KnowledgeGraphForbidden(PermissionError):
+    """The account is not allowed to inspect cross-user course graphs."""
+
+
 @dataclass(frozen=True, slots=True)
 class KnowledgeGraphOccurrence:
     document_id: str
@@ -207,10 +215,7 @@ class KnowledgeGraphService:
         node_limit: int = 64,
         edge_limit: int = 160,
     ) -> KnowledgeGraph:
-        if not 3 <= node_limit <= MAX_GRAPH_NODES:
-            raise ValueError(f"node_limit must be between 3 and {MAX_GRAPH_NODES}")
-        if not 1 <= edge_limit <= MAX_GRAPH_EDGES:
-            raise ValueError(f"edge_limit must be between 1 and {MAX_GRAPH_EDGES}")
+        _validate_limits(node_limit, edge_limit)
 
         async with self._database.session(principal) as session:
             course = await session.scalar(
@@ -226,74 +231,123 @@ class KnowledgeGraphService:
             )
             if course is None:
                 raise KnowledgeGraphNotFound
+            return await self._project_course(
+                session,
+                course,
+                node_limit=node_limit,
+                edge_limit=edge_limit,
+            )
 
-            document_filter = (
-                DocumentModel.user_id == course.user_id,
-                DocumentModel.course_id == course.id,
-                DocumentModel.deleted_at.is_(None),
-                DocumentModel.status == "ready",
-                DocumentModel.corpus_role == "corpus",
-                DocumentModel.review_status == "approved",
-                DocumentModel.active_revision_id.is_not(None),
-            )
-            active_document_count = int(
-                await session.scalar(
-                    select(func.count()).select_from(DocumentModel).where(*document_filter)
+    async def get_admin_course_graph(
+        self,
+        actor: AccountIdentity,
+        course_id: str,
+        *,
+        node_limit: int = 64,
+        edge_limit: int = 160,
+    ) -> KnowledgeGraph:
+        _validate_limits(node_limit, edge_limit)
+        if (
+            actor.account.role is not AccountRole.ADMIN
+            or actor.account.status is not AccountStatus.ACTIVE
+        ):
+            raise KnowledgeGraphForbidden
+
+        async with self._database.system_session(_ADMIN_KNOWLEDGE_GRAPH_ACTOR) as session:
+            course = await session.scalar(
+                select(CourseModel)
+                .join(AccountModel, AccountModel.user_id == CourseModel.user_id)
+                .where(
+                    CourseModel.id == course_id,
+                    CourseModel.lifecycle == "active",
+                    CourseModel.deleted_at.is_(None),
+                    AccountModel.role == AccountRole.USER.value,
                 )
-                or 0
             )
-            document_limit = min(
-                MAX_DOCUMENT_NODES,
-                node_limit - 2,
-                edge_limit,
+            if course is None:
+                raise KnowledgeGraphNotFound
+            return await self._project_course(
+                session,
+                course,
+                node_limit=node_limit,
+                edge_limit=edge_limit,
             )
-            document_rows = list(
-                (
-                    await session.execute(
-                        select(DocumentModel, DocumentRevisionModel)
-                        .join(
-                            DocumentRevisionModel,
-                            (DocumentRevisionModel.id == DocumentModel.active_revision_id)
-                            & (DocumentRevisionModel.document_id == DocumentModel.id),
-                        )
-                        .where(*document_filter)
-                        .order_by(
-                            func.lower(DocumentModel.filename),
-                            DocumentModel.filename,
-                            DocumentModel.id,
-                        )
-                        .limit(document_limit)
+
+    async def _project_course(
+        self,
+        session: AsyncSession,
+        course: CourseModel,
+        *,
+        node_limit: int,
+        edge_limit: int,
+    ) -> KnowledgeGraph:
+        document_filter = (
+            DocumentModel.user_id == course.user_id,
+            DocumentModel.course_id == course.id,
+            DocumentModel.deleted_at.is_(None),
+            DocumentModel.status == "ready",
+            DocumentModel.corpus_role == "corpus",
+            DocumentModel.review_status == "approved",
+            DocumentModel.active_revision_id.is_not(None),
+        )
+        active_document_count = int(
+            await session.scalar(
+                select(func.count()).select_from(DocumentModel).where(*document_filter)
+            )
+            or 0
+        )
+        document_limit = min(
+            MAX_DOCUMENT_NODES,
+            node_limit - 2,
+            edge_limit,
+        )
+        document_rows = list(
+            (
+                await session.execute(
+                    select(DocumentModel, DocumentRevisionModel)
+                    .join(
+                        DocumentRevisionModel,
+                        (DocumentRevisionModel.id == DocumentModel.active_revision_id)
+                        & (DocumentRevisionModel.document_id == DocumentModel.id),
                     )
-                ).tuples()
-            )
-            documents = tuple(
-                _DocumentSource(
-                    id=document.id,
-                    filename=document.filename,
-                    revision_id=revision.id,
-                    page_count=revision.total_page_count,
-                )
-                for document, revision in document_rows
-            )
-            revision_ids = [document.revision_id for document in documents]
-            chunks: list[RevisionChunkModel] = []
-            source_chunks_truncated = False
-            if revision_ids:
-                chunk_rows = list(
-                    await session.scalars(
-                        select(RevisionChunkModel)
-                        .where(RevisionChunkModel.revision_id.in_(revision_ids))
-                        .order_by(
-                            RevisionChunkModel.revision_id,
-                            RevisionChunkModel.page_ordinal,
-                            RevisionChunkModel.ordinal,
-                            RevisionChunkModel.id,
-                        )
-                        .limit(MAX_SOURCE_CHUNKS + 1)
+                    .where(*document_filter)
+                    .order_by(
+                        func.lower(DocumentModel.filename),
+                        DocumentModel.filename,
+                        DocumentModel.id,
                     )
+                    .limit(document_limit)
                 )
-                source_chunks_truncated = len(chunk_rows) > MAX_SOURCE_CHUNKS
-                chunks = chunk_rows[:MAX_SOURCE_CHUNKS]
+            ).tuples()
+        )
+        documents = tuple(
+            _DocumentSource(
+                id=document.id,
+                filename=document.filename,
+                revision_id=revision.id,
+                page_count=revision.total_page_count,
+            )
+            for document, revision in document_rows
+        )
+        revision_ids = [document.revision_id for document in documents]
+        chunks: list[RevisionChunkModel] = []
+        source_chunks_truncated = False
+        if revision_ids:
+            chunk_rows = list(
+                await session.scalars(
+                    select(RevisionChunkModel)
+                    .where(RevisionChunkModel.revision_id.in_(revision_ids))
+                    .order_by(
+                        RevisionChunkModel.revision_id,
+                        RevisionChunkModel.page_ordinal,
+                        RevisionChunkModel.ordinal,
+                        RevisionChunkModel.id,
+                    )
+                    .limit(MAX_SOURCE_CHUNKS + 1)
+                )
+            )
+            source_chunks_truncated = len(chunk_rows) > MAX_SOURCE_CHUNKS
+            chunks = chunk_rows[:MAX_SOURCE_CHUNKS]
 
         return self._build_graph(
             course_id=course.id,
@@ -547,12 +601,20 @@ def _concept_for_node_id(
     return next(concept for concept, candidate in concept_ids.items() if candidate == node_id)
 
 
+def _validate_limits(node_limit: int, edge_limit: int) -> None:
+    if not 3 <= node_limit <= MAX_GRAPH_NODES:
+        raise ValueError(f"node_limit must be between 3 and {MAX_GRAPH_NODES}")
+    if not 1 <= edge_limit <= MAX_GRAPH_EDGES:
+        raise ValueError(f"edge_limit must be between 1 and {MAX_GRAPH_EDGES}")
+
+
 __all__ = [
     "MAX_GRAPH_EDGES",
     "MAX_GRAPH_NODES",
     "KnowledgeGraph",
     "KnowledgeGraphEdge",
     "KnowledgeGraphEdgeKind",
+    "KnowledgeGraphForbidden",
     "KnowledgeGraphNode",
     "KnowledgeGraphNodeKind",
     "KnowledgeGraphNotFound",

@@ -59,8 +59,9 @@ def rewrite_zip(
 def _build_pdf_bytes() -> bytes:
     page_one = b"\n".join(
         (
-            b"BT /F1 18 Tf 72 730 Td (Operating Systems Review) Tj ET",
-            b"BT /F1 11 Tf 72 700 Td (Processes use virtual memory and scheduling.) Tj ET",
+            b"BT /F1 28 Tf 72 730 Td (Operating Systems Review) Tj ET",
+            b"BT /F1 24 Tf 72 700 Td (Processes use virtual memory and scheduling.) Tj ET",
+            b"BT /F1 20 Tf 72 670 Td (Large body text remains paragraph text.) Tj ET",
             b"72 620 m 360 620 l 360 540 l 72 540 l h S",
             b"216 620 m 216 540 l S",
             b"72 580 m 360 580 l S",

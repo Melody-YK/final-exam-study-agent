@@ -2,7 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 import { ApiError, studyApi } from '../../api/client'
-import type { RuntimeCapabilities } from '../../api/types'
+import type { EventEnvelope, JobEventData, RuntimeCapabilities } from '../../api/types'
 import { documentRecord, problem } from '../../test/fixtures'
 import { availableCapabilities, renderInWorkspace } from '../../test/render'
 import { LibraryPage } from './LibraryPage'
@@ -20,6 +20,7 @@ describe('LibraryPage', () => {
         id: 'ready-document',
         filename: 'ready.pdf',
         preview_revision_id: 'preview-2',
+        progress: { phase: 'parsing', completed_pages: 84, total_pages: 100 },
       }),
       documentRecord({
         id: 'failed-document',
@@ -70,11 +71,12 @@ describe('LibraryPage', () => {
     const { user } = renderInWorkspace(<LibraryPage />)
 
     expect(await screen.findByText('ready.pdf')).toBeInTheDocument()
-    expect(screen.getByText('活动版 + 待确认预览')).toBeInTheDocument()
-    expect(screen.getByText('部分失败')).toBeInTheDocument()
-    expect(screen.getByText('PARSER_PAGE_FAILED')).toBeInTheDocument()
-    expect(screen.getByText('解析中')).toBeInTheDocument()
-    expect(screen.getByText('等待 Worker')).toBeInTheDocument()
+    const documentTable = screen.getByRole('table')
+    expect(within(documentTable).getByText('可学习')).toBeInTheDocument()
+    expect(within(documentTable).queryByText('84/100 页')).not.toBeInTheDocument()
+    expect(within(documentTable).getByText('处理失败')).toBeInTheDocument()
+    expect(within(documentTable).getAllByText('处理中')).toHaveLength(2)
+    expect(within(documentTable).getByText('不参与学习')).toBeInTheDocument()
     expect(screen.getByText('3/10 页')).toBeInTheDocument()
     expect(studyApi.subscribe).toHaveBeenCalledWith(
       '/parse-jobs/parse-job-1/events',
@@ -82,7 +84,14 @@ describe('LibraryPage', () => {
       expect.any(Function),
       expect.any(Function),
     )
-    expect(screen.getByText('排除')).toHaveClass('muted')
+    expect(screen.queryByRole('columnheader', { name: '角色' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('columnheader', { name: '审核' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('columnheader', { name: '版本' })).not.toBeInTheDocument()
+    expect(screen.queryByText('排除')).not.toBeInTheDocument()
+    expect(screen.queryByText('PARSER_PAGE_FAILED')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '重新解析' }))
+    expect(studyApi.retryDocument).toHaveBeenCalledWith('ready-document', [])
 
     await user.click(screen.getByRole('button', { name: '重试失败页' }))
     expect(studyApi.retryDocument).toHaveBeenCalledWith('failed-document', [2, 5])
@@ -115,6 +124,46 @@ describe('LibraryPage', () => {
     expect(screen.getByText('未配置回答模型')).toBeInTheDocument()
     expect(screen.getByText('原生解析不可用')).toBeInTheDocument()
     expect(screen.getByText('需要本地 OCR Worker')).toBeInTheDocument()
+  })
+
+  it('refreshes readiness and notifies when the parse job reaches a terminal event', async () => {
+    const processing = documentRecord({
+      status: 'processing',
+      active_revision_id: null,
+      parse_job_id: 'parse-job-1',
+      progress: { phase: 'parsing', completed_pages: 9, total_pages: 10 },
+    })
+    const ready = documentRecord({
+      ...processing,
+      status: 'ready',
+      active_revision_id: 'revision-1',
+      progress: { phase: 'completed', completed_pages: 10, total_pages: 10 },
+    })
+    vi.spyOn(studyApi, 'listDocuments')
+      .mockResolvedValueOnce([processing])
+      .mockResolvedValueOnce([ready])
+    let emitEvent: (event: EventEnvelope<JobEventData>) => void = () => undefined
+    vi.spyOn(studyApi, 'subscribe').mockImplementation((_path, onEvent) => {
+      emitEvent = onEvent as (event: EventEnvelope<JobEventData>) => void
+      return vi.fn()
+    })
+
+    renderInWorkspace(<LibraryPage />)
+
+    await screen.findByText('处理中')
+    emitEvent({
+      stream_version: '1',
+      sequence: 2,
+      occurred_at: '2026-07-19T04:00:00Z',
+      trace_id: 'trace-success',
+      event_type: 'job.succeeded',
+      data: { page_count: 10 },
+    })
+
+    expect(await screen.findByText('资料解析完成，正在准备学习入口。')).toBeInTheDocument()
+    expect(await screen.findByText('资料已准备完成，现在可以学习了。')).toBeInTheDocument()
+    expect(screen.getByRole('listitem', { name: '可学习 1' })).toBeInTheDocument()
+    expect(screen.queryByText('9/10 页')).not.toBeInTheDocument()
   })
 
   it('derives study readiness from every required predicate with review precedence', async () => {

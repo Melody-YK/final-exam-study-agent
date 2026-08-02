@@ -11,6 +11,8 @@ from study_agent.providers.protocols import (
     EmbeddingContract,
     EmbeddingProvider,
     EvidencePrompt,
+    JsonCompletionPrompt,
+    JsonCompletionProvider,
     ObjectMetadata,
     ObjectScope,
     ObjectStorage,
@@ -19,6 +21,9 @@ from study_agent.providers.protocols import (
     RerankScore,
     SignedUrl,
     StructuredAnswerDraft,
+    StructuredJsonDraft,
+    TextCompletionPrompt,
+    TextCompletionProvider,
     UploadTarget,
 )
 
@@ -30,6 +35,8 @@ __all__ = [
     "EmbeddingContract",
     "EmbeddingProvider",
     "EvidencePrompt",
+    "JsonCompletionPrompt",
+    "JsonCompletionProvider",
     "ObjectMetadata",
     "ObjectScope",
     "ObjectStorage",
@@ -42,6 +49,9 @@ __all__ = [
     "RerankScore",
     "SignedUrl",
     "StructuredAnswerDraft",
+    "StructuredJsonDraft",
+    "TextCompletionPrompt",
+    "TextCompletionProvider",
     "UploadTarget",
     "build_provider_registry",
 ]

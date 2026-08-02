@@ -4,35 +4,8 @@ import type { DocumentRecord } from '../../api/types'
 import { IconButton } from '../../components/ui/IconButton'
 import { StatusBadge, type StatusTone } from '../../components/ui/StatusBadge'
 
-const roleLabels: Record<string, string> = {
-  corpus: '课程资料',
-  questions: '题目',
-  gold_answers: '答案',
-  ocr_gold: 'OCR 标注',
-  excluded: '排除',
-}
-
-const statusLabels: Record<string, { label: string; tone: StatusTone }> = {
-  created: { label: '等待上传', tone: 'neutral' },
-  uploaded: { label: '已上传', tone: 'info' },
-  queued: { label: '等待 Worker', tone: 'warning' },
-  parsing: { label: '解析中', tone: 'info' },
-  processing: { label: '解析中', tone: 'info' },
-  retry_wait: { label: '等待重试', tone: 'warning' },
-  partial_failed: { label: '部分失败', tone: 'danger' },
-  failed: { label: '失败', tone: 'danger' },
-  parsed_index_blocked: { label: '待索引', tone: 'warning' },
-  indexing: { label: '索引中', tone: 'info' },
-  ready: { label: '可问答', tone: 'success' },
-  deleted: { label: '清理中', tone: 'neutral' },
-  deleting: { label: '清理中', tone: 'neutral' },
-}
-
-const reviewLabels: Record<string, { label: string; tone: StatusTone }> = {
-  pending: { label: '待管理员审核', tone: 'warning' },
-  approved: { label: '已通过', tone: 'success' },
-  rejected: { label: '未通过', tone: 'danger' },
-}
+const failureStatuses = new Set(['partial_failed', 'failed'])
+const deletionStatuses = new Set(['deleted', 'deleting'])
 
 interface DocumentTableProps {
   documents: DocumentRecord[]
@@ -48,17 +21,24 @@ function FileKindIcon({ mediaType }: { mediaType: string }) {
   return <FileText aria-hidden="true" size={19} />
 }
 
-function revisionLabel(document: DocumentRecord): string {
-  if (document.active_revision_id && document.preview_revision_id) return '活动版 + 待确认预览'
-  if (document.active_revision_id) return '活动版本'
-  if (document.preview_revision_id) return '预览待激活'
-  return '尚无版本'
+function statusPresentation(document: DocumentRecord): { label: string; tone: StatusTone } {
+  if (deletionStatuses.has(document.status)) return { label: '删除中', tone: 'neutral' }
+  if (document.review_status === 'pending') return { label: '待管理员审核', tone: 'warning' }
+  if (document.review_status === 'rejected') return { label: '审核未通过', tone: 'danger' }
+  if (failureStatuses.has(document.status)) return { label: '处理失败', tone: 'danger' }
+  if (document.status === 'ready' && document.indexable) {
+    return { label: '可学习', tone: 'success' }
+  }
+  if (document.corpus_role !== 'corpus') return { label: '不参与学习', tone: 'neutral' }
+  return { label: '处理中', tone: 'info' }
 }
 
-function readableProgress(progress: DocumentRecord['progress']): {
+function readableProgress(document: DocumentRecord): {
   completedPages: number
   totalPages: number
 } | null {
+  if (document.status === 'ready') return null
+  const progress = document.progress
   if (!progress) return null
   const completedPages = progress.completed_pages
   const totalPages = progress.total_pages
@@ -91,10 +71,7 @@ export function DocumentTable({
         <thead>
           <tr>
             <th scope="col">资料</th>
-            <th scope="col">角色</th>
             <th scope="col">状态</th>
-            <th scope="col">审核</th>
-            <th scope="col">版本</th>
             <th scope="col">页数</th>
             <th className="table-actions" scope="col">
               <IconButton label="刷新资料" onClick={onRefresh} size="small">
@@ -105,18 +82,16 @@ export function DocumentTable({
         </thead>
         <tbody>
           {documents.map((document) => {
-            const status = statusLabels[document.status] ?? {
-              label: document.status,
-              tone: 'neutral' as const,
-            }
-            const review = reviewLabels[document.review_status] ?? {
-              label: document.review_status,
-              tone: 'neutral' as const,
-            }
+            const status = statusPresentation(document)
             const canRetry =
               document.review_status === 'approved' &&
               ['partial_failed', 'failed', 'retry_wait'].includes(document.status)
-            const progress = readableProgress(document.progress)
+            const canReparse =
+              document.review_status === 'approved' &&
+              document.status === 'ready' &&
+              document.corpus_role === 'corpus' &&
+              document.media_type === 'application/pdf'
+            const progress = readableProgress(document)
             return (
               <tr key={document.id}>
                 <td data-label="资料">
@@ -130,11 +105,6 @@ export function DocumentTable({
                     </span>
                   </div>
                 </td>
-                <td data-label="角色">
-                  <span className={document.indexable ? '' : 'muted'}>
-                    {roleLabels[document.corpus_role] ?? document.corpus_role}
-                  </span>
-                </td>
                 <td data-label="状态">
                   <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
                   {progress ? (
@@ -142,22 +112,19 @@ export function DocumentTable({
                       {progress.completedPages}/{progress.totalPages} 页
                     </small>
                   ) : null}
-                  {document.error_code ? (
-                    <small className="table-error">{document.error_code}</small>
-                  ) : null}
-                </td>
-                <td data-label="审核">
-                  <StatusBadge tone={review.tone}>{review.label}</StatusBadge>
-                </td>
-                <td data-label="版本">
-                  <span className="revision-state">{revisionLabel(document)}</span>
                 </td>
                 <td data-label="页数">{document.page_count ?? '—'}</td>
                 <td className="table-actions" data-label="操作">
-                  {canRetry ? (
+                  {canRetry || canReparse ? (
                     <IconButton
                       disabled={busyDocumentId === document.id}
-                      label={document.failed_pages?.length ? '重试失败页' : '重试解析'}
+                      label={
+                        document.failed_pages?.length
+                          ? '重试失败页'
+                          : canReparse
+                            ? '重新解析'
+                            : '重试解析'
+                      }
                       onClick={() => onRetry(document)}
                       size="small"
                     >

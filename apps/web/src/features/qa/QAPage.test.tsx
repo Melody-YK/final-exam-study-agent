@@ -169,6 +169,64 @@ describe('QAPage', () => {
     expect(createQuery).not.toHaveBeenCalled()
   })
 
+  it('submits validated graph anchors with the concept draft after route state is cleared', async () => {
+    const createQuery = vi.spyOn(studyApi, 'createQuery').mockResolvedValue(answeredSnapshot())
+    const suggestedQuestion =
+      '根据当前课程资料，概括“进程”在课程内容中的含义，并说明它与直接关联概念的联系。'
+    const conceptContext = {
+      label: '进程',
+      anchors: [
+        {
+          document_id: 'document-1',
+          revision_id: 'revision-1',
+          chunk_id: 'chunk-1',
+        },
+      ],
+    }
+    const { user } = renderWithRouteState({
+      suggestedQuestion,
+      startNewConversation: true,
+      conceptContext,
+    })
+
+    await screen.findByText('暂无会话，直接提问即可开始')
+    await waitFor(() => expect(screen.getByTestId('qa-route-state')).toHaveTextContent('null'))
+    await user.click(screen.getByRole('button', { name: '提交问题' }))
+
+    expect(createQuery).toHaveBeenCalledWith(
+      'course-1',
+      suggestedQuestion,
+      undefined,
+      conceptContext,
+    )
+  })
+
+  it('drops graph anchors when the edited question no longer names the concept', async () => {
+    const createQuery = vi.spyOn(studyApi, 'createQuery').mockResolvedValue(answeredSnapshot())
+    const { user } = renderWithRouteState({
+      suggestedQuestion:
+        '根据当前课程资料，概括“进程”在课程内容中的含义，并说明它与直接关联概念的联系。',
+      startNewConversation: true,
+      conceptContext: {
+        label: '进程',
+        anchors: [
+          {
+            document_id: 'document-1',
+            revision_id: 'revision-1',
+            chunk_id: 'chunk-1',
+          },
+        ],
+      },
+    })
+
+    const composer = screen.getByLabelText('课程问题')
+    await user.clear(composer)
+    await user.type(composer, '请说明线程是什么')
+    await user.click(screen.getByRole('button', { name: '提交问题' }))
+
+    expect(createQuery).toHaveBeenCalledWith('course-1', '请说明线程是什么')
+  })
+
   it.each([
     ['array state', [{ suggestedQuestion: '不应采用', startNewConversation: true }]],
     ['missing new-conversation flag', { suggestedQuestion: '不应采用' }],
@@ -215,6 +273,7 @@ describe('QAPage', () => {
           sequence: 4,
           occurred_at: '2026-07-19T06:00:00Z',
           trace_id: 'query-sse-test',
+          event_type: 'query.completed',
           data: { status: 'answered' },
         })
       return close

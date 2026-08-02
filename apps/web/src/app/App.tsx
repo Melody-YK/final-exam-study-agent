@@ -36,7 +36,7 @@ function AppRoutes() {
   const [selectedCourses, setSelectedCourses] = useState<Record<string, string>>({})
   const auth = useAuth()
   const location = useLocation()
-  const accountId = auth.user?.id
+  const accountId = auth.user?.role === 'user' ? auth.user.id : undefined
   const courseId = accountId
     ? (selectedCourses[accountId] ?? localStorage.getItem(accountCourseStorageKey(accountId)))
     : null
@@ -96,7 +96,7 @@ function AppRoutes() {
           ) : auth.user.role !== 'admin' ? (
             <Navigate replace to="/" />
           ) : (
-            <AdminShell courseId={courseId} onLeaveCourse={leaveCourse} />
+            <AdminShell />
           )
         }
         path="/admin/*"
@@ -105,6 +105,8 @@ function AppRoutes() {
         element={
           auth.user === null ? (
             <Navigate replace state={{ from: location.pathname }} to="/login" />
+          ) : auth.user.role === 'admin' ? (
+            <Navigate replace to="/admin" />
           ) : courseId ? (
             <WorkspaceShell courseId={courseId} onLeaveCourse={leaveCourse} />
           ) : (

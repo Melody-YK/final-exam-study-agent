@@ -11,9 +11,12 @@ import {
   Pencil,
   RefreshCw,
   Save,
+  Search,
+  X,
 } from 'lucide-react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import React, { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import type { Element as HastElement } from 'hast'
 
 import { ApiError, studyApi } from '../../api/client'
 import type {
@@ -218,6 +221,92 @@ function stripLegacySourceMapping(body: string): string {
   return body.replace(/^#{2,6}\s+来源对应\s*$[\s\S]*/m, '').trim()
 }
 
+interface MarkdownHeading {
+  id: string
+  level: number
+  line: number
+  text: string
+}
+
+function headingText(value: string): string {
+  return value
+    .replace(/\s+#+\s*$/, '')
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/[`*_~]/g, '')
+    .trim()
+}
+
+function headingAnchorId(text: string, line: number): string {
+  const slug = text
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48)
+  return `note-heading-${line}-${slug || 'section'}`
+}
+
+function extractMarkdownHeadings(body: string): MarkdownHeading[] {
+  return stripLegacySourceMapping(body)
+    .split(/\r?\n/)
+    .flatMap((line, index) => {
+      const match = /^(#{1,6})\s+(.+?)\s*$/.exec(line)
+      if (!match) return []
+      const rawLevel = match[1]
+      const rawText = match[2]
+      if (!rawLevel || !rawText) return []
+      const text = headingText(rawText)
+      if (!text) return []
+      const lineNumber = index + 1
+      return [{
+        id: headingAnchorId(text, lineNumber),
+        level: rawLevel.length,
+        line: lineNumber,
+        text,
+      }]
+    })
+}
+
+interface NoteSectionNode {
+  children: NoteSectionNode[]
+  label: string
+  notes: NoteRecord[]
+  path: string[]
+}
+
+function noteSectionPath(note: NoteRecord): string[] {
+  return note.section_path.length ? note.section_path : ['未分类']
+}
+
+function buildNoteSectionTree(notes: NoteRecord[]): NoteSectionNode[] {
+  const roots: NoteSectionNode[] = []
+  for (const note of notes) {
+    let level = roots
+    const path: string[] = []
+    const sectionPath = noteSectionPath(note)
+    for (const [index, label] of sectionPath.entries()) {
+      path.push(label)
+      let node = level.find((candidate) => candidate.label === label)
+      if (!node) {
+        node = { children: [], label, notes: [], path: [...path] }
+        level.push(node)
+      }
+      if (index === sectionPath.length - 1) {
+        node.notes.push(note)
+      }
+      level = node.children
+    }
+  }
+  return roots
+}
+
+function noteMatchesSearch(note: NoteRecord, query: string): boolean {
+  const haystack = [note.title, note.section_path.join(' / '), note.body_markdown]
+    .join('\n')
+    .toLocaleLowerCase()
+  return haystack.includes(query.toLocaleLowerCase())
+}
+
 function matchingKnowledgePoint(
   text: string,
   points: NoteRecord['knowledge_points'],
@@ -285,7 +374,25 @@ function NoteMarkdown({ body, note }: { body: string; note: NoteRecord }) {
     )
   }
 
+  const renderHeading =
+    (Tag: 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6') =>
+    ({ children, node }: { children?: React.ReactNode; node?: HastElement }) => {
+      const text = headingText(markdownText(children))
+      const line = node?.position?.start.line ?? 0
+      return (
+        <Tag id={headingAnchorId(text, line)}>
+          {children}
+        </Tag>
+      )
+    }
+
   const components: Components = {
+    h1: renderHeading('h1'),
+    h2: renderHeading('h2'),
+    h3: renderHeading('h3'),
+    h4: renderHeading('h4'),
+    h5: renderHeading('h5'),
+    h6: renderHeading('h6'),
     li: renderBlock('li'),
     p: renderBlock('p'),
   }
@@ -302,6 +409,54 @@ function NoteMarkdown({ body, note }: { body: string; note: NoteRecord }) {
       ) : null}
       <SourceViewer onClose={() => setPreview(null)} source={preview} />
     </>
+  )
+}
+
+function NoteSwitcherTree({
+  nodes,
+  onSelect,
+  selectedId,
+}: {
+  nodes: NoteSectionNode[]
+  onSelect: (noteId: string) => void
+  selectedId: string
+}) {
+  return (
+    <ul className="note-switcher__tree">
+      {nodes.map((node) => (
+        <li key={node.path.join('\u0000') || node.label}>
+          <div
+            className="note-section-node"
+            style={{ paddingLeft: `${8 + (node.path.length - 1) * 12}px` }}
+          >
+            {node.label}
+          </div>
+          {node.notes.length ? (
+            <ul className="note-switcher__notes">
+              {node.notes.map((note) => (
+                <li key={note.id}>
+                  <button
+                    aria-label={note.title}
+                    aria-current={note.id === selectedId ? 'page' : undefined}
+                    onClick={() => onSelect(note.id)}
+                    type="button"
+                  >
+                    <FileClock aria-hidden="true" size={16} />
+                    <span>
+                      <strong>{note.title}</strong>
+                      <small>{noteSectionPath(note).join(' / ')}</small>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {node.children.length ? (
+            <NoteSwitcherTree nodes={node.children} onSelect={onSelect} selectedId={selectedId} />
+          ) : null}
+        </li>
+      ))}
+    </ul>
   )
 }
 
@@ -482,16 +637,22 @@ function CreateNoteDialog({
             ))}
           </div>
         </fieldset>
-        <label className="field" htmlFor="new-note-section">
-          <span>章节路径（可选）</span>
-          <input
-            autoFocus
-            id="new-note-section"
-            maxLength={1000}
-            onChange={(event) => setSection(event.target.value)}
-            value={section}
-          />
-        </label>
+        <div className="field">
+          <label htmlFor="new-note-section">
+            <span>章节路径（可选）</span>
+            <input
+              autoFocus
+              id="new-note-section"
+              maxLength={1000}
+              onChange={(event) => setSection(event.target.value)}
+              placeholder="例如：第一章 / 进程管理 / 调度"
+              value={section}
+            />
+          </label>
+          <small className="field__hint" id="new-note-section-hint">
+            保存后会在笔记切换区按层级归类
+          </small>
+        </div>
         <label className="field" htmlFor="new-note-title">
           <span>标题（可选）</span>
           <input
@@ -766,6 +927,7 @@ export function NotesPage() {
   const { courseId, capabilities } = useWorkspace()
   const queryClient = useQueryClient()
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [noteSearch, setNoteSearch] = useState('')
   const [createDialog, setCreateDialog] = useState({ courseId, open: false })
   const batchStorageKey = noteBatchStorageKey(courseId)
   const [activeBatch, setActiveBatch] = useState(() => ({
@@ -814,8 +976,17 @@ export function NotesPage() {
       return status && TERMINAL_BATCH_STATUSES.includes(status) ? false : 250
     },
   })
-  const notes = notesQuery.data ?? []
+  const notes = useMemo(() => notesQuery.data ?? [], [notesQuery.data])
   const selected = notes.find((note) => note.id === selectedId) ?? notes[0]
+  const normalizedNoteSearch = noteSearch.trim()
+  const visibleNotes = useMemo(
+    () =>
+      normalizedNoteSearch
+        ? notes.filter((note) => noteMatchesSearch(note, normalizedNoteSearch))
+        : notes,
+    [normalizedNoteSearch, notes],
+  )
+  const noteSectionTree = useMemo(() => buildNoteSectionTree(visibleNotes), [visibleNotes])
   const providerReady = capabilities?.provider.status === 'available'
   const noteWorkflowReady =
     capabilities?.note_workflow.enabled === true &&
@@ -872,6 +1043,7 @@ export function NotesPage() {
   const batchInProgress =
     activeBatchId !== null &&
     (!batchSnapshot || !TERMINAL_BATCH_STATUSES.includes(batchSnapshot.status))
+  const selectedHeadings = selected ? extractMarkdownHeadings(selected.body_markdown) : []
 
   useEffect(() => {
     if (!activeBatchId || !batchInProgress) {
@@ -951,7 +1123,7 @@ export function NotesPage() {
         }
         kicker="Notes"
         meta={`${notes.length} 篇笔记`}
-        title="章节笔记"
+        title="学习笔记"
       />
       {batchSnapshot ? (
         <NoteBatchProgress
@@ -979,23 +1151,70 @@ export function NotesPage() {
         </section>
       ) : selected ? (
         <div className="note-workspace">
-          <nav aria-label="笔记章节" className="note-tree">
-            <h3>章节</h3>
-            {notes.map((note) => (
-              <button
-                aria-current={note.id === selected.id ? 'page' : undefined}
-                key={note.id}
-                onClick={() => setSelectedId(note.id)}
-                type="button"
-              >
-                <FileClock aria-hidden="true" size={16} />
-                <span>
-                  <strong>{note.title}</strong>
-                  <small>{note.section_path.join(' / ') || '未分类'}</small>
-                </span>
-              </button>
-            ))}
-          </nav>
+          <aside aria-label="笔记导航" className="note-tree">
+            <section aria-label="切换笔记" className="note-switcher">
+              <h3>切换笔记</h3>
+              <div className="note-search">
+                <Search aria-hidden="true" size={15} />
+                <label className="sr-only" htmlFor="note-search-input">
+                  搜索笔记
+                </label>
+                <input
+                  id="note-search-input"
+                  onChange={(event) => setNoteSearch(event.target.value)}
+                  placeholder="搜索标题、路径或正文"
+                  type="search"
+                  value={noteSearch}
+                />
+                {noteSearch ? (
+                  <button
+                    aria-label="清除笔记搜索"
+                    className="note-search__clear"
+                    onClick={() => setNoteSearch('')}
+                    title="清除搜索"
+                    type="button"
+                  >
+                    <X aria-hidden="true" size={14} />
+                  </button>
+                ) : null}
+              </div>
+              {visibleNotes.length ? (
+                <NoteSwitcherTree
+                  nodes={noteSectionTree}
+                  onSelect={setSelectedId}
+                  selectedId={selected.id}
+                />
+              ) : (
+                <p className="muted note-search__empty">没有匹配的笔记</p>
+              )}
+            </section>
+            <nav aria-label="正文目录" className="note-outline">
+              <h3>正文目录</h3>
+              {selectedHeadings.length ? (
+                <ol>
+                  {selectedHeadings.map((heading) => (
+                    <li key={heading.id}>
+                      <a
+                        href={`#${heading.id}`}
+                        onClick={(event) => {
+                          event.preventDefault()
+                          document.getElementById(heading.id)?.scrollIntoView({
+                            behavior: 'smooth',
+                            block: 'start',
+                          })
+                        }}
+                        style={{ paddingLeft: `${8 + (heading.level - 1) * 12}px` }}
+                      >
+                        {heading.text}
+                      </a>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <p className="muted">正文暂无标题</p>
+              )}
+            </nav>
+          </aside>
           <NoteEditor
             batchInProgress={batchInProgress}
             key={`${selected.id}-${selected.version}`}
