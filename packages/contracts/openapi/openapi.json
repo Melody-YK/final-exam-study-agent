@@ -3033,6 +3033,38 @@
         "title": "NoteGenerationPhase",
         "type": "string"
       },
+      "NoteImport": {
+        "additionalProperties": false,
+        "properties": {
+          "body_markdown": {
+            "maxLength": 1000000,
+            "minLength": 1,
+            "title": "Body Markdown",
+            "type": "string"
+          },
+          "section_path": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "minItems": 1,
+            "title": "Section Path",
+            "type": "array"
+          },
+          "title": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "body_markdown"
+        ],
+        "title": "NoteImport",
+        "type": "object"
+      },
       "NoteInputSnapshot": {
         "additionalProperties": false,
         "properties": {
@@ -6015,6 +6047,58 @@
           }
         },
         "summary": "Create Note",
+        "tags": [
+          "notes"
+        ]
+      }
+    },
+    "/api/v1/courses/{course_id}/notes/import": {
+      "post": {
+        "operationId": "import_note_api_v1_courses__course_id__notes_import_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "course_id",
+            "required": true,
+            "schema": {
+              "title": "Course Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NoteImport"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NoteResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Import Note",
         "tags": [
           "notes"
         ]

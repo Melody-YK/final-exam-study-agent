@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Annotated, cast
 
 from fastapi import APIRouter, Header, Request, Response, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from study_agent.api.errors import ApiProblem, ProblemCode
 from study_agent.config import Settings
@@ -32,6 +32,7 @@ from study_contracts import BoundingBox, SourceLocator
 
 router = APIRouter(prefix="/api/v1", tags=["notes"])
 _ETAG = re.compile(r'^"([1-9][0-9]*)"$')
+_MAX_IMPORTED_MARKDOWN_BYTES = 1_000_000
 
 
 class NoteCreate(BaseModel):
@@ -46,6 +47,30 @@ class NotePatch(BaseModel):
 
     title: str | None = Field(default=None, min_length=1, max_length=255)
     body_markdown: str | None = Field(default=None, min_length=1, max_length=1_000_000)
+
+
+class NoteImport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    section_path: list[str] = Field(default_factory=lambda: ["未分类"], min_length=1, max_length=32)
+    title: str = Field(min_length=1, max_length=255)
+    body_markdown: str = Field(min_length=1, max_length=1_000_000)
+
+    @field_validator("section_path")
+    @classmethod
+    def normalize_section_path(cls, values: list[str]) -> list[str]:
+        normalized = [value.strip() for value in values if value.strip()]
+        return normalized or ["未分类"]
+
+    @field_validator("title", "body_markdown")
+    @classmethod
+    def normalize_text(cls, value: str) -> str:
+        normalized = value.replace("\r\n", "\n").replace("\r", "\n").strip()
+        if not normalized:
+            raise ValueError("imported note text must not be blank")
+        if len(normalized.encode("utf-8")) > _MAX_IMPORTED_MARKDOWN_BYTES:
+            raise ValueError("imported note body must not exceed 1 MB")
+        return normalized
 
 
 class NoteSourceResponse(BaseModel):
@@ -238,6 +263,35 @@ async def list_notes(course_id: str, request: Request) -> list[NoteResponse]:
             title="课程不存在",
         ) from exc
     return [_response(snapshot) for snapshot in snapshots]
+
+
+@router.post(
+    "/courses/{course_id}/notes/import",
+    response_model=NoteResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def import_note(
+    course_id: str,
+    payload: NoteImport,
+    request: Request,
+    response: Response,
+) -> NoteResponse:
+    try:
+        snapshot = await _repository(request).import_note(
+            await _principal(request),
+            course_id,
+            section_path=tuple(payload.section_path),
+            title=payload.title,
+            body_markdown=payload.body_markdown,
+        )
+    except LookupError as exc:
+        raise ApiProblem(
+            status=404,
+            code=ProblemCode.RESOURCE_NOT_FOUND,
+            title="课程不存在",
+        ) from exc
+    _etag(response, snapshot.version)
+    return _response(snapshot)
 
 
 @router.patch("/notes/{note_id}", response_model=NoteResponse)
