@@ -1,8 +1,9 @@
-import { screen, waitFor, within } from '@testing-library/react'
+import { act, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
+import { StrictMode } from 'react'
 
 import { ApiError, studyApi } from '../../api/client'
-import type { NoteBatchSnapshot, RuntimeCapabilities } from '../../api/types'
+import type { NoteBatchSnapshot, NoteRecord, RuntimeCapabilities } from '../../api/types'
 import { documentRecord, noteRecord, problem, sourcePreview } from '../../test/fixtures'
 import { availableCapabilities, renderInWorkspace } from '../../test/render'
 import { NotesPage } from './NotesPage'
@@ -55,6 +56,82 @@ function noteBatchSnapshot(
 }
 
 describe('NotesPage', () => {
+  it('keeps legacy notes readable when knowledge-point sources are absent', async () => {
+    const legacyNote = { ...noteRecord(), knowledge_points: undefined } as unknown as NoteRecord
+    vi.spyOn(studyApi, 'listNotes').mockResolvedValue([legacyNote])
+
+    renderInWorkspace(<NotesPage />)
+
+    expect(await screen.findByLabelText('笔记阅读视图')).toHaveTextContent('原始正文')
+    expect(screen.queryByLabelText('知识点来源')).not.toBeInTheDocument()
+  })
+
+  it('shows a source jump next to each knowledge point', async () => {
+    const note = noteRecord({
+      body_markdown: '# 进程\n\n进程拥有独立的地址空间。',
+      knowledge_points: [
+        {
+          id: 'knowledge-point-1',
+          text: '进程拥有独立的地址空间。',
+          source_ids: ['note-source-1'],
+        },
+      ],
+    })
+    vi.spyOn(studyApi, 'listNotes').mockResolvedValue([note])
+    vi.spyOn(studyApi, 'getNoteSourcePreview').mockResolvedValue(sourcePreview())
+    const { user } = renderInWorkspace(
+      <StrictMode>
+        <NotesPage />
+      </StrictMode>,
+    )
+
+    const article = await screen.findByLabelText('笔记阅读视图')
+    const point = within(article).getByText('进程拥有独立的地址空间。')
+    expect(within(point).getByRole('button', { name: /chapter-1\.pdf/ })).toBeInTheDocument()
+    expect(screen.queryByLabelText('笔记来源')).not.toBeInTheDocument()
+    await user.click(within(point).getByRole('button', { name: /chapter-1\.pdf/ }))
+    expect(studyApi.getNoteSourcePreview).toHaveBeenCalledWith('note-1', 'note-source-1')
+  })
+
+  it('moves legacy source mappings out of the visible note body', async () => {
+    const note = noteRecord({
+      body_markdown:
+        '# 进程\n\n- **进程**拥有独立的地址空间。\n\n### 来源对应\n- 进程拥有独立的地址空间。 (来源: chapter-1.pdf · 第 3 页)',
+      knowledge_points: [
+        {
+          id: 'knowledge-point-legacy',
+          text: '进程拥有独立的地址空间。',
+          source_ids: ['note-source-1'],
+        },
+      ],
+    })
+    vi.spyOn(studyApi, 'listNotes').mockResolvedValue([note])
+
+    renderInWorkspace(<NotesPage />)
+
+    const article = await screen.findByLabelText('笔记阅读视图')
+    expect(article).not.toHaveTextContent('来源对应')
+    expect(within(article).getByRole('button', { name: /chapter-1\.pdf/ })).toBeInTheDocument()
+  })
+
+  it('renders streamed note preview deltas while a batch is running', async () => {
+    localStorage.setItem('study-agent.note-batch:course-1', 'note-batch-stream')
+    let pushEvent: ((event: { event_type: string; data: { delta?: string } }) => void) | null = null
+    vi.spyOn(studyApi, 'listNotes').mockResolvedValue([])
+    vi.spyOn(studyApi, 'getNoteBatch').mockResolvedValue(noteBatchSnapshot())
+    vi.spyOn(studyApi, 'subscribe').mockImplementation((_path, onEvent) => {
+      pushEvent = onEvent as typeof pushEvent
+      return vi.fn()
+    })
+    renderInWorkspace(<NotesPage />)
+
+    await screen.findByLabelText('笔记生成进度')
+    await act(async () => {
+      pushEvent?.({ event_type: 'note.preview.delta', data: { delta: '# 实时预览' } })
+    })
+    expect(screen.getByLabelText('笔记实时预览')).toHaveTextContent('实时预览')
+  })
+
   it('edits a note while preserving active, stale, and unavailable source states', async () => {
     const note = noteRecord({
       sources: [
@@ -97,15 +174,19 @@ describe('NotesPage', () => {
     )
     expect(await screen.findByText(/版本 2/)).toBeInTheDocument()
     expect(screen.getByLabelText('笔记阅读视图')).toHaveTextContent('更新正文')
-    expect(screen.getByText('活动来源')).toBeInTheDocument()
-    expect(screen.getByText('旧版本')).toBeInTheDocument()
-    expect(screen.getByText('不可用 · SOURCE_DELETED')).toBeInTheDocument()
-    expect(screen.getByText('deleted.pdf')).toBeInTheDocument()
-    expect(screen.getAllByRole('button', { name: '查看原文' })).toHaveLength(1)
+    expect(screen.queryByLabelText('笔记来源')).not.toBeInTheDocument()
   })
 
   it('opens an active Markdown note source at its validated section', async () => {
     const note = noteRecord({
+      body_markdown: '# 进程\n\n进程拥有独立的地址空间。',
+      knowledge_points: [
+        {
+          id: 'knowledge-point-1',
+          text: '进程拥有独立的地址空间。',
+          source_ids: ['note-source-1'],
+        },
+      ],
       sources: [
         {
           ...noteRecord().sources[0]!,
@@ -135,7 +216,7 @@ describe('NotesPage', () => {
     )
     const { user } = renderInWorkspace(<NotesPage />)
 
-    await user.click(await screen.findByRole('button', { name: '查看原文' }))
+    await user.click(await screen.findByRole('button', { name: /查看原文 · outline\.md/ }))
 
     expect(studyApi.getNoteSourcePreview).toHaveBeenCalledWith('note-1', 'note-source-1')
     expect(await screen.findByRole('heading', { name: '调度' })).toBeInTheDocument()
@@ -147,6 +228,14 @@ describe('NotesPage', () => {
   it('shows a preview failure beside the note source that was opened', async () => {
     const firstSource = noteRecord().sources[0]!
     const note = noteRecord({
+      body_markdown: '# 进程\n\n进程拥有独立的地址空间。',
+      knowledge_points: [
+        {
+          id: 'knowledge-point-1',
+          text: '进程拥有独立的地址空间。',
+          source_ids: ['note-source-1', 'note-source-2'],
+        },
+      ],
       sources: [
         firstSource,
         {
@@ -167,13 +256,11 @@ describe('NotesPage', () => {
     )
     const { user } = renderInWorkspace(<NotesPage />)
 
-    const openButtons = await screen.findAllByRole('button', { name: '查看原文' })
+    const openButtons = await screen.findAllByRole('button', { name: /查看原文/ })
     await user.click(openButtons[1]!)
 
     const alert = await screen.findByRole('alert')
-    const sourceItem = alert.closest('li')
-    expect(sourceItem).not.toBeNull()
-    expect(within(sourceItem!).getByText('legacy-slides.pptx')).toBeVisible()
+    expect(screen.getByRole('button', { name: /legacy-slides\.pptx/ })).toBeVisible()
     expect(alert).toHaveTextContent('请先转换为 PDF 后重新上传。')
   })
 
@@ -383,7 +470,7 @@ describe('NotesPage', () => {
       'page',
     )
     expect(screen.getAllByRole('button', { name: /原批次笔记/ })).toHaveLength(1)
-    expect(screen.getByText('版本 2 · 生成 2')).toBeInTheDocument()
+    expect(screen.getByText(/版本 2 · 生成 2 · 本地摘录演示/)).toBeInTheDocument()
     expect(screen.getByLabelText('笔记阅读视图')).toHaveTextContent('新正文')
   })
 

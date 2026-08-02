@@ -43,11 +43,11 @@ test('note conflict preserves the draft until the user reloads', async ({ page }
 
 test('note source opens only the requested Markdown section', async ({ page }) => {
   await page.getByRole('link', { name: '笔记' }).first().click()
-  const sources = page.getByRole('complementary', { name: '笔记来源' })
+  const noteBody = page.getByLabel('笔记阅读视图')
 
-  await expect(sources.getByText('调度算法.md')).toBeVisible()
-  await expect(sources.getByText('章节 2')).toBeVisible()
-  await sources.getByRole('button', { name: '查看原文' }).click()
+  const sourceButton = noteBody.getByRole('button', { name: /查看原文 · 调度算法\.md · 章节 2/ })
+  await expect(sourceButton).toBeVisible()
+  await sourceButton.click()
 
   const viewer = page.getByRole('dialog', { name: '来源' })
   await expect(viewer.getByRole('heading', { name: '进程调度' })).toBeVisible()

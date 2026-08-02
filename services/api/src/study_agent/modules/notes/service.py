@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime
-from typing import cast
+from typing import Any, cast
 
 from sqlalchemy import and_, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -70,6 +71,13 @@ class NoteSourceSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class NoteKnowledgePointSnapshot:
+    id: str
+    text: str
+    source_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class NoteSnapshot:
     id: str
     course_id: str
@@ -84,6 +92,7 @@ class NoteSnapshot:
     sources: tuple[NoteSourceSnapshot, ...]
     created_at: datetime
     updated_at: datetime
+    knowledge_points: tuple[NoteKnowledgePointSnapshot, ...] = ()
 
 
 class NoteRepository:
@@ -375,6 +384,7 @@ class NoteRepository:
                     unavailable_reason=reason,
                 )
             )
+        current_version = await self._content_version(session, note, note.version)
         return NoteSnapshot(
             id=note.id,
             course_id=note.course_id,
@@ -387,6 +397,11 @@ class NoteRepository:
             status=note.status,
             origin_batch_id=origin_batch_id,
             sources=tuple(source_snapshots),
+            knowledge_points=_knowledge_points(
+                current_version.content_ast if current_version is not None else None,
+                tuple(source_snapshots),
+                note.body_markdown,
+            ),
             created_at=note.created_at,
             updated_at=note.updated_at,
         )
@@ -506,6 +521,181 @@ class NoteRepository:
                     available=True,
                 )
             )
+
+
+def _knowledge_points(
+    content_ast: dict[str, Any] | None,
+    sources: tuple[NoteSourceSnapshot, ...],
+    body_markdown: str = "",
+) -> tuple[NoteKnowledgePointSnapshot, ...]:
+    """Project source-backed AST paragraphs into stable inline source links.
+
+    Older generated notes kept the claims in a trailing ``来源对应`` section
+    instead of attaching them to the visible body.  Resolve those claims back
+    to the closest visible Markdown block so old notes get the same inline
+    source controls as newly generated notes.
+    """
+
+    if not content_ast:
+        return ()
+    by_key: dict[str, str] = {}
+    for source in sources:
+        for key in (source.id, source.evidence_id, source.chunk_id):
+            by_key[key] = source.id
+
+    ast_points: list[NoteKnowledgePointSnapshot] = []
+    seen: set[tuple[str, tuple[str, ...]]] = set()
+
+    def citation_ids(nodes: object) -> list[str]:
+        if not isinstance(nodes, list):
+            return []
+        values: list[str] = []
+        for child in nodes:
+            if not isinstance(child, dict):
+                continue
+            if child.get("type") == "citation":
+                evidence_id = child.get("evidence_id") or child.get("citation_id")
+                if isinstance(evidence_id, str):
+                    values.append(evidence_id)
+            values.extend(citation_ids(child.get("children")))
+        return values
+
+    def walk(nodes: object) -> None:
+        if not isinstance(nodes, list):
+            return
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            text = node.get("text")
+            source_keys = citation_ids(node.get("children"))
+            source_ids = tuple(dict.fromkeys(by_key[key] for key in source_keys if key in by_key))
+            if (
+                isinstance(text, str)
+                and text.strip()
+                and source_ids
+                and node.get("type") in {"paragraph", "list_item"}
+            ):
+                normalized_text = text.strip()
+                marker = (normalized_text, source_ids)
+                if marker not in seen:
+                    seen.add(marker)
+                    ast_points.append(
+                        NoteKnowledgePointSnapshot(
+                            id=str(node.get("id") or f"knowledge-point-{len(ast_points) + 1}"),
+                            text=normalized_text,
+                            source_ids=source_ids,
+                        )
+                    )
+            walk(node.get("children"))
+
+    walk(content_ast.get("nodes"))
+    if not body_markdown.strip() or not ast_points:
+        return tuple(ast_points)
+
+    blocks = _markdown_body_blocks(body_markdown)
+    if not blocks:
+        return tuple(ast_points)
+
+    assigned: dict[int, list[NoteKnowledgePointSnapshot]] = {}
+    unmatched: list[NoteKnowledgePointSnapshot] = []
+    for point in ast_points:
+        best_index = _best_body_block(point.text, blocks)
+        if best_index is None:
+            unmatched.append(point)
+            continue
+        assigned.setdefault(best_index, []).append(point)
+
+    projected: list[NoteKnowledgePointSnapshot] = []
+    for block_index, block_text in enumerate(blocks):
+        matches = assigned.get(block_index)
+        if not matches:
+            continue
+        source_ids = tuple(
+            dict.fromkeys(source_id for point in matches for source_id in point.source_ids)
+        )
+        if not source_ids:
+            continue
+        projected.append(
+            NoteKnowledgePointSnapshot(
+                id=matches[0].id,
+                text=block_text,
+                source_ids=source_ids,
+            )
+        )
+    projected.extend(unmatched)
+    return tuple(projected)
+
+
+_LEGACY_SOURCE_MAPPING = re.compile(r"^#{2,6}\s+来源对应\s*$[\s\S]*", re.MULTILINE)
+
+
+def _markdown_body_blocks(body_markdown: str) -> list[str]:
+    body = _LEGACY_SOURCE_MAPPING.sub("", body_markdown)
+    blocks: list[str] = []
+    paragraph: list[str] = []
+
+    def flush() -> None:
+        if paragraph:
+            text = _clean_markdown_text(" ".join(paragraph))
+            if text:
+                blocks.append(text)
+            paragraph.clear()
+
+    for raw_line in body.splitlines():
+        line = raw_line.strip()
+        if not line:
+            flush()
+            continue
+        if re.match(r"^#{1,6}\s+", line):
+            flush()
+            continue
+        list_match = re.match(r"^(?:[-*+]\s+|\d+[.)]\s+)(.*)$", line)
+        if list_match:
+            flush()
+            text = _clean_markdown_text(list_match.group(1))
+            if text:
+                blocks.append(text)
+            continue
+        paragraph.append(line)
+    flush()
+    return blocks
+
+
+def _clean_markdown_text(value: str) -> str:
+    value = re.sub(r"!\[([^]]*)\]\([^)]*\)", r"\1", value)
+    value = re.sub(r"\[([^]]+)\]\([^)]*\)", r"\1", value)
+    value = re.sub(r"[*_~`]", "", value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _best_body_block(point_text: str, blocks: list[str]) -> int | None:
+    target = _clean_markdown_text(point_text)
+    if not target:
+        return None
+    for index, block in enumerate(blocks):
+        if (
+            block == target
+            or block.startswith(f"{target} (来源:")
+            or block.startswith(f"{target}\uff08来源\uff1a")
+        ):
+            return index
+
+    target_compact = re.sub(r"[^0-9a-z\u4e00-\u9fff]", "", target.lower())
+    if len(target_compact) < 4:
+        return None
+    target_grams = {target_compact[index : index + 2] for index in range(len(target_compact) - 1)}
+    best_index: int | None = None
+    best_score = 0.0
+    for index, block in enumerate(blocks):
+        compact = re.sub(r"[^0-9a-z\u4e00-\u9fff]", "", block.lower())
+        if len(compact) < 4:
+            continue
+        grams = {compact[offset : offset + 2] for offset in range(len(compact) - 1)}
+        score = len(target_grams & grams) / len(target_grams)
+        if score > best_score:
+            best_index = index
+            best_score = score
+    return best_index if best_score >= 0.18 else None
 
 
 def _canonical_hash(payload: dict[str, object]) -> str:

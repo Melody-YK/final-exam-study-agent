@@ -12,8 +12,8 @@ import {
   RefreshCw,
   Save,
 } from 'lucide-react'
-import ReactMarkdown from 'react-markdown'
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import ReactMarkdown, { type Components } from 'react-markdown'
+import React, { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 
 import { ApiError, studyApi } from '../../api/client'
 import type {
@@ -22,6 +22,7 @@ import type {
   NoteBatchSnapshot,
   NoteBatchStatus,
   NoteBatchStyle,
+  NoteGenerationEventData,
   NoteGenerationPhase,
   NoteItemSnapshot,
   NoteRecord,
@@ -194,6 +195,113 @@ function currentBatchItem(batch: NoteBatchSnapshot): NoteItemSnapshot | undefine
   return (
     batch.items.find((item) => !TERMINAL_ITEM_STATUSES.has(item.status)) ??
     batch.items[batch.items.length - 1]
+  )
+}
+
+function markdownText(children: React.ReactNode): string {
+  return React.Children.toArray(children)
+    .map((child) => {
+      if (typeof child === 'string' || typeof child === 'number') return String(child)
+      if (React.isValidElement<{ children?: React.ReactNode }>(child)) {
+        return markdownText(child.props.children)
+      }
+      return ''
+    })
+    .join('')
+}
+
+function normalizeMarkdownText(value: string): string {
+  return value.replace(/\s+/g, ' ').trim()
+}
+
+function stripLegacySourceMapping(body: string): string {
+  return body.replace(/^#{2,6}\s+来源对应\s*$[\s\S]*/m, '').trim()
+}
+
+function matchingKnowledgePoint(
+  text: string,
+  points: NoteRecord['knowledge_points'],
+) {
+  const normalized = normalizeMarkdownText(text)
+  if (!normalized) return undefined
+  return points.find((point) => {
+    const pointText = normalizeMarkdownText(point.text)
+    return (
+      normalized === pointText ||
+      normalized.startsWith(`${pointText} (来源:`) ||
+      normalized.startsWith(`${pointText}（来源：`)
+    )
+  })
+}
+
+function NoteMarkdown({ body, note }: { body: string; note: NoteRecord }) {
+  const [preview, setPreview] = useState<SourcePreview | null>(null)
+  const previewMutation = useMutation({
+    mutationFn: (sourceId: string) => studyApi.getNoteSourcePreview(note.id, sourceId),
+    onSuccess: setPreview,
+  })
+  const points = note.knowledge_points ?? []
+  const sourceById = useMemo(
+    () => new Map(note.sources.map((source) => [source.id, source])),
+    [note.sources],
+  )
+  const sourceLinks = (point: NoteRecord['knowledge_points'][number]) => (
+    <span aria-label="知识点来源" className="note-inline-sources">
+      {point.source_ids.map((sourceId) => {
+        const source = sourceById.get(sourceId)
+        if (!source) return null
+        return source.available && !source.stale ? (
+          <button
+            className="button button--small note-source-open"
+            disabled={previewMutation.isPending}
+            key={source.id}
+            onClick={() => previewMutation.mutate(source.id)}
+            type="button"
+          >
+            {previewMutation.isPending && previewMutation.variables === source.id ? (
+              <LoaderCircle aria-hidden="true" className="spin" size={14} />
+            ) : (
+              <Eye aria-hidden="true" size={14} />
+            )}
+            查看原文 · {source.document_name} · {formatSourceLocator(source.locator)}
+          </button>
+        ) : (
+          <span className="source-state source-state--unavailable" key={source.id}>
+            来源不可用
+          </span>
+        )
+      })}
+    </span>
+  )
+
+  const renderBlock = (Tag: 'p' | 'li') => ({ children }: { children?: React.ReactNode }) => {
+    const renderedText = markdownText(children)
+    const point = matchingKnowledgePoint(renderedText, points)
+    return (
+      <Tag>
+        {children}
+        {point ? sourceLinks(point) : null}
+      </Tag>
+    )
+  }
+
+  const components: Components = {
+    li: renderBlock('li'),
+    p: renderBlock('p'),
+  }
+
+  return (
+    <>
+      <ReactMarkdown components={components} skipHtml>
+        {stripLegacySourceMapping(body)}
+      </ReactMarkdown>
+      {previewMutation.isError ? (
+        <div className="note-inline-source-error">
+          <ErrorNotice error={previewMutation.error} title="原文不可用" />
+        </div>
+      ) : null}
+      <SourceViewer onClose={() => setPreview(null)} source={preview} />
+    </>
   )
 }
 
@@ -470,7 +578,8 @@ function NoteEditor({
         <div>
           <h3>{note.title}</h3>
           <span>
-            版本 {note.version} · 生成 {note.generation}
+            版本 {note.version} · 生成 {note.generation} ·{' '}
+            {note.generated_by_model ? 'DeepSeek 生成' : '本地摘录演示'}
           </span>
         </div>
         <div>
@@ -582,7 +691,7 @@ function NoteEditor({
       ) : (
         <article aria-label="笔记阅读视图" className="note-preview">
           {draft.trim() ? (
-            <ReactMarkdown skipHtml>{draft}</ReactMarkdown>
+            <NoteMarkdown body={draft} note={note} />
           ) : (
             <p className="muted">暂无正文</p>
           )}
@@ -592,7 +701,13 @@ function NoteEditor({
   )
 }
 
-function NoteBatchProgress({ batch }: { batch: NoteBatchSnapshot }) {
+function NoteBatchProgress({
+  batch,
+  previewMarkdown,
+}: {
+  batch: NoteBatchSnapshot
+  previewMarkdown?: string
+}) {
   const item = currentBatchItem(batch)
   const failureCode = item?.failure_code
 
@@ -634,75 +749,16 @@ function NoteBatchProgress({ batch }: { batch: NoteBatchSnapshot }) {
         </div>
       </div>
       {failureCode ? <p className="note-batch-progress__failure">失败代码：{failureCode}</p> : null}
+      {previewMarkdown?.trim() ? (
+        <article aria-label="笔记实时预览" className="note-generation-preview">
+          <header>
+            <strong>实时预览</strong>
+            <span>生成中，尚未保存</span>
+          </header>
+          <ReactMarkdown skipHtml>{previewMarkdown}</ReactMarkdown>
+        </article>
+      ) : null}
     </section>
-  )
-}
-
-function SourcesPanel({ note }: { note: NoteRecord }) {
-  const hasUnavailableSource = note.sources.some((source) => !source.available || source.stale)
-  const [preview, setPreview] = useState<SourcePreview | null>(null)
-  const previewMutation = useMutation({
-    mutationFn: (sourceId: string) => studyApi.getNoteSourcePreview(note.id, sourceId),
-    onSuccess: setPreview,
-  })
-
-  return (
-    <>
-      <aside className="note-sources" aria-label="笔记来源">
-        <header>
-          <h3>来源</h3>
-          <StatusBadge tone={hasUnavailableSource ? 'warning' : 'success'}>
-            {note.sources.length} 条
-          </StatusBadge>
-        </header>
-        {note.sources.length ? (
-          <ol>
-            {note.sources.map((source) => (
-              <li key={source.id}>
-                <div>
-                  <BookOpen aria-hidden="true" size={16} />
-                  <span>
-                    <strong>{source.document_name}</strong>
-                    <small>{formatSourceLocator(source.locator)}</small>
-                  </span>
-                </div>
-                <blockquote>{source.quote}</blockquote>
-                <span
-                  className={`source-state source-state--${!source.available ? 'unavailable' : source.stale ? 'stale' : 'active'}`}
-                >
-                  {!source.available
-                    ? `不可用${source.unavailable_reason ? ` · ${source.unavailable_reason}` : ''}`
-                    : source.stale
-                      ? '旧版本'
-                      : '活动来源'}
-                </span>
-                {source.available && !source.stale ? (
-                  <button
-                    className="button button--small note-source-open"
-                    disabled={previewMutation.isPending}
-                    onClick={() => previewMutation.mutate(source.id)}
-                    type="button"
-                  >
-                    {previewMutation.isPending && previewMutation.variables === source.id ? (
-                      <LoaderCircle aria-hidden="true" className="spin" size={14} />
-                    ) : (
-                      <Eye aria-hidden="true" size={14} />
-                    )}
-                    查看原文
-                  </button>
-                ) : null}
-                {previewMutation.isError && previewMutation.variables === source.id ? (
-                  <ErrorNotice error={previewMutation.error} title="原文不可用" />
-                ) : null}
-              </li>
-            ))}
-          </ol>
-        ) : (
-          <p className="muted">无来源</p>
-        )}
-      </aside>
-      <SourceViewer onClose={() => setPreview(null)} source={preview} />
-    </>
   )
 }
 
@@ -717,6 +773,7 @@ export function NotesPage() {
     id: localStorage.getItem(batchStorageKey),
   }))
   const [createdBatch, setCreatedBatch] = useState<NoteBatchSnapshot | null>(null)
+  const [previewMarkdown, setPreviewMarkdown] = useState('')
   const completedBatchRef = useRef<string | null>(null)
   const createCommandKeyRef = useRef<string | null>(null)
   const regenerationCommandKeysRef = useRef(new Map<string, string>())
@@ -770,6 +827,7 @@ export function NotesPage() {
   }
   const activateBatch = (snapshot: NoteBatchSnapshot) => {
     completedBatchRef.current = null
+    setPreviewMarkdown('')
     queryClient.setQueryData(['note-batch', snapshot.id], snapshot)
     localStorage.setItem(batchStorageKey, snapshot.id)
     setCreatedBatch(snapshot)
@@ -814,6 +872,20 @@ export function NotesPage() {
   const batchInProgress =
     activeBatchId !== null &&
     (!batchSnapshot || !TERMINAL_BATCH_STATUSES.includes(batchSnapshot.status))
+
+  useEffect(() => {
+    if (!activeBatchId || !batchInProgress) {
+      return
+    }
+    return studyApi.subscribe<NoteGenerationEventData>(
+      `/note-batches/${encodeURIComponent(activeBatchId)}/events`,
+      (event) => {
+        if (event.event_type === 'note.preview.delta' && event.data.delta) {
+          setPreviewMarkdown((current) => current + event.data.delta)
+        }
+      },
+    )
+  }, [activeBatchId, batchInProgress])
 
   useEffect(() => {
     if (
@@ -881,7 +953,12 @@ export function NotesPage() {
         meta={`${notes.length} 篇笔记`}
         title="章节笔记"
       />
-      {batchSnapshot ? <NoteBatchProgress batch={batchSnapshot} /> : null}
+      {batchSnapshot ? (
+        <NoteBatchProgress
+          batch={batchSnapshot}
+          previewMarkdown={batchInProgress ? previewMarkdown : undefined}
+        />
+      ) : null}
       {batchQuery.isError ? (
         <ErrorNotice
           error={batchQuery.error}
@@ -955,7 +1032,6 @@ export function NotesPage() {
                 regenerateLegacy.variables === selected.id)
             }
           />
-          <SourcesPanel key={selected.id} note={selected} />
         </div>
       ) : (
         <section className="empty-state">
