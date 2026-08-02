@@ -56,6 +56,76 @@ function noteBatchSnapshot(
 }
 
 describe('NotesPage', () => {
+  it('imports a Markdown file as a user-authored note without source links', async () => {
+    vi.spyOn(studyApi, 'listNotes').mockResolvedValue([])
+    const imported = noteRecord({
+      id: 'imported-note',
+      title: '外部复习提纲',
+      body_markdown: '# 外部复习提纲\n\n用户整理的正文。',
+      generated_by_model: false,
+      sources: [],
+      knowledge_points: [],
+    })
+    const importNote = vi.spyOn(studyApi, 'importNote').mockResolvedValue(imported)
+    const { user } = renderInWorkspace(<NotesPage />)
+
+    await user.click(await screen.findByRole('button', { name: '导入笔记' }))
+    const file = new File(['# 外部复习提纲\n\n用户整理的正文。'], 'outline.md', {
+      type: 'text/markdown',
+    })
+    Object.defineProperty(file, 'text', {
+      value: vi.fn().mockResolvedValue('# 外部复习提纲\n\n用户整理的正文。'),
+    })
+    await user.upload(screen.getByLabelText('Markdown 文件'), file)
+    await waitFor(() => expect(screen.getByLabelText('标题')).toHaveValue('外部复习提纲'))
+    await user.type(screen.getByLabelText('章节路径（可选）'), '导入资料 / 第一章')
+    await user.click(screen.getByRole('button', { name: '导入' }))
+
+    await waitFor(() =>
+      expect(importNote).toHaveBeenCalledWith('course-1', {
+        title: '外部复习提纲',
+        section_path: ['导入资料', '第一章'],
+        body_markdown: '# 外部复习提纲\n\n用户整理的正文。',
+      }),
+    )
+    expect(await screen.findByLabelText('笔记阅读视图')).toHaveTextContent('用户整理的正文。')
+    expect(screen.queryByLabelText('知识点来源')).not.toBeInTheDocument()
+  })
+
+  it('exports the saved Markdown body without the legacy source section', async () => {
+    const note = noteRecord({
+      body_markdown: '# 进程基础\n\n正文。\n\n## 来源对应\n\n- source-1',
+    })
+    vi.spyOn(studyApi, 'listNotes').mockResolvedValue([note])
+    const createObjectURL = vi.fn().mockReturnValue('blob:note')
+    const revokeObjectURL = vi.fn()
+    class BlobMockClass {
+      constructor(readonly parts: unknown[]) {}
+    }
+    const BlobMock = vi.fn(BlobMockClass)
+    vi.stubGlobal('Blob', BlobMock)
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      value: createObjectURL,
+    })
+    Object.defineProperty(URL, 'revokeObjectURL', {
+      configurable: true,
+      value: revokeObjectURL,
+    })
+    const anchorClick = vi
+      .spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(() => undefined)
+    const { user } = renderInWorkspace(<NotesPage />)
+
+    await user.click(await screen.findByRole('button', { name: '导出 Markdown' }))
+
+    expect(BlobMock).toHaveBeenCalledWith(['# 进程基础\n\n正文。\n'], {
+      type: 'text/markdown;charset=utf-8',
+    })
+    expect(anchorClick).toHaveBeenCalled()
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:note')
+  })
+
   it('keeps legacy notes readable when knowledge-point sources are absent', async () => {
     const legacyNote = { ...noteRecord(), knowledge_points: undefined } as unknown as NoteRecord
     vi.spyOn(studyApi, 'listNotes').mockResolvedValue([legacyNote])

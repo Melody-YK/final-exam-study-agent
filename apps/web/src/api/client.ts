@@ -30,6 +30,7 @@ import type {
   MergedNoteBatchRequest,
   NoteBatchSnapshot,
   NoteCreate,
+  NoteImport,
   NotePatch,
   NoteRecord,
   ParseRetryRequest,
@@ -420,6 +421,13 @@ export class StudyApiClient {
     return this.request(`/courses/${courseId}/notes`, {
       method: 'POST',
       body: jsonBody<NoteCreate>({ section_path: sectionPath, title }),
+    })
+  }
+
+  importNote(courseId: string, input: NoteImport): Promise<NoteRecord> {
+    return this.request(`/courses/${courseId}/notes/import`, {
+      method: 'POST',
+      body: jsonBody(input),
     })
   }
 

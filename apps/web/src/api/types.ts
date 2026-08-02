@@ -90,6 +90,7 @@ export type NoteKnowledgePoint = Schema<'NoteKnowledgePointResponse'>
 export type NoteRecord = Schema<'NoteResponse'>
 export type NoteCreate = Schema<'NoteCreate'>
 export type NotePatch = Schema<'NotePatch'>
+export type NoteImport = Schema<'NoteImport'>
 export type NoteBatchStyle = Schema<'NoteBatchStyle'>
 type GeneratedMergedNoteBatchRequest = Schema<'MergedNoteBatchRequest'>
 export type MergedNoteBatchRequest = Omit<GeneratedMergedNoteBatchRequest, 'style'> & {

@@ -468,6 +468,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/courses/{course_id}/notes/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Import Note */
+        post: operations["import_note_api_v1_courses__course_id__notes_import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/courses/{course_id}/queries": {
         parameters: {
             query?: never;
@@ -2030,6 +2047,15 @@ export interface components {
          * @enum {string}
          */
         NoteGenerationPhase: "validating_inputs" | "segmenting" | "retrieving" | "outlining" | "generating" | "validating_output" | "saving";
+        /** NoteImport */
+        NoteImport: {
+            /** Body Markdown */
+            body_markdown: string;
+            /** Section Path */
+            section_path?: string[];
+            /** Title */
+            title: string;
+        };
         /** NoteInputSnapshot */
         NoteInputSnapshot: {
             /** Content Sha256 */
@@ -3530,6 +3556,41 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["NoteCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NoteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    import_note_api_v1_courses__course_id__notes_import_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                course_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NoteImport"];
             };
         };
         responses: {

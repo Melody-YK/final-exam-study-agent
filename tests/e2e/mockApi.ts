@@ -467,6 +467,7 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
   const providerAvailable = options.providerAvailable ?? true
   let notesVersion = 1
   let generatedNoteRecord: ReturnType<typeof generatedNote> | null = null
+  let importedNoteRecord: ReturnType<typeof note> | null = null
   let noteBatchPolls = 0
   let noteBatchCompletionApplied = false
   let noteBatchId = 'note-batch-e2e'
@@ -1420,6 +1421,26 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
       regenerationTargetVersion = null
       return route.fulfill({ status: 202, json: noteBatchSnapshot('queued') })
     }
+    if (method === 'POST' && path === `/courses/${courseId}/notes/import`) {
+      const payload = request.postDataJSON() as {
+        title: string
+        section_path: string[]
+        body_markdown: string
+      }
+      importedNoteRecord = {
+        ...note(notesVersion),
+        id: 'imported-note-e2e',
+        section_path: payload.section_path,
+        title: payload.title,
+        body_markdown: payload.body_markdown,
+        generated_by_model: false,
+        origin_batch_id: null,
+        sources: [],
+        knowledge_points: [],
+        updated_at: '2026-07-19T05:30:00Z',
+      }
+      return route.fulfill({ status: 201, json: importedNoteRecord })
+    }
     if (
       method === 'POST' &&
       generatedNoteRecord !== null &&
@@ -1475,6 +1496,7 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
       return route.fulfill({
         json: [
           note(notesVersion),
+          ...(importedNoteRecord ? [importedNoteRecord] : []),
           ...(generatedNoteRecord ? [generatedNoteRecord] : []),
         ],
       })

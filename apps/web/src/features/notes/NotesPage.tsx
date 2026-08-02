@@ -3,10 +3,12 @@ import {
   AlertTriangle,
   BookOpen,
   Check,
+  Download,
   Eye,
   FileClock,
   FilePlus2,
   FileText,
+  FileUp,
   LoaderCircle,
   Pencil,
   RefreshCw,
@@ -27,6 +29,7 @@ import type {
   NoteBatchStyle,
   NoteGenerationEventData,
   NoteGenerationPhase,
+  NoteImport,
   NoteItemSnapshot,
   NoteRecord,
   SourcePreview,
@@ -40,6 +43,7 @@ import { SourceViewer } from '../source-viewer/SourceViewer'
 import { formatSourceLocator } from '../source-viewer/sourceLocator'
 
 const MARKDOWN_MEDIA_TYPE = 'text/markdown'
+const MAX_NOTE_MARKDOWN_BYTES = 1_000_000
 
 const TERMINAL_BATCH_STATUSES: NoteBatchStatus[] = [
   'partial_success',
@@ -219,6 +223,26 @@ function normalizeMarkdownText(value: string): string {
 
 function stripLegacySourceMapping(body: string): string {
   return body.replace(/^#{2,6}\s+来源对应\s*$[\s\S]*/m, '').trim()
+}
+
+function exportedNoteMarkdown(note: NoteRecord): string {
+  const body = stripLegacySourceMapping(note.body_markdown)
+  const titleHeading = `# ${note.title.trim()}`
+  if (body === titleHeading || body.startsWith(`${titleHeading}\n`)) {
+    return `${body}\n`
+  }
+  return `${titleHeading}\n\n${body}\n`
+}
+
+function downloadNoteMarkdown(note: NoteRecord): void {
+  const blob = new Blob([exportedNoteMarkdown(note)], { type: `${MARKDOWN_MEDIA_TYPE};charset=utf-8` })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  const filename = note.title.trim().replace(/[\\/:*?"<>|]+/g, '_') || 'note'
+  anchor.href = url
+  anchor.download = `${filename}.md`
+  anchor.click()
+  URL.revokeObjectURL(url)
 }
 
 interface MarkdownHeading {
@@ -668,11 +692,131 @@ function CreateNoteDialog({
   )
 }
 
+interface ImportNoteDialogProps {
+  error: unknown
+  onClose: () => void
+  onImport: (input: NoteImport) => void
+  pending: boolean
+}
+
+function ImportNoteDialog({ error, onClose, onImport, pending }: ImportNoteDialogProps) {
+  const [body, setBody] = useState('')
+  const [file, setFile] = useState<File | null>(null)
+  const [fileError, setFileError] = useState<string | null>(null)
+  const [section, setSection] = useState('')
+  const [title, setTitle] = useState('')
+
+  const selectFile = async (selected: File | undefined) => {
+    setFile(selected ?? null)
+    setBody('')
+    setFileError(null)
+    if (!selected) return
+    if (!/\.(?:md|markdown)$/i.test(selected.name)) {
+      setFileError('只支持 Markdown 文件（.md 或 .markdown）。')
+      return
+    }
+    if (selected.size > MAX_NOTE_MARKDOWN_BYTES) {
+      setFileError('Markdown 文件不能超过 1 MB。')
+      return
+    }
+    try {
+      const text = await selected.text()
+      if (!text.trim()) {
+        setFileError('Markdown 文件内容不能为空。')
+        return
+      }
+      setBody(text.replace(/\r\n/g, '\n').replace(/\r/g, '\n'))
+      const heading = /^#\s+(.+?)\s*$/m.exec(text)?.[1]?.trim()
+      const fallbackTitle = selected.name.replace(/\.(?:md|markdown)$/i, '')
+      setTitle(heading || fallbackTitle || '导入笔记')
+    } catch {
+      setFileError('无法读取 Markdown 文件。')
+    }
+  }
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault()
+    const normalizedTitle = title.trim()
+    if (!body.trim() || !normalizedTitle || fileError || pending) return
+    const sectionPath = section
+      .split('/')
+      .map((part) => part.trim())
+      .filter(Boolean)
+    onImport({
+      title: normalizedTitle,
+      body_markdown: body,
+      section_path: sectionPath.length ? sectionPath : ['未分类'],
+    })
+  }
+
+  return (
+    <Modal
+      description="仅导入 Markdown 正文，不会调用大模型或建立来源关系"
+      footer={
+        <>
+          <button className="button" onClick={onClose} type="button">
+            取消
+          </button>
+          <button
+            className="button button--primary"
+            disabled={!body.trim() || !title.trim() || Boolean(fileError) || pending}
+            form="import-note-form"
+            type="submit"
+          >
+            {pending ? <LoaderCircle aria-hidden="true" className="spin" size={16} /> : <FileUp aria-hidden="true" size={16} />}
+            导入
+          </button>
+        </>
+      }
+      onClose={onClose}
+      open
+      title="导入 Markdown 笔记"
+    >
+      <form id="import-note-form" onSubmit={submit}>
+        <label className="field" htmlFor="import-note-file">
+          <span>Markdown 文件</span>
+          <input
+            accept=".md,.markdown,text/markdown"
+            id="import-note-file"
+            onChange={(event) => void selectFile(event.target.files?.[0])}
+            type="file"
+          />
+        </label>
+        {file ? <small className="field__hint">已选择：{file.name}</small> : null}
+        {fileError ? <p className="note-batch-progress__failure">{fileError}</p> : null}
+        <label className="field" htmlFor="import-note-title">
+          <span>标题</span>
+          <input
+            id="import-note-title"
+            maxLength={255}
+            onChange={(event) => setTitle(event.target.value)}
+            value={title}
+          />
+        </label>
+        <div className="field">
+          <label htmlFor="import-note-section">
+            <span>章节路径（可选）</span>
+            <input
+              id="import-note-section"
+              maxLength={1000}
+              onChange={(event) => setSection(event.target.value)}
+              placeholder="例如：第一章 / 进程管理"
+              value={section}
+            />
+          </label>
+        </div>
+        {error ? <ErrorNotice error={error} title="导入笔记失败" /> : null}
+      </form>
+    </Modal>
+  )
+}
+
 interface NoteEditorProps {
   batchInProgress: boolean
   note: NoteRecord
   noteWorkflowReady: boolean
   onRegenerate: () => void
+  onExport: () => void
   providerReady: boolean
   regenerationError: unknown
   regenerationPending: boolean
@@ -686,6 +830,7 @@ function NoteEditor({
   note,
   noteWorkflowReady,
   onRegenerate,
+  onExport,
   providerReady,
   regenerationError,
   regenerationPending,
@@ -740,7 +885,7 @@ function NoteEditor({
           <h3>{note.title}</h3>
           <span>
             版本 {note.version} · 生成 {note.generation} ·{' '}
-            {note.generated_by_model ? 'DeepSeek 生成' : '本地摘录演示'}
+            {note.generated_by_model ? 'DeepSeek 生成' : note.origin_batch_id ? '本地摘录演示' : '用户导入'}
           </span>
         </div>
         <div>
@@ -764,6 +909,16 @@ function NoteEditor({
               编辑
             </button>
           </div>
+          <button
+            className="button button--small"
+            disabled={changed}
+            onClick={onExport}
+            title={changed ? '请先保存当前修改' : '导出当前已保存的 Markdown 正文'}
+            type="button"
+          >
+            <Download aria-hidden="true" size={15} />
+            导出 Markdown
+          </button>
           <button
             className="button button--small"
             disabled={
@@ -929,6 +1084,7 @@ export function NotesPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [noteSearch, setNoteSearch] = useState('')
   const [createDialog, setCreateDialog] = useState({ courseId, open: false })
+  const [importDialog, setImportDialog] = useState({ courseId, open: false })
   const batchStorageKey = noteBatchStorageKey(courseId)
   const [activeBatch, setActiveBatch] = useState(() => ({
     courseId,
@@ -940,6 +1096,7 @@ export function NotesPage() {
   const createCommandKeyRef = useRef<string | null>(null)
   const regenerationCommandKeysRef = useRef(new Map<string, string>())
   const createOpen = createDialog.courseId === courseId && createDialog.open
+  const importOpen = importDialog.courseId === courseId && importDialog.open
   const activeBatchId =
     activeBatch.courseId === courseId ? activeBatch.id : localStorage.getItem(batchStorageKey)
   const notesQuery = useQuery({
@@ -1014,6 +1171,17 @@ export function NotesPage() {
       createCommandKeyRef.current = null
       activateBatch(snapshot)
       setCreateDialog({ courseId, open: false })
+    },
+  })
+  const importNote = useMutation({
+    mutationFn: (input: NoteImport) => studyApi.importNote(courseId, input),
+    onSuccess: (imported) => {
+      queryClient.setQueryData<NoteRecord[]>(['notes', courseId], (current = []) => [
+        imported,
+        ...current.filter((note) => note.id !== imported.id),
+      ])
+      setSelectedId(imported.id)
+      setImportDialog({ courseId, open: false })
     },
   })
   const regenerateBatch = useMutation({
@@ -1098,28 +1266,41 @@ export function NotesPage() {
     <div className="page page--notes">
       <PageHeader
         actions={
-          <button
-            className="button button--primary"
-            disabled={!noteWorkflowReady || batchInProgress || regenerateBatch.isPending}
-            onClick={() => {
-              createBatch.reset()
-              createCommandKeyRef.current = newNoteBatchCommandKey()
-              setCreateDialog({ courseId, open: true })
-            }}
-            title={
-              !noteWorkflowReady
-                ? '笔记生成工作流不可用'
-                : batchInProgress
-                  ? '当前笔记仍在生成'
-                  : regenerateBatch.isPending
-                    ? '正在启动重新生成'
-                  : undefined
-            }
-            type="button"
-          >
-            <FilePlus2 aria-hidden="true" size={17} />
-            新建笔记
-          </button>
+          <>
+            <button
+              className="button"
+              onClick={() => {
+                importNote.reset()
+                setImportDialog({ courseId, open: true })
+              }}
+              type="button"
+            >
+              <FileUp aria-hidden="true" size={17} />
+              导入笔记
+            </button>
+            <button
+              className="button button--primary"
+              disabled={!noteWorkflowReady || batchInProgress || regenerateBatch.isPending}
+              onClick={() => {
+                createBatch.reset()
+                createCommandKeyRef.current = newNoteBatchCommandKey()
+                setCreateDialog({ courseId, open: true })
+              }}
+              title={
+                !noteWorkflowReady
+                  ? '笔记生成工作流不可用'
+                  : batchInProgress
+                    ? '当前笔记仍在生成'
+                    : regenerateBatch.isPending
+                      ? '正在启动重新生成'
+                    : undefined
+              }
+              type="button"
+            >
+              <FilePlus2 aria-hidden="true" size={17} />
+              新建笔记
+            </button>
+          </>
         }
         kicker="Notes"
         meta={`${notes.length} 篇笔记`}
@@ -1227,6 +1408,7 @@ export function NotesPage() {
                 regenerateLegacy.mutate(selected.id)
               }
             }}
+            onExport={() => downloadNoteMarkdown(selected)}
             onReload={async () => {
               const result = await notesQuery.refetch({ throwOnError: true })
               return result.data?.find((note) => note.id === selected.id)
@@ -1273,6 +1455,19 @@ export function NotesPage() {
           }}
           onCreate={(input) => createBatch.mutate(input)}
           pending={createBatch.isPending}
+        />
+      ) : null}
+      {importOpen ? (
+        <ImportNoteDialog
+          error={importNote.error}
+          onClose={() => {
+            if (!importNote.isPending) {
+              importNote.reset()
+              setImportDialog({ courseId, open: false })
+            }
+          }}
+          onImport={(input) => importNote.mutate(input)}
+          pending={importNote.isPending}
         />
       ) : null}
     </div>

@@ -109,3 +109,52 @@ async def test_note_if_match_edit_preserves_sources_and_exposes_conflict(
     assert after.json()["version"] == 2
     assert after.json()["body_markdown"] == "用户编辑后的笔记"
     await database.dispose()
+
+
+@pytest.mark.integration
+async def test_import_note_creates_user_authored_note_without_sources(
+    test_database_url: str,
+    tmp_path: Path,
+) -> None:
+    await upgrade_database(test_database_url)
+    database = Database(test_database_url)
+    settings = Settings(
+        _env_file=None,
+        app_mode=AppMode.TEST,
+        database_url=SecretStr(test_database_url),
+        local_storage_root=tmp_path,
+        lexical_index_root=tmp_path / "lexical",
+    )
+    app = create_app(settings=settings, database=database, storage=LocalStorage(tmp_path))
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        course_response = await client.post("/api/v1/courses", json={"title": "操作系统"})
+        course_id = course_response.json()["id"]
+        imported = await client.post(
+            f"/api/v1/courses/{course_id}/notes/import",
+            json={
+                "title": "外部复习提纲",
+                "section_path": ["导入资料", "第一章"],
+                "body_markdown": "# 外部复习提纲\r\n\r\n用户整理的正文。",
+            },
+        )
+        listed = await client.get(f"/api/v1/courses/{course_id}/notes")
+        oversized = await client.post(
+            f"/api/v1/courses/{course_id}/notes/import",
+            json={"title": "过大笔记", "body_markdown": "中" * 500_001},
+        )
+
+    assert imported.status_code == 201
+    assert imported.headers["etag"] == '"1"'
+    assert imported.json()["title"] == "外部复习提纲"
+    assert imported.json()["section_path"] == ["导入资料", "第一章"]
+    assert imported.json()["body_markdown"] == "# 外部复习提纲\n\n用户整理的正文。"
+    assert imported.json()["generated_by_model"] is False
+    assert imported.json()["sources"] == []
+    assert imported.json()["knowledge_points"] == []
+    assert listed.status_code == 200
+    assert listed.json()[0]["id"] == imported.json()["id"]
+    assert oversized.status_code == 422
+    await database.dispose()

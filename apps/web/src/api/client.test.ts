@@ -402,6 +402,35 @@ describe('StudyApiClient', () => {
     })
   })
 
+  it('imports a Markdown note through the dedicated user-authored route', async () => {
+    const imported = noteRecord({ generated_by_model: false, sources: [], knowledge_points: [] })
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(imported), {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const client = new StudyApiClient('/api/v1')
+
+    await expect(
+      client.importNote('course/1', {
+        title: '导入笔记',
+        section_path: ['第一章'],
+        body_markdown: '# 导入笔记\n\n正文',
+      }),
+    ).resolves.toEqual(imported)
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/v1/courses/course/1/notes/import')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(String(init.body))).toEqual({
+      title: '导入笔记',
+      section_path: ['第一章'],
+      body_markdown: '# 导入笔记\n\n正文',
+    })
+  })
+
   it('creates and reads an idempotent note batch', async () => {
     const snapshot = { id: 'note-batch-1' } as NoteBatchSnapshot
     const fetchMock = vi.fn().mockImplementation(

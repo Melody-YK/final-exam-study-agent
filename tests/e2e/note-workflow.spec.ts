@@ -149,3 +149,30 @@ test('restores a running note batch after reload', async ({ page }) => {
     'page',
   )
 })
+
+test('imports a Markdown note and exports the saved note body', async ({ page }) => {
+  await page.getByRole('link', { name: '笔记' }).first().click()
+  await page.getByRole('button', { name: '导入笔记' }).click()
+
+  const dialog = page.getByRole('dialog', { name: '导入 Markdown 笔记' })
+  await dialog.getByLabel('Markdown 文件').setInputFiles({
+    name: 'external-outline.md',
+    mimeType: 'text/markdown',
+    buffer: Buffer.from('# 外部复习提纲\n\n导入的正文。'),
+  })
+  await expect(dialog.getByLabel('标题')).toHaveValue('外部复习提纲')
+  await dialog.getByLabel('章节路径（可选）').fill('导入资料 / 第一章')
+  await dialog.getByRole('button', { name: '导入' }).click()
+
+  await expect(page.getByRole('button', { name: /外部复习提纲/ })).toHaveAttribute(
+    'aria-current',
+    'page',
+  )
+  await expect(page.getByLabel('笔记阅读视图')).toContainText('导入的正文。')
+  await expect(page.getByLabel('笔记阅读视图')).not.toContainText('查看原文')
+
+  const downloadPromise = page.waitForEvent('download')
+  await page.getByRole('button', { name: '导出 Markdown' }).click()
+  const download = await downloadPromise
+  expect(download.suggestedFilename()).toBe('外部复习提纲.md')
+})

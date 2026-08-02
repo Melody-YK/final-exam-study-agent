@@ -125,6 +125,36 @@ class NoteRepository:
             ).all()
             return tuple([await self._snapshot(session, note) for note in notes])
 
+    async def import_note(
+        self,
+        principal: Principal,
+        course_id: str,
+        *,
+        section_path: tuple[str, ...],
+        title: str,
+        body_markdown: str,
+    ) -> NoteSnapshot:
+        async with self._database.session(principal) as session:
+            course = await self._course(session, principal, course_id)
+            if course is None:
+                raise LookupError("course is unavailable")
+            note = NoteModel(
+                id=new_id(),
+                user_id=course.user_id,
+                course_id=course.id,
+                section_path=list(section_path),
+                title=title.strip(),
+                body_markdown=body_markdown.replace("\r\n", "\n").replace("\r", "\n").strip(),
+                version=1,
+                generation=1,
+                generated_by_model=False,
+                status="ready",
+            )
+            session.add(note)
+            await session.flush()
+            await session.refresh(note)
+            return await self._snapshot(session, note)
+
     async def update(
         self,
         principal: Principal,
