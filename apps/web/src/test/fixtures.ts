@@ -6,6 +6,7 @@ import type {
   NoteRecord,
   ProblemDetails,
   QuerySnapshot,
+  SourcePreview,
   StructuredAnswer,
 } from '../api/types'
 
@@ -112,6 +113,25 @@ export function citationSource(overrides: Partial<CitationSource> = {}): Citatio
   }
 }
 
+export function sourcePreview(overrides: Partial<SourcePreview> = {}): SourcePreview {
+  return {
+    source_id: 'note-source-1',
+    document_id: citation.document_id,
+    revision_id: citation.revision_id,
+    chunk_id: citation.chunk_id,
+    document_name: citation.document_name,
+    locator: citation.locator,
+    section_path: [],
+    quote: citation.quote,
+    bounding_boxes: citation.bounding_boxes,
+    provenance: ['native'],
+    read_url: '/api/v1/sources/chapter-1.png',
+    read_url_expires_at: '2099-01-01T00:00:00Z',
+    media_type: 'image/png',
+    ...overrides,
+  }
+}
+
 export function noteRecord(overrides: Partial<NoteRecord> = {}): NoteRecord {
   return {
     id: 'note-1',
@@ -141,6 +161,7 @@ export function noteRecord(overrides: Partial<NoteRecord> = {}): NoteRecord {
         unavailable_reason: null,
       },
     ],
+    knowledge_points: [],
     created_at: '2026-07-19T04:00:00Z',
     updated_at: '2026-07-19T04:00:00Z',
     ...overrides,

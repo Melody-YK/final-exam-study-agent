@@ -3,9 +3,12 @@ import type { ReactNode } from 'react'
 import { useLocation } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { studyApi } from '../../api/client'
+import { sourcePreview } from '../../test/fixtures'
 import { renderInWorkspace } from '../../test/render'
 import {
   describeGraphRelationship,
+  KnowledgeGraphViewer,
   KnowledgeGraphPage,
 } from './KnowledgeGraphPage'
 import {
@@ -125,7 +128,9 @@ function graphFixture(
             document_name: '01-process.pdf',
             revision_id: 'revision-1',
             chunk_id: 'revision-1:chunk:1',
+            locator_kind: 'page',
             page_ordinal: 1,
+            section_path: ['进程管理'],
             chunk_ordinal: 1,
             count: 2,
             excerpt: '进程是资源分配和调度的基本单位。',
@@ -348,8 +353,57 @@ describe('KnowledgeGraphPage', () => {
     expect(coOccurrence?.style?.strokeDasharray).toBe('5 4')
   })
 
-  it('hands a bounded concept suggestion to a fresh QA draft', async () => {
-    vi.spyOn(knowledgeGraphApi, 'getCourseKnowledgeGraph').mockResolvedValue(graphFixture())
+  it('hands the four strongest unique concept anchors to a fresh QA draft', async () => {
+    const graph = graphFixture()
+    const concept = graph.nodes.find((node) => node.kind === 'concept')
+    const baseOccurrence = concept?.occurrences?.[0]
+    expect(baseOccurrence).toBeDefined()
+    if (!concept || !baseOccurrence) return
+    concept.occurrences = [
+      {
+        ...baseOccurrence,
+        chunk_id: 'chunk-shared',
+        count: 10,
+        page_ordinal: 5,
+        chunk_ordinal: 9,
+      },
+      {
+        ...baseOccurrence,
+        chunk_id: 'chunk-shared',
+        count: 9,
+        page_ordinal: 1,
+        chunk_ordinal: 1,
+      },
+      {
+        ...baseOccurrence,
+        chunk_id: 'chunk-page-3',
+        count: 8,
+        page_ordinal: 3,
+        chunk_ordinal: 2,
+      },
+      {
+        ...baseOccurrence,
+        chunk_id: 'chunk-page-1-late',
+        count: 8,
+        page_ordinal: 1,
+        chunk_ordinal: 4,
+      },
+      {
+        ...baseOccurrence,
+        chunk_id: 'chunk-page-1-early',
+        count: 8,
+        page_ordinal: 1,
+        chunk_ordinal: 1,
+      },
+      {
+        ...baseOccurrence,
+        chunk_id: 'chunk-over-limit',
+        count: 7,
+        page_ordinal: 1,
+        chunk_ordinal: 1,
+      },
+    ]
+    vi.spyOn(knowledgeGraphApi, 'getCourseKnowledgeGraph').mockResolvedValue(graph)
     const { user } = renderInWorkspace(
       <>
         <KnowledgeGraphPage />
@@ -364,11 +418,110 @@ describe('KnowledgeGraphPage', () => {
       JSON.stringify({
         pathname: '/qa',
         state: {
-          suggestedQuestion: '请解释“进程”，并结合课程资料说明它与相关概念的联系。',
+          suggestedQuestion:
+            '根据当前课程资料，概括“进程”在课程内容中的含义，并说明它与直接关联概念的联系。',
           startNewConversation: true,
+          conceptContext: {
+            label: '进程',
+            anchors: [
+              {
+                document_id: 'document-1',
+                revision_id: 'revision-1',
+                chunk_id: 'chunk-shared',
+              },
+              {
+                document_id: 'document-1',
+                revision_id: 'revision-1',
+                chunk_id: 'chunk-page-1-early',
+              },
+              {
+                document_id: 'document-1',
+                revision_id: 'revision-1',
+                chunk_id: 'chunk-page-1-late',
+              },
+              {
+                document_id: 'document-1',
+                revision_id: 'revision-1',
+                chunk_id: 'chunk-page-3',
+              },
+            ],
+          },
         },
       }),
     )
+  })
+
+  it('keeps the shared admin viewer read-only', async () => {
+    const previewSource = vi.spyOn(studyApi, 'getKnowledgeGraphSourcePreview')
+    const { user } = renderInWorkspace(<KnowledgeGraphViewer graph={graphFixture()} readOnly />)
+
+    await user.click(screen.getByRole('button', { name: '查看概念：进程' }))
+
+    expect(screen.getByRole('heading', { name: '进程' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '围绕此概念提问' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '查看原文' })).not.toBeInTheDocument()
+    expect(previewSource).not.toHaveBeenCalled()
+  })
+
+  it('opens a Markdown occurrence with section-aware source positioning', async () => {
+    const graph = graphFixture()
+    const concept = graph.nodes.find((node) => node.kind === 'concept')
+    const occurrence = concept?.occurrences?.[0]
+    expect(occurrence).toBeDefined()
+    if (!occurrence) return
+    occurrence.locator_kind = 'section'
+    occurrence.page_ordinal = 2
+    occurrence.section_path = ['进程管理', '调度']
+    vi.spyOn(knowledgeGraphApi, 'getCourseKnowledgeGraph').mockResolvedValue(graph)
+    vi.spyOn(studyApi, 'getKnowledgeGraphSourcePreview').mockResolvedValue(
+      sourcePreview({
+        source_id: occurrence.chunk_id,
+        document_name: occurrence.document_name,
+        locator: { kind: 'section', ordinal: 2 },
+        section_path: occurrence.section_path,
+        media_type: 'text/markdown',
+        read_url: '/api/v1/courses/course-1/knowledge-graph/source/content',
+      }),
+    )
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response('# 基础\n\n前一章。\n\n## 调度\n\n就绪队列。', {
+          status: 200,
+          headers: { 'Content-Type': 'text/markdown' },
+        }),
+      ),
+    )
+    const { user } = renderInWorkspace(<KnowledgeGraphPage />)
+
+    await user.click(await screen.findByRole('button', { name: '查看概念：进程' }))
+    expect(screen.getByText(/进程管理 \/ 调度/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '查看原文' }))
+
+    expect(studyApi.getKnowledgeGraphSourcePreview).toHaveBeenCalledWith(
+      'course-1',
+      occurrence.revision_id,
+      occurrence.chunk_id,
+    )
+    expect(await screen.findByRole('heading', { name: '调度' })).toBeInTheDocument()
+    expect(screen.queryByText('前一章。')).not.toBeInTheDocument()
+  })
+
+  it('shows a preview failure beside the graph occurrence that was opened', async () => {
+    vi.spyOn(knowledgeGraphApi, 'getCourseKnowledgeGraph').mockResolvedValue(graphFixture())
+    vi.spyOn(studyApi, 'getKnowledgeGraphSourcePreview').mockRejectedValue(
+      new Error('请先转换为 PDF 后重新上传。'),
+    )
+    const { user } = renderInWorkspace(<KnowledgeGraphPage />)
+
+    await user.click(await screen.findByRole('button', { name: '查看概念：进程' }))
+    await user.click(screen.getByRole('button', { name: '查看原文' }))
+
+    const alert = await screen.findByRole('alert')
+    const occurrenceItem = alert.closest('li')
+    expect(occurrenceItem).not.toBeNull()
+    expect(within(occurrenceItem!).getByText('01-process.pdf')).toBeVisible()
+    expect(alert).toHaveTextContent('请先转换为 PDF 后重新上传。')
   })
 
   it('renders a source-aware empty state when no concepts qualify', async () => {

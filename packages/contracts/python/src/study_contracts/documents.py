@@ -104,7 +104,7 @@ class AssetType(StrEnum):
 
 
 class SourceLocator(ContractModel):
-    kind: Literal["page", "slide"]
+    kind: Literal["page", "slide", "section"]
     ordinal: int = Field(ge=1)
 
 
@@ -134,7 +134,7 @@ class Page(ContractModel):
     ordinal: int = Field(ge=1)
     width: int = Field(gt=0)
     height: int = Field(gt=0)
-    source_kind: Literal["page", "slide"] = "page"
+    source_kind: Literal["page", "slide", "section"] = "page"
     bbox_norm: BoundingBox = Field(
         default_factory=lambda: BoundingBox(x=0.0, y=0.0, width=1.0, height=1.0)
     )

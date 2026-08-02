@@ -8,6 +8,7 @@ import os
 from pathlib import Path, PurePosixPath
 
 from study_contracts import canonical_json_bytes
+from study_worker.parsers.markdown_native import MarkdownNativeParser
 from study_worker.parsers.pdf_native import PDFNativeParser
 from study_worker.parsers.pptx_native import PPTXNativeParser
 from study_worker.parsers.protocols import ParseRequest
@@ -33,6 +34,7 @@ async def _run(arguments: argparse.Namespace) -> int:
     output_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     router = NativeParserRouter(
         (
+            MarkdownNativeParser(max_sections=arguments.max_pages),
             PDFNativeParser(max_pages=arguments.max_pages, max_pixels=arguments.max_pixels),
             PPTXNativeParser(max_pages=arguments.max_pages, max_pixels=arguments.max_pixels),
         )

@@ -9,6 +9,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from study_worker.parsers.markdown_native import MARKDOWN_MEDIA_TYPE
 from study_worker.parsers.normalize import RawDocument
 from study_worker.parsers.pdf_native import PDF_MEDIA_TYPE
 from study_worker.parsers.pptx_native import PPTX_MEDIA_TYPE
@@ -91,7 +92,11 @@ class NativeSubprocessParser:
             raise NativeParserError("PARSER_RESULT_INVALID") from None
         if result.document_sha256 != request.document_sha256:
             raise NativeParserError("PARSER_RESULT_HASH_MISMATCH")
-        expected_backend = "pdf-native" if request.media_type == PDF_MEDIA_TYPE else "pptx-native"
+        expected_backend = {
+            MARKDOWN_MEDIA_TYPE: "markdown-native",
+            PDF_MEDIA_TYPE: "pdf-native",
+            PPTX_MEDIA_TYPE: "pptx-native",
+        }[request.media_type]
         if result.source_backend != expected_backend:
             raise NativeParserError("PARSER_RESULT_BACKEND_MISMATCH")
         expected_pages = request.requested_pages or tuple(range(1, result.total_page_count + 1))
@@ -122,7 +127,7 @@ class NativeSubprocessParser:
             return False
         if args[0] != "--media-type":
             return False
-        if args[1] not in {PDF_MEDIA_TYPE, PPTX_MEDIA_TYPE}:
+        if args[1] not in {MARKDOWN_MEDIA_TYPE, PDF_MEDIA_TYPE, PPTX_MEDIA_TYPE}:
             return False
         if args[2] != "--document-sha256" or _SHA256_PATTERN.fullmatch(args[3]) is None:
             return False

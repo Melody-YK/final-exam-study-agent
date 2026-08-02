@@ -19,6 +19,7 @@ from study_agent.api.errors import (
 )
 from study_agent.api.health import router as health_router
 from study_agent.api.rate_limit import SlidingWindowLimiter
+from study_agent.api.routers.admin_content import router as admin_content_router
 from study_agent.api.routers.admin_documents import router as admin_documents_router
 from study_agent.api.routers.auth import router as auth_router
 from study_agent.api.routers.courses import router as courses_router
@@ -271,12 +272,13 @@ def create_app(
     resolved_database = database or Database(resolved_settings.database_url.get_secret_value())
     resolved_storage = storage or LocalStorage(resolved_settings.local_storage_root)
     resolved_clock = clock or SystemClock()
+    resolved_registry = provider_registry or build_provider_registry(resolved_settings)
     resolved_note_runner = note_runner or DemoNoteRunner(
         resolved_database,
         resolved_settings,
         resolved_clock,
+        provider_registry=resolved_registry,
     )
-    resolved_registry = provider_registry or build_provider_registry(resolved_settings)
     resolved_query_evidence = query_evidence
     if resolved_query_evidence is None:
         lexical = LexicalRetriever(
@@ -334,6 +336,7 @@ def create_app(
         request_validation_handler,  # type: ignore[arg-type]
     )
     application.include_router(health_router)
+    application.include_router(admin_content_router)
     application.include_router(admin_documents_router)
     application.include_router(auth_router)
     application.include_router(courses_router)

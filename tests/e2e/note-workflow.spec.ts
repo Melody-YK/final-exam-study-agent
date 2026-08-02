@@ -17,7 +17,7 @@ test('creates a merged note batch and opens the generated note', async ({ page }
 
   const dialog = page.getByRole('dialog', { name: '新建笔记' })
   await expect(dialog.getByText('进程与线程.pdf')).toBeVisible()
-  await expect(dialog.getByText('调度算法.pptx')).toBeVisible()
+  await expect(dialog.getByText('调度算法.md')).toBeVisible()
   await expect(dialog.getByText('文件系统.pptx')).toHaveCount(0)
   await expect(dialog.getByText('扫描试题.png')).toHaveCount(0)
   await expect(dialog.getByText('题库.pdf')).toHaveCount(0)
@@ -71,7 +71,7 @@ test('selected note template changes the generated preview', async ({ page }) =>
   await expect(dialog.getByLabel('考前速记结构示例')).not.toHaveAttribute('aria-current')
   await expect(dialog.getByLabel('结构提纲结构示例')).toHaveAttribute('aria-current', 'true')
   await expect(dialog.getByLabel('结构提纲结构示例')).toContainText('1. 资料名称')
-  await expect(dialog.getByLabel('结构提纲结构示例')).toContainText('1.1 第 1 页')
+  await expect(dialog.getByLabel('结构提纲结构示例')).toContainText('1.1 来源位置')
   await expect(dialog.getByLabel('结构提纲结构示例')).toContainText('1. 关键知识点')
   await dialog.getByLabel('标题（可选）').fill('结构化复习')
   await dialog.getByRole('button', { name: '创建' }).click()

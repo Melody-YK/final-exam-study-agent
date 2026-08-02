@@ -1,12 +1,14 @@
 import type {
   AdminAccount,
   AdminAccountUpdate,
+  AdminCourses,
   AdminDiagnostics,
   AdminDocument,
   AdminDocumentReviewRequest,
   AdminDocuments,
   AdminInvitationCreate,
   AdminInvitations,
+  AdminNotes,
   AdminUserList,
   AuthUser,
   CitationSource,
@@ -22,6 +24,7 @@ import type {
   DocumentRecord,
   DocumentUploadCreated,
   EventEnvelope,
+  KnowledgeGraphResponse,
   LabTrace,
   LoginRequest,
   MergedNoteBatchRequest,
@@ -32,9 +35,11 @@ import type {
   ParseRetryRequest,
   ProblemDetails,
   QueryCreate,
+  QueryConceptContext,
   QuerySnapshot,
   RegisterRequest,
   RuntimeCapabilities,
+  SourcePreview,
   UploadCompleteRequest,
 } from './types'
 
@@ -63,6 +68,20 @@ const EVENT_TYPES = [
   'query.failed',
   'retrieval.completed',
   'retrieval.started',
+  'note.batch.created',
+  'note.batch.running',
+  'note.batch.cancelling',
+  'note.batch.succeeded',
+  'note.batch.failed',
+  'note.batch.cancelled',
+  'note.item.leased',
+  'note.item.running',
+  'note.item.phase',
+  'note.item.succeeded',
+  'note.item.failed',
+  'note.item.cancelling',
+  'note.item.cancelled',
+  'note.preview.delta',
   'stream.reset',
 ] as const
 
@@ -107,6 +126,21 @@ async function responseJson<T>(response: Response): Promise<T> {
 
 function idempotencyKey(prefix: string): string {
   return `${prefix}-${crypto.randomUUID()}`
+}
+
+const uploadMediaTypes: Readonly<Record<string, string>> = {
+  pdf: 'application/pdf',
+  md: 'text/markdown',
+  markdown: 'text/markdown',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+}
+
+function uploadMediaType(file: File): string {
+  const separator = file.name.lastIndexOf('.')
+  const extension = separator < 0 ? '' : file.name.slice(separator + 1).toLowerCase()
+  return uploadMediaTypes[extension] ?? (file.type || 'application/octet-stream')
 }
 
 function jsonBody<T>(body: T): string {
@@ -161,13 +195,14 @@ export class StudyApiClient {
     signal?: AbortSignal,
   ): Promise<DocumentRecord> {
     const digest = await sha256File(file)
+    const mediaType = uploadMediaType(file)
     onProgress?.(8)
     const created = await this.request<DocumentUploadCreated>(`/courses/${courseId}/documents`, {
       method: 'POST',
       signal,
       body: jsonBody<DocumentCreate>({
         filename: file.name,
-        media_type: file.type || 'application/octet-stream',
+        media_type: mediaType,
         size_bytes: file.size,
         sha256: digest,
         corpus_role: corpusRole,
@@ -176,7 +211,7 @@ export class StudyApiClient {
     onProgress?.(24)
     const uploadResponse = await fetch(created.upload.url, {
       method: 'PUT',
-      headers: { 'Content-Type': file.type || 'application/octet-stream' },
+      headers: { 'Content-Type': mediaType },
       body: file,
       signal,
     })
@@ -304,6 +339,20 @@ export class StudyApiClient {
     return `${this.baseUrl}/admin/documents/${encodeURIComponent(documentId)}/content`
   }
 
+  listAdminCourses(): Promise<AdminCourses> {
+    return this.request('/admin/courses')
+  }
+
+  listAdminCourseNotes(courseId: string): Promise<AdminNotes> {
+    return this.request(`/admin/courses/${encodeURIComponent(courseId)}/notes`)
+  }
+
+  getAdminCourseKnowledgeGraph(courseId: string): Promise<KnowledgeGraphResponse> {
+    return this.request(
+      `/admin/courses/${encodeURIComponent(courseId)}/knowledge-graph?node_limit=14&edge_limit=30`,
+    )
+  }
+
   createConversation(courseId: string, title?: string): Promise<ConversationRecord> {
     return this.request(`/courses/${courseId}/conversations`, {
       method: 'POST',
@@ -319,12 +368,18 @@ export class StudyApiClient {
     return this.request(`/conversations/${conversationId}/queries?limit=${limit}`)
   }
 
-  createQuery(courseId: string, question: string, conversationId?: string): Promise<QuerySnapshot> {
+  createQuery(
+    courseId: string,
+    question: string,
+    conversationId?: string,
+    conceptContext?: QueryConceptContext,
+  ): Promise<QuerySnapshot> {
     return this.request(`/courses/${courseId}/queries`, {
       method: 'POST',
       body: jsonBody<QueryCreate>({
         question,
         ...(conversationId === undefined ? {} : { conversation_id: conversationId }),
+        ...(conceptContext === undefined ? {} : { concept_context: conceptContext }),
       }),
     })
   }
@@ -339,6 +394,22 @@ export class StudyApiClient {
 
   getCitation(queryId: string, citationId: string): Promise<CitationSource> {
     return this.request(`/queries/${queryId}/citations/${citationId}`)
+  }
+
+  getNoteSourcePreview(noteId: string, sourceId: string): Promise<SourcePreview> {
+    return this.request(
+      `/notes/${encodeURIComponent(noteId)}/sources/${encodeURIComponent(sourceId)}/preview`,
+    )
+  }
+
+  getKnowledgeGraphSourcePreview(
+    courseId: string,
+    revisionId: string,
+    chunkId: string,
+  ): Promise<SourcePreview> {
+    return this.request(
+      `/courses/${encodeURIComponent(courseId)}/knowledge-graph/sources/${encodeURIComponent(revisionId)}/${encodeURIComponent(chunkId)}/preview`,
+    )
   }
 
   listNotes(courseId: string): Promise<NoteRecord[]> {
@@ -406,6 +477,10 @@ export class StudyApiClient {
     onError?: () => void,
     onOpen?: () => void,
   ): () => void {
+    if (typeof EventSource === 'undefined') {
+      onError?.()
+      return () => undefined
+    }
     const stream = new EventSource(`${this.baseUrl}${path}`)
     stream.onopen = () => onOpen?.()
     const handleEvent = (message: MessageEvent<string>) => {

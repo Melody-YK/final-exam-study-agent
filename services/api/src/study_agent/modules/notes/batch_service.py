@@ -56,6 +56,7 @@ from study_contracts import (
 )
 
 _PDF = "application/pdf"
+_MARKDOWN = "text/markdown"
 _PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 _PPT = "application/vnd.ms-powerpoint"
 _TERMINAL_ITEM_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
@@ -518,15 +519,18 @@ class NoteBatchService:
             raise _not_found()
         ordered_documents = [documents_by_id[document_id] for document_id in document_ids]
         for document in ordered_documents:
-            if document.filename.lower().endswith(".ppt") or document.media_type == _PPT:
+            if document.filename.lower().endswith((".ppt", ".pptx")) or document.media_type in {
+                _PPT,
+                _PPTX,
+            }:
                 raise NoteBatchServiceError(
                     NoteBatchServiceErrorCode.UNSUPPORTED_MEDIA_TYPE,
-                    "暂不支持旧版 .ppt, 请先转换为 .pptx。",
+                    "暂不支持使用 PPT/PPTX 生成笔记, 请先转换为 PDF 或 Markdown 后重新上传。",
                 )
-            if document.media_type not in {_PDF, _PPTX}:
+            if document.media_type not in {_PDF, _MARKDOWN}:
                 raise NoteBatchServiceError(
                     NoteBatchServiceErrorCode.UNSUPPORTED_MEDIA_TYPE,
-                    "当前演示仅支持 PDF 和 PPTX 资料。",
+                    "当前仅支持使用 PDF 和 Markdown 资料生成笔记; 请先转换格式后重新上传。",
                 )
             if (
                 document.corpus_role != "corpus"
@@ -596,8 +600,9 @@ class NoteBatchService:
         total_units = 0
         for document in ordered_documents:
             revision = revisions_by_id[cast(str, document.active_revision_id)]
-            unit_type = "slide" if document.media_type == _PPTX else "pdf_page_window"
-            locator_prefix = "slide" if document.media_type == _PPTX else "page"
+            is_markdown = document.media_type == _MARKDOWN
+            unit_type = "pdf_section" if is_markdown else "pdf_page_window"
+            locator_prefix = "section" if is_markdown else "page"
             units: list[_FrozenUnit] = []
             for page_ordinal in range(1, revision.total_page_count + 1):
                 page_chunks = chunks_by_revision_page.get((revision.id, page_ordinal), [])

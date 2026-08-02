@@ -18,6 +18,7 @@ stage plan or a production roadmap.
 | [006](006-predictable-note-templates.md) | Make the three note templates predictable before generation | P0 | M | regeneration slice clean | DONE: reviewed at `59bfc5e` on 2026-07-26 |
 | [007](007-source-preview-across-learning-surfaces.md) | Reuse original-page preview for notes and concept occurrences | P1 | L | 005, 006 | TODO after dependencies |
 | [008](008-invitation-account-capacity.md) | Enforce an explicit invitation account capacity | P1 | M | None | TODO after P0 |
+| [009](009-learning-loop.md) | 将可信课程资料闭环为主动回忆与复习队列 | P0 | L | 004, 005, 006 | TODO: waiting for user confirmation |
 
 Status values: TODO | IN PROGRESS | REVISE (with reason) | DONE | BLOCKED (with reason) |
 REJECTED (with rationale)
@@ -93,6 +94,12 @@ REJECTED (with rationale)
 - Explicitly deferred beyond P1: flashcards/active recall, spaced repetition, exam scheduling,
   audio/video, collaboration, a content marketplace, Neo4j, LLM relationship ontologies, external
   queue scaling, production LibreOffice isolation, exact ETA, DOCX/export, and observability work.
+
+- Plan 009 is a user-requested product-direction draft for the first active-recall loop. It narrows
+  V1 to source-bound multiple-choice and true/false practice, durable attempts, explainable mastery,
+  and a bounded review queue. It does not replace the current graph algorithm or claim cloud
+  capacity. Implementation must wait for the user to confirm the question types, mastery rules, runner boundary,
+  and the decision to keep graph replacement as a separate plan.
 
 ## Findings considered and rejected
 

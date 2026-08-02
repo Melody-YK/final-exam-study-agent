@@ -14,7 +14,7 @@
   "files": [
     {
       "name": "self-authored-native.pdf",
-      "sha256": "5cede1b1a47f8ffd791ec4b472bf7abcf66c02ee14dc4458f2768e47fc171bda",
+      "sha256": "e2b1bb6aed8123b920eaefdf414799bfdb0fe60acf904c6be281cc487a2fdb4b",
       "corpus_role": "corpus",
       "purpose": "native-pdf-and-no-text-page",
       "fixture_kind": "generated",

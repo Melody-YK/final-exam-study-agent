@@ -1,47 +1,39 @@
 import { useQuery } from '@tanstack/react-query'
 import {
-  Activity,
-  ArrowLeft,
   Database,
   FileCheck2,
   FileStack,
   Gauge,
+  LibraryBig,
   LogOut,
   NotebookTabs,
   ShieldCheck,
   Users,
 } from 'lucide-react'
-import { Link, NavLink, Navigate, Route, Routes, useNavigate } from 'react-router'
+import { NavLink, Navigate, Route, Routes, useNavigate } from 'react-router'
 
 import { studyApi } from '../../api/client'
 import { useAuth } from '../../app/auth'
-import { WorkspaceContext } from '../../app/WorkspaceContext'
 import { ErrorNotice } from '../../components/ui/ErrorNotice'
 import { IconButton } from '../../components/ui/IconButton'
-import { DemoLabPage } from '../demo-lab/DemoLabPage'
-import { AdminUsersPage } from './AdminUsersPage'
+import { AdminContentPage } from './AdminContentPage'
 import { AdminReviewsPage } from './AdminReviewsPage'
-
-interface AdminShellProps {
-  courseId: string | null
-  onLeaveCourse: () => void
-}
+import { AdminUsersPage } from './AdminUsersPage'
 
 const adminDestinations = [
   { to: '/admin', label: '概览', icon: Gauge, end: true },
   { to: '/admin/users', label: '用户', icon: Users, end: false },
+  { to: '/admin/content', label: '用户内容', icon: LibraryBig, end: false },
   { to: '/admin/reviews', label: '资料审核', icon: FileCheck2, end: false },
-  { to: '/admin/diagnostics', label: '工程诊断', icon: Activity, end: false },
 ] as const
 
-export function AdminShell({ courseId, onLeaveCourse }: AdminShellProps) {
+export function AdminShell() {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
 
   if (user?.role !== 'admin') return <Navigate replace to="/" />
 
   const signOut = async () => {
-    onLeaveCourse()
     await logout()
     navigate('/login', { replace: true })
   }
@@ -83,18 +75,14 @@ export function AdminShell({ courseId, onLeaveCourse }: AdminShellProps) {
               </NavLink>
             ))}
           </nav>
-          <Link className="admin-back-link" to="/">
-            <ArrowLeft aria-hidden="true" size={16} />
-            返回学习端
-          </Link>
         </aside>
 
         <main id="admin-content">
           <Routes>
             <Route element={<AdminOverviewPage />} index />
             <Route element={<AdminUsersPage />} path="users" />
+            <Route element={<AdminContentPage />} path="content/*" />
             <Route element={<AdminReviewsPage />} path="reviews" />
-            <Route element={<AdminDiagnosticsPage courseId={courseId} />} path="diagnostics" />
             <Route element={<Navigate replace to="/admin" />} path="*" />
           </Routes>
         </main>
@@ -167,45 +155,5 @@ function Metric({
       <span>{label}</span>
       <strong>{value ?? '--'}</strong>
     </div>
-  )
-}
-
-function AdminDiagnosticsPage({ courseId }: { courseId: string | null }) {
-  const courseQuery = useQuery({
-    queryKey: ['course', courseId],
-    queryFn: () => studyApi.getCourse(courseId ?? ''),
-    enabled: courseId !== null,
-  })
-  const capabilitiesQuery = useQuery({
-    queryKey: ['capabilities'],
-    queryFn: () => studyApi.capabilities(),
-    retry: false,
-  })
-
-  if (courseId === null) {
-    return (
-      <section className="admin-page page-state">
-        <Activity aria-hidden="true" size={28} />
-        <h2>尚未选择诊断课程</h2>
-        <p>先在学习端进入一门课程，再查看其检索工程链路。</p>
-        <Link className="button button--primary" to="/">
-          返回学习端
-        </Link>
-      </section>
-    )
-  }
-
-  return (
-    <WorkspaceContext.Provider
-      value={{
-        courseId,
-        course: courseQuery.data,
-        capabilities: capabilitiesQuery.data,
-        capabilitiesLoading: capabilitiesQuery.isLoading,
-        capabilitiesError: capabilitiesQuery.isError,
-      }}
-    >
-      <DemoLabPage />
-    </WorkspaceContext.Provider>
   )
 }

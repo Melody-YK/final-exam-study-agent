@@ -25,7 +25,11 @@ from study_agent.infrastructure.db.models import (
 )
 from study_agent.infrastructure.db.session import Database
 from study_agent.modules.courses.manifest import CorpusRole, ManifestPolicy
-from study_agent.modules.courses.upload_validation import UploadValidator, ValidatedUpload
+from study_agent.modules.courses.upload_validation import (
+    MARKDOWN_MEDIA_TYPE,
+    UploadValidator,
+    ValidatedUpload,
+)
 from study_agent.modules.idempotency import IdempotencyService
 from study_agent.modules.jobs.clock import SystemClock
 from study_agent.modules.jobs.service import cancel_document_jobs, enqueue_parse_job
@@ -304,6 +308,9 @@ class DocumentService:
                     status=415,
                     code=ProblemCode.UNSUPPORTED_MEDIA_TYPE,
                     title="上传类型不匹配",
+                    detail=(
+                        "请使用 PDF、Markdown、JPG 或 PNG 文件, 并保持上传类型与文件扩展名一致。"
+                    ),
                 )
             upload_session.status = "receiving"
             object_key = stored_object.object_key
@@ -412,7 +419,10 @@ class DocumentService:
 
         try:
             metadata = await self._storage.head(object_key)
-            prefix = await self._storage.read_prefix(object_key)
+            inspection_size = (
+                declaration.size_bytes if declaration.media_type == MARKDOWN_MEDIA_TYPE else 16
+            )
+            prefix = await self._storage.read_prefix(object_key, size=inspection_size)
         except FileNotFoundError as exc:
             raise self._state_conflict("上传对象不存在。") from exc
         validator.verify_stored(declaration, metadata, prefix)
@@ -804,5 +814,5 @@ class DocumentService:
             status=409,
             code=ProblemCode.DOCUMENT_DUPLICATE,
             title="资料已存在",
-            detail="相同内容与语料角色的资料已经上传。",
+            detail="相同内容的资料已经上传。",
         )

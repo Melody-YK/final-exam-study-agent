@@ -24,6 +24,7 @@ from study_agent.modules.answering.queries import (
     QueryTrace,
 )
 from study_agent.modules.answering.retrieval import QueryEvidence
+from study_agent.modules.answering.types import ConceptEvidenceAnchor, ConceptEvidenceContext
 from study_agent.modules.jobs.waiter import ClaimWaiter
 from study_agent.observability.trace import new_trace_id
 from study_agent.providers.factory import ProviderRegistry
@@ -33,12 +34,28 @@ from study_contracts import JobEventEnvelope, StructuredAnswer
 router = APIRouter(prefix="/api/v1", tags=["queries"])
 
 
+class QueryConceptAnchor(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    document_id: str = Field(min_length=1, max_length=36)
+    revision_id: str = Field(min_length=1, max_length=36)
+    chunk_id: str = Field(min_length=1, max_length=255)
+
+
+class QueryConceptContext(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(min_length=1, max_length=1024)
+    anchors: list[QueryConceptAnchor] = Field(min_length=1, max_length=4)
+
+
 class QueryCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     question: str = Field(min_length=1, max_length=8_000)
     document_ids: list[str] | None = Field(default=None, max_length=100)
     conversation_id: str | None = Field(default=None, min_length=1, max_length=36)
+    concept_context: QueryConceptContext | None = None
 
 
 class ConversationCreate(BaseModel):
@@ -232,6 +249,33 @@ async def create_query(
                 title="document_ids 不能重复",
             )
         document_ids = frozenset(payload.document_ids)
+    concept_context = None
+    if payload.concept_context is not None:
+        chunk_ids = [anchor.chunk_id for anchor in payload.concept_context.anchors]
+        normalized_label = payload.concept_context.label.strip()
+        blank_anchor = any(
+            not anchor.document_id.strip()
+            or not anchor.revision_id.strip()
+            or not anchor.chunk_id.strip()
+            for anchor in payload.concept_context.anchors
+        )
+        if not normalized_label or blank_anchor or len(chunk_ids) != len(set(chunk_ids)):
+            raise ApiProblem(
+                status=422,
+                code=ProblemCode.INVALID_REQUEST,
+                title="concept_context 无效",
+            )
+        concept_context = ConceptEvidenceContext(
+            label=normalized_label,
+            anchors=tuple(
+                ConceptEvidenceAnchor(
+                    document_id=anchor.document_id,
+                    revision_id=anchor.revision_id,
+                    chunk_id=anchor.chunk_id,
+                )
+                for anchor in payload.concept_context.anchors
+            ),
+        )
     try:
         snapshot = await _service(request).execute(
             await _principal(request),
@@ -239,6 +283,7 @@ async def create_query(
             payload.question,
             document_ids=document_ids,
             conversation_id=payload.conversation_id,
+            concept_context=concept_context,
         )
     except LookupError as exc:
         raise ApiProblem(

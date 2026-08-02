@@ -2,17 +2,24 @@ import { FileUp, LoaderCircle, X } from 'lucide-react'
 import { useRef, useState, type FormEvent } from 'react'
 
 import { studyApi } from '../../api/client'
-import type { CorpusRole, DocumentRecord } from '../../api/types'
+import type { DocumentRecord } from '../../api/types'
 import { ErrorNotice } from '../../components/ui/ErrorNotice'
 import { Modal } from '../../components/ui/Modal'
 
-const roles: Array<{ value: CorpusRole; label: string }> = [
-  { value: 'corpus', label: '课程资料' },
-  { value: 'questions', label: '题目' },
-  { value: 'gold_answers', label: '答案（不入索引）' },
-  { value: 'ocr_gold', label: 'OCR 标注（不入索引）' },
-  { value: 'excluded', label: '排除' },
-]
+const supportedUploadExtensions = new Set([
+  'pdf',
+  'md',
+  'markdown',
+  'jpg',
+  'jpeg',
+  'png',
+])
+const maxMarkdownUploadBytes = 5 * 1024 * 1024
+
+interface FileSelectionError {
+  error: Error
+  title: string
+}
 
 interface UploadDialogProps {
   courseId: string
@@ -21,12 +28,48 @@ interface UploadDialogProps {
   onUploaded: (document: DocumentRecord) => void
 }
 
-export function UploadDialog({ courseId, open, onClose, onUploaded }: UploadDialogProps) {
+function isSupportedUpload(file: File): boolean {
+  const separator = file.name.lastIndexOf('.')
+  if (separator < 0) return false
+  return supportedUploadExtensions.has(
+    file.name.slice(separator + 1).toLowerCase(),
+  )
+}
+
+function isMarkdownUpload(file: File): boolean {
+  const extension = file.name.slice(file.name.lastIndexOf('.') + 1).toLowerCase()
+  return extension === 'md' || extension === 'markdown'
+}
+
+function fileSelectionError(file: File): FileSelectionError | null {
+  if (!isSupportedUpload(file)) {
+    return {
+      error: new Error(
+        `暂不支持“${file.name}”。请选择 PDF、Markdown（.md/.markdown）、JPG、JPEG 或 PNG 文件；PPTX、DOCX 和 TIFF 当前不可上传。`,
+      ),
+      title: '文件格式不支持',
+    }
+  }
+  if (isMarkdownUpload(file) && file.size > maxMarkdownUploadBytes) {
+    return {
+      error: new Error('Markdown 单个文件不能超过 5 MB；请拆分章节或转换为 PDF。'),
+      title: 'Markdown 文件过大',
+    }
+  }
+  return null
+}
+
+export function UploadDialog({
+  courseId,
+  open,
+  onClose,
+  onUploaded,
+}: UploadDialogProps) {
   const [file, setFile] = useState<File | null>(null)
-  const [role, setRole] = useState<CorpusRole>('corpus')
   const [progress, setProgress] = useState(0)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<unknown>(null)
+  const [fileError, setFileError] = useState<FileSelectionError | null>(null)
   const abortRef = useRef<AbortController | null>(null)
 
   const resetAndClose = () => {
@@ -36,12 +79,37 @@ export function UploadDialog({ courseId, open, onClose, onUploaded }: UploadDial
     setProgress(0)
     setPending(false)
     setError(null)
+    setFileError(null)
     onClose()
+  }
+
+  const selectFile = (selectedFile: File | null) => {
+    setProgress(0)
+    setError(null)
+    if (selectedFile === null) {
+      setFile(null)
+      setFileError(null)
+      return
+    }
+    const selectionError = fileSelectionError(selectedFile)
+    if (selectionError) {
+      setFile(null)
+      setFileError(selectionError)
+      return
+    }
+    setFile(selectedFile)
+    setFileError(null)
   }
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
     if (!file || pending) return
+    const selectionError = fileSelectionError(file)
+    if (selectionError) {
+      setFile(null)
+      setFileError(selectionError)
+      return
+    }
     const controller = new AbortController()
     abortRef.current = controller
     setPending(true)
@@ -50,7 +118,7 @@ export function UploadDialog({ courseId, open, onClose, onUploaded }: UploadDial
       const document = await studyApi.uploadDocument(
         courseId,
         file,
-        role,
+        'corpus',
         setProgress,
         controller.signal,
       )
@@ -65,7 +133,7 @@ export function UploadDialog({ courseId, open, onClose, onUploaded }: UploadDial
 
   return (
     <Modal
-      description="PDF、PPTX、PNG、JPEG 或 TIFF"
+      description="上传课程资料"
       footer={
         <>
           <button className="button" onClick={resetAndClose} type="button">
@@ -78,7 +146,11 @@ export function UploadDialog({ courseId, open, onClose, onUploaded }: UploadDial
             form="document-upload-form"
             type="submit"
           >
-            {pending ? <LoaderCircle aria-hidden="true" className="spin" size={16} /> : <FileUp aria-hidden="true" size={16} />}
+            {pending ? (
+              <LoaderCircle aria-hidden="true" className="spin" size={16} />
+            ) : (
+              <FileUp aria-hidden="true" size={16} />
+            )}
             上传
           </button>
         </>
@@ -90,28 +162,33 @@ export function UploadDialog({ courseId, open, onClose, onUploaded }: UploadDial
       <form id="document-upload-form" onSubmit={(event) => void submit(event)}>
         <label className="file-picker" htmlFor="document-file">
           <FileUp aria-hidden="true" size={22} />
-          <span>{file?.name ?? '选择文件'}</span>
+          <span className="file-picker__copy">
+            <strong>{file?.name ?? '选择文件'}</strong>
+            <small id="document-file-formats">
+              支持 PDF、Markdown（.md/.markdown）、JPG、JPEG、PNG
+            </small>
+            <small id="document-file-markdown">
+              Markdown 将按标题和段落定位来源，单个文件最大 5 MB。
+            </small>
+          </span>
           <input
-            accept=".pdf,.pptx,.png,.jpg,.jpeg,.tif,.tiff"
+            accept=".pdf,.md,.markdown,.jpg,.jpeg,.png"
+            aria-describedby="document-file-formats document-file-markdown"
+            aria-invalid={fileError ? true : undefined}
+            disabled={pending}
             id="document-file"
-            onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+            onChange={(event) => {
+              const selectedFile = event.target.files?.[0] ?? null
+              selectFile(selectedFile)
+              if (selectedFile && fileSelectionError(selectedFile))
+                event.target.value = ''
+            }}
             type="file"
           />
         </label>
-        <label className="field" htmlFor="corpus-role">
-          <span>资料角色</span>
-          <select
-            id="corpus-role"
-            onChange={(event) => setRole(event.target.value as CorpusRole)}
-            value={role}
-          >
-            {roles.map((item) => (
-              <option key={item.value} value={item.value}>
-                {item.label}
-              </option>
-            ))}
-          </select>
-        </label>
+        {fileError ? (
+          <ErrorNotice error={fileError.error} title={fileError.title} />
+        ) : null}
         <div
           aria-label={`上传进度 ${progress}%`}
           aria-valuemax={100}

@@ -1,5 +1,7 @@
 """HTTP response models for the read-only course knowledge graph."""
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from study_agent.modules.knowledge_graph import (
@@ -15,7 +17,9 @@ class KnowledgeGraphOccurrenceResponse(BaseModel):
     document_name: str = Field(min_length=1)
     revision_id: str = Field(min_length=1)
     chunk_id: str = Field(min_length=1)
+    locator_kind: Literal["page", "slide", "section"]
     page_ordinal: int = Field(ge=1)
+    section_path: list[str] = Field(default_factory=list)
     chunk_ordinal: int = Field(ge=1)
     count: int = Field(ge=1)
     excerpt: str = Field(min_length=1, max_length=182)

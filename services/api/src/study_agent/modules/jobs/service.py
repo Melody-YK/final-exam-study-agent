@@ -803,6 +803,11 @@ class JobService:
                 job.retryable = False
                 job.failure_code = None
                 job.failure_summary = None
+                job.progress = {
+                    "phase": "completed",
+                    "completed_pages": outcome.total_page_count,
+                    "total_pages": outcome.total_page_count,
+                }
                 event_type = "job.succeeded"
                 event_payload: dict[str, object] = {
                     "page_count": outcome.total_page_count,
@@ -817,6 +822,13 @@ class JobService:
                 job.retryable = retrying
                 job.failure_code = "INCOMPLETE_PAGE_COVERAGE"
                 job.failure_summary = None
+                job.progress = {
+                    "phase": "partial_failed" if not retrying else "retry_wait",
+                    "completed_pages": max(
+                        0, outcome.total_page_count - len(outcome.missing_page_ordinals)
+                    ),
+                    "total_pages": outcome.total_page_count,
+                }
                 job.requested_pages = list(outcome.missing_page_ordinals)
                 if retrying and job.parser_profile == "native-v1":
                     ocr_required_pages = set(

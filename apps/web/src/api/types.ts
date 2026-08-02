@@ -65,6 +65,7 @@ export type QuerySnapshot = Omit<GeneratedQueryResponse, 'answer'> & {
   answer: StructuredAnswer | null
 }
 export type QueryCreate = Schema<'QueryCreate'>
+export type QueryConceptContext = Schema<'QueryConceptContext'>
 
 export type ConversationRecord = Schema<'ConversationResponse'>
 export type ConversationCreate = Schema<'ConversationCreate'>
@@ -72,15 +73,20 @@ export type ConversationCreate = Schema<'ConversationCreate'>
 export interface JobEventData {
   status?: string
   phase?: string
+  page_count?: number
+  preview_revision_id?: string | null
   completed_pages?: number
   total_pages?: number
   code?: string
   failed_pages?: number[]
+  retryable?: boolean
 }
 
 export type CitationSource = Schema<'CitationSourceResponse'>
+export type SourcePreview = Schema<'SourcePreviewResponse'>
 
 export type NoteSource = Schema<'NoteSourceResponse'>
+export type NoteKnowledgePoint = Schema<'NoteKnowledgePointResponse'>
 export type NoteRecord = Schema<'NoteResponse'>
 export type NoteCreate = Schema<'NoteCreate'>
 export type NotePatch = Schema<'NotePatch'>
@@ -95,6 +101,13 @@ export type NoteItemSnapshot = Schema<'NoteItemSnapshot'>
 type GeneratedNoteBatchSnapshot = Schema<'LocalDemoNoteBatchSnapshot'>
 export type NoteBatchSnapshot = Omit<GeneratedNoteBatchSnapshot, 'style'> & {
   style: NoteBatchStyle
+}
+
+export interface NoteGenerationEventData {
+  delta?: string
+  phase?: string
+  status?: string
+  failure_code?: string | null
 }
 
 export type RetrievalCandidate = Schema<'LabCandidateResponse'>
@@ -115,6 +128,10 @@ export type AdminDiagnostics = Schema<'AdminDiagnosticsResponse'>
 export type AdminDocument = Schema<'AdminDocumentResponse'>
 export type AdminDocuments = Schema<'AdminDocumentsResponse'>
 export type AdminDocumentReviewRequest = Schema<'AdminDocumentReviewRequest'>
+export type AdminCourse = Schema<'AdminCourseResponse'>
+export type AdminCourses = Schema<'AdminCoursesResponse'>
+export type AdminNote = Schema<'AdminNoteResponse'>
+export type AdminNotes = Schema<'AdminNotesResponse'>
 
 export type KnowledgeGraphOccurrence = Schema<'KnowledgeGraphOccurrenceResponse'>
 export type KnowledgeGraphNode = Schema<'KnowledgeGraphNodeResponse'>
@@ -128,5 +145,6 @@ export interface EventEnvelope<T = Record<string, unknown>> {
   sequence: number
   occurred_at: string
   trace_id: string
+  event_type: string
   data: T
 }

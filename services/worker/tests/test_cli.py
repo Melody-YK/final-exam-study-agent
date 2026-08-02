@@ -21,6 +21,8 @@ def _valid_local_env(tmp_path: Path) -> dict[str, str]:
         "WORKER_API_BASE_URL": "http://127.0.0.1:8000",
         "WORKER_TOKEN": "must-not-be-printed",
         "WORKER_WORK_ROOT": str(tmp_path / "worker"),
+        "WORKER_PADDLE_PROFILE_BIN": "",
+        "WORKER_PADDLE_MODEL_CACHE": "",
     }
 
 

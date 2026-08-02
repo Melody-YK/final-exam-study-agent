@@ -421,6 +421,11 @@
   margin-top: 7px;
 }
 
+.knowledge-graph-occurrence-open {
+  margin-top: 8px;
+  width: 100%;
+}
+
 @media (max-width: 940px) {
   .knowledge-graph-workspace {
     grid-template-columns: minmax(0, 1fr) 285px;

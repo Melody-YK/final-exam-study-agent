@@ -1,6 +1,6 @@
 # 期末复习智能体
 
-面向大学生期末周的课程资料学习工作区。系统把 PDF、PPTX 和图片转成可追踪的课程知识库，提供带原页引用的问答、证据不足拒答、章节笔记和检索工程证据。
+面向大学生期末周的课程资料学习工作区。系统把 PDF、Markdown 和图片转成可追踪的课程知识库，提供带原页或章节引用的问答、证据不足拒答、章节笔记和检索工程证据。新上传支持 PDF、Markdown、JPG/JPEG 和 PNG，Markdown 单文件上限为 5 MB；PPT/PPTX、DOCX、TIFF 等请先转换为 PDF 或 Markdown。
 
 ## 当前状态
 
@@ -12,6 +12,9 @@
 - Node.js 24+
 - uv
 - Docker Desktop / Docker Compose
+- Poppler `pdftotext`（建议安装；低内存修复部分 PDF 的损坏中文文字层）
+
+macOS 可用 `brew install poppler`，Ubuntu/Debian 可用 `sudo apt-get install poppler-utils`；通过 `pdftotext -v` 检查是否可用。
 
 ## 开发命令
 

@@ -9,6 +9,36 @@ from study_contracts import Evidence, StructuredAnswer
 
 
 @dataclass(frozen=True, slots=True)
+class ConceptEvidenceAnchor:
+    """One graph occurrence selected as retrieval context."""
+
+    document_id: str
+    revision_id: str
+    chunk_id: str
+
+    def __post_init__(self) -> None:
+        if not all(value.strip() for value in (self.document_id, self.revision_id, self.chunk_id)):
+            raise ValueError("concept evidence anchor values must not be blank")
+
+
+@dataclass(frozen=True, slots=True)
+class ConceptEvidenceContext:
+    """Principal-scoped graph context that may seed retrieval."""
+
+    label: str
+    anchors: tuple[ConceptEvidenceAnchor, ...]
+
+    def __post_init__(self) -> None:
+        if not self.label.strip():
+            raise ValueError("concept label must not be blank")
+        if not self.anchors:
+            raise ValueError("concept evidence context requires anchors")
+        chunk_ids = [anchor.chunk_id for anchor in self.anchors]
+        if len(chunk_ids) != len(set(chunk_ids)):
+            raise ValueError("concept evidence anchors must be unique")
+
+
+@dataclass(frozen=True, slots=True)
 class AuthorizedEvidence:
     """One current, principal-scoped retrieval result offered to the model."""
 

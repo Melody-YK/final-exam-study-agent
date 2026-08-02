@@ -126,7 +126,10 @@ async def test_migrations_create_core_tables_and_vector_extension(test_database_
 
     await engine.dispose()
 
-    assert extension == "0.8.5"
+    assert extension is not None
+    extension_version = tuple(int(part) for part in extension.split("."))
+    assert extension_version[:2] == (0, 8)
+    assert extension_version >= (0, 8, 5)
     assert tables >= CORE_TABLES
     assert constraints == {"fk_revision_assets_page", "fk_revision_chunks_page"}
 

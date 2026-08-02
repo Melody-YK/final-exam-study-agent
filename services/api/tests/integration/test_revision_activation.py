@@ -18,6 +18,7 @@ from study_agent.infrastructure.db.models import (
     RevisionBlockModel,
     RevisionChunkModel,
     RevisionPageModel,
+    StoredObjectModel,
 )
 from study_agent.infrastructure.db.session import Database
 from study_agent.main import create_app
@@ -680,12 +681,21 @@ async def test_native_pptx_claim_does_not_require_rendering_capability(
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
-        await _enqueue(
-            client,
-            payload=b"PK\x03\x04native-pptx-structure",
-            media_type=PPTX_MEDIA_TYPE,
-            filename="slides.pptx",
-        )
+        document_id = await _enqueue(client)
+        async with database.session(principal) as session:
+            document = await session.get(DocumentModel, document_id)
+            job = await session.scalar(
+                select(ParseJobModel).where(ParseJobModel.document_id == document_id)
+            )
+            assert document is not None
+            assert job is not None
+            stored_object = await session.get(StoredObjectModel, document.stored_object_id)
+            assert stored_object is not None
+            document.filename = "slides.pptx"
+            document.media_type = PPTX_MEDIA_TYPE
+            stored_object.media_type = PPTX_MEDIA_TYPE
+            job.media_type = PPTX_MEDIA_TYPE
+
         lease = await _claim(
             client,
             "worker-without-libreoffice",
@@ -695,7 +705,9 @@ async def test_native_pptx_claim_does_not_require_rendering_capability(
         assert lease["media_type"] == PPTX_MEDIA_TYPE
 
     async with database.session(principal) as session:
-        job = await session.scalar(select(ParseJobModel))
+        job = await session.scalar(
+            select(ParseJobModel).where(ParseJobModel.document_id == document_id)
+        )
         assert job is not None
         assert job.requires_rendering is False
 

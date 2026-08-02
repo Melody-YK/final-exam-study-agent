@@ -2,14 +2,16 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   BookOpen,
   CircleAlert,
+  CheckCircle2,
   FilePlus2,
   LoaderCircle,
   MessageSquareText,
   Network,
   Radio,
   Trash2,
+  X,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router'
 
 import { studyApi } from '../../api/client'
@@ -21,12 +23,19 @@ import { CapabilityBanner } from '../status/CapabilityBanner'
 import { useWorkspace } from '../../app/WorkspaceContext'
 import { DocumentTable } from './DocumentTable'
 import { UploadDialog } from './UploadDialog'
-import { useJobEvents } from './useJobEvents'
+import { useJobEvents, type JobTerminalEvent } from './useJobEvents'
 import './library-actions.css'
 
-const SUPPORTED_PPTX_MEDIA_TYPE =
-  'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+const MARKDOWN_MEDIA_TYPE = 'text/markdown'
 const FAILURE_STATUSES = new Set(['partial_failed', 'failed', 'retry_wait'])
+const ACTIVE_DOCUMENT_STATUSES = new Set([
+  'uploading',
+  'queued',
+  'leased',
+  'processing',
+  'parsed_index_blocked',
+  'indexing',
+])
 
 type ReadinessBucket = 'ready' | 'review' | 'preparing' | 'attention'
 
@@ -54,9 +63,8 @@ function isNoteReadyDocument(document: DocumentRecord): boolean {
   return (
     isStudyReadyDocument(document) &&
     document.corpus_role === 'corpus' &&
-    !document.filename.toLowerCase().endsWith('.ppt') &&
-    (document.media_type === 'application/pdf' ||
-      document.media_type === SUPPORTED_PPTX_MEDIA_TYPE)
+    !/\.pptx?$/.test(document.filename.toLowerCase()) &&
+    (document.media_type === 'application/pdf' || document.media_type === MARKDOWN_MEDIA_TYPE)
   )
 }
 
@@ -150,20 +158,60 @@ export function LibraryPage() {
   const [uploadOpen, setUploadOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<DocumentRecord | null>(null)
   const [deletionId, setDeletionId] = useState<string | null>(null)
+  const [jobNotice, setJobNotice] = useState<{
+    tone: 'success' | 'danger'
+    message: string
+  } | null>(null)
+  const previousStatuses = useRef(new Map<string, string>())
 
   const documentsQuery = useQuery({
     queryKey: ['documents', courseId],
     queryFn: () => studyApi.listDocuments(courseId),
+    refetchInterval: (query) => {
+      const currentDocuments = query.state.data as DocumentRecord[] | undefined
+      return currentDocuments?.some((document) => ACTIVE_DOCUMENT_STATUSES.has(document.status))
+        ? 2_000
+        : false
+    },
   })
-  const documents = documentsQuery.data ?? []
+  const documents = useMemo(() => documentsQuery.data ?? [], [documentsQuery.data])
   const providerAvailable = capabilities?.provider.status === 'available'
   const noteWorkflowAvailable =
     capabilities?.note_workflow.enabled === true &&
     capabilities.note_workflow.generation.status === 'available'
+  const handleTerminalJobEvent = useCallback(
+    ({ eventType, jobId }: JobTerminalEvent) => {
+      const document = documents.find((item) => item.parse_job_id === jobId)
+      if (eventType === 'job.succeeded') {
+        if (!document || document.status === 'ready') return
+        setJobNotice({ tone: 'success', message: '资料解析完成，正在准备学习入口。' })
+        return
+      }
+      if (!document || FAILURE_STATUSES.has(document.status)) return
+      setJobNotice({
+        tone: 'danger',
+        message:
+          eventType === 'job.cancelled' ? '资料解析已取消。' : '资料解析未完成，请检查失败页后重试。',
+      })
+    },
+    [documents],
+  )
   const connection = useJobEvents(
     courseId,
     documents.flatMap((document) => (document.parse_job_id ? [document.parse_job_id] : [])),
+    handleTerminalJobEvent,
   )
+
+  useEffect(() => {
+    if (!documentsQuery.isSuccess) return
+    for (const document of documents) {
+      const previous = previousStatuses.current.get(document.id)
+      if (previous && previous !== 'ready' && document.status === 'ready') {
+        setJobNotice({ tone: 'success', message: '资料已准备完成，现在可以学习了。' })
+      }
+      previousStatuses.current.set(document.id, document.status)
+    }
+  }, [documents, documentsQuery.isSuccess])
   const deletionQuery = useQuery({
     queryKey: ['deletion', deletionId],
     queryFn: () => studyApi.getDeletion(deletionId ?? ''),
@@ -211,6 +259,24 @@ export function LibraryPage() {
             ? '任务事件重连中'
             : '当前无运行任务'}
       </div>
+      {jobNotice ? (
+        <div className={`library-job-notice library-job-notice--${jobNotice.tone}`} role="status">
+          {jobNotice.tone === 'success' ? (
+            <CheckCircle2 aria-hidden="true" size={17} />
+          ) : (
+            <CircleAlert aria-hidden="true" size={17} />
+          )}
+          <span>{jobNotice.message}</span>
+          <button
+            aria-label="关闭提示"
+            className="library-job-notice__close"
+            onClick={() => setJobNotice(null)}
+            type="button"
+          >
+            <X aria-hidden="true" size={16} />
+          </button>
+        </div>
+      ) : null}
       {documentsQuery.isSuccess ? (
         <ReadyStudyActions
           documents={documents}
@@ -256,7 +322,7 @@ export function LibraryPage() {
         <ErrorNotice
           error={retryMutation.error}
           onRetry={() => retryMutation.variables && retryMutation.mutate(retryMutation.variables)}
-          title="重试未提交"
+          title="解析任务未提交"
         />
       ) : null}
       <UploadDialog

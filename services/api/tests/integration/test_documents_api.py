@@ -21,6 +21,7 @@ from study_agent.infrastructure.db.models import (
 )
 from study_agent.infrastructure.db.session import Database
 from study_agent.main import create_app
+from study_agent.modules.courses.upload_validation import MAX_MARKDOWN_UPLOAD_BYTES
 from study_agent.storage.local import LocalStorage
 
 
@@ -265,7 +266,7 @@ async def test_upload_complete_rejects_untrusted_metadata_and_allows_corrected_r
         assert corrected.status_code == 202
 
         fake_pptx = b"not an OOXML presentation"
-        pptx_created = await client.post(
+        pptx_rejected = await client.post(
             f"/api/v1/courses/{course_id}/documents",
             json=_declaration(
                 fake_pptx,
@@ -275,24 +276,9 @@ async def test_upload_complete_rejects_untrusted_metadata_and_allows_corrected_r
                 ),
             ),
         )
-        pptx_document = pptx_created.json()["document"]
-        pptx_upload = pptx_created.json()["upload"]
-        await client.put(
-            pptx_upload["url"],
-            content=fake_pptx,
-            headers={
-                "Content-Type": (
-                    "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-                )
-            },
-        )
-        bad_magic = await client.post(
-            f"/api/v1/documents/{pptx_document['id']}/upload:complete",
-            json={"upload_session_id": pptx_upload["id"]},
-            headers={"Idempotency-Key": "bad-pptx-magic"},
-        )
-        assert bad_magic.status_code == 415
-        assert bad_magic.json()["code"] == "UNSUPPORTED_MEDIA_TYPE"
+        assert pptx_rejected.status_code == 415
+        assert pptx_rejected.json()["code"] == "UNSUPPORTED_MEDIA_TYPE"
+        assert "转换为 PDF 或 Markdown" in pptx_rejected.json()["detail"]
 
         short_payload = b"%PDF-short"
         short_created = await client.post(
@@ -313,6 +299,108 @@ async def test_upload_complete_rejects_untrusted_metadata_and_allows_corrected_r
         )
         assert size_mismatch.status_code == 409
         assert size_mismatch.json()["code"] == "STATE_CONFLICT"
+
+    await database.dispose()
+
+
+@pytest.mark.integration
+async def test_markdown_upload_validates_complete_utf8_content(
+    test_database_url: str, tmp_path: Path
+) -> None:
+    await upgrade_database(test_database_url)
+    database = Database(test_database_url)
+    storage = LocalStorage(tmp_path)
+    app = create_app(
+        settings=_settings(test_database_url, tmp_path),
+        database=database,
+        storage=storage,
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        course = await client.post("/api/v1/courses", json={"title": "编译原理"})
+        course_id = course.json()["id"]
+        oversized = await client.post(
+            f"/api/v1/courses/{course_id}/documents",
+            json=_declaration(
+                b"# oversized",
+                filename="oversized.md",
+                media_type="text/markdown",
+                declared_size=MAX_MARKDOWN_UPLOAD_BYTES + 1,
+            ),
+        )
+        assert oversized.status_code == 413
+        assert oversized.json()["code"] == "FILE_TOO_LARGE"
+        assert "不能超过 5 MB" in oversized.json()["detail"]
+
+        valid_payload = "# 词法分析\n\n词法分析把字符流转换成 token。".encode()
+        created = await client.post(
+            f"/api/v1/courses/{course_id}/documents",
+            json=_declaration(
+                valid_payload,
+                filename="review.md",
+                media_type="text/markdown",
+            ),
+        )
+        assert created.status_code == 201
+        document = created.json()["document"]
+        upload = created.json()["upload"]
+        uploaded = await client.put(
+            upload["url"],
+            content=valid_payload,
+            headers={"Content-Type": "text/markdown"},
+        )
+        assert uploaded.status_code == 200
+        completed = await client.post(
+            f"/api/v1/documents/{document['id']}/upload:complete",
+            json={"upload_session_id": upload["id"]},
+            headers={"Idempotency-Key": "complete-markdown"},
+        )
+        assert completed.status_code == 202
+        assert completed.json()["media_type"] == "text/markdown"
+
+        principal = LocalPrincipalProvider().resolve("127.0.0.1")
+        async with database.session(principal) as session:
+            parse_job = await session.scalar(
+                select(ParseJobModel).where(ParseJobModel.document_id == document["id"])
+            )
+            assert parse_job is not None
+            assert parse_job.parser_profile == "native-v1"
+            assert parse_job.media_type == "text/markdown"
+
+        invalid_cases = (
+            ("nul.md", b"# heading\n\nvalid prefix text\x00binary", "NUL"),
+            ("encoding.md", b"# heading\n\nvalid prefix text\xff", "UTF-8"),
+            ("empty.md", b" \r\n\t ", "不能为空"),
+        )
+        for index, (filename, payload, expected_detail) in enumerate(invalid_cases, start=1):
+            invalid_created = await client.post(
+                f"/api/v1/courses/{course_id}/documents",
+                json=_declaration(
+                    payload,
+                    filename=filename,
+                    media_type="text/markdown",
+                ),
+            )
+            assert invalid_created.status_code == 201
+            invalid_document = invalid_created.json()["document"]
+            invalid_upload = invalid_created.json()["upload"]
+            assert (
+                await client.put(
+                    invalid_upload["url"],
+                    content=payload,
+                    headers={"Content-Type": "text/markdown"},
+                )
+            ).status_code == 200
+            rejected = await client.post(
+                f"/api/v1/documents/{invalid_document['id']}/upload:complete",
+                json={"upload_session_id": invalid_upload["id"]},
+                headers={"Idempotency-Key": f"reject-markdown-{index}"},
+            )
+            assert rejected.status_code == 415
+            assert rejected.json()["code"] == "UNSUPPORTED_MEDIA_TYPE"
+            assert expected_detail in rejected.json()["detail"]
 
     await database.dispose()
 

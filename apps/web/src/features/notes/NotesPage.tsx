@@ -3,17 +3,20 @@ import {
   AlertTriangle,
   BookOpen,
   Check,
+  Eye,
   FileClock,
   FilePlus2,
   FileText,
   LoaderCircle,
   Pencil,
-  Presentation,
   RefreshCw,
   Save,
+  Search,
+  X,
 } from 'lucide-react'
-import ReactMarkdown from 'react-markdown'
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import ReactMarkdown, { type Components } from 'react-markdown'
+import React, { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import type { Element as HastElement } from 'hast'
 
 import { ApiError, studyApi } from '../../api/client'
 import type {
@@ -22,18 +25,21 @@ import type {
   NoteBatchSnapshot,
   NoteBatchStatus,
   NoteBatchStyle,
+  NoteGenerationEventData,
   NoteGenerationPhase,
   NoteItemSnapshot,
   NoteRecord,
+  SourcePreview,
 } from '../../api/types'
 import { useWorkspace } from '../../app/WorkspaceContext'
 import { ErrorNotice } from '../../components/ui/ErrorNotice'
 import { Modal } from '../../components/ui/Modal'
 import { PageHeader } from '../../components/ui/PageHeader'
 import { StatusBadge } from '../../components/ui/StatusBadge'
+import { SourceViewer } from '../source-viewer/SourceViewer'
+import { formatSourceLocator } from '../source-viewer/sourceLocator'
 
-const SUPPORTED_PPTX_MEDIA_TYPE =
-  'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+const MARKDOWN_MEDIA_TYPE = 'text/markdown'
 
 const TERMINAL_BATCH_STATUSES: NoteBatchStatus[] = [
   'partial_success',
@@ -62,15 +68,15 @@ const NOTE_STYLE_OPTIONS: ReadonlyArray<{
     value: 'outline',
     label: '结构提纲',
     density: '中等 · 最多 30 条',
-    intendedUse: '按资料和页码快速梳理层级',
-    structure: ['1. 资料名称', '1.1 第 1 页', '1. 关键知识点'],
+    intendedUse: '按资料和来源位置快速梳理层级',
+    structure: ['1. 资料名称', '1.1 来源位置', '1. 关键知识点'],
   },
   {
     value: 'complete',
     label: '完整讲义',
     density: '最长 · 最多 40 条 / 12,000 字符',
     intendedUse: '按来源顺序保留完整上下文',
-    structure: ['资料名称', '第 1 页', '来源正文段落'],
+    structure: ['资料名称', '来源位置', '来源正文段落'],
   },
 ]
 
@@ -85,17 +91,15 @@ function isNoteSourceDocument(document: DocumentRecord): boolean {
     !document.active_revision_id ||
     document.corpus_role !== 'corpus' ||
     document.indexable !== true ||
-    document.filename.toLowerCase().endsWith('.ppt')
+    /\.pptx?$/.test(document.filename.toLowerCase())
   ) {
     return false
   }
-  return (
-    document.media_type === 'application/pdf' || document.media_type === SUPPORTED_PPTX_MEDIA_TYPE
-  )
+  return document.media_type === 'application/pdf' || document.media_type === MARKDOWN_MEDIA_TYPE
 }
 
-function documentKind(document: DocumentRecord): 'PDF' | 'PPTX' {
-  return document.media_type === SUPPORTED_PPTX_MEDIA_TYPE ? 'PPTX' : 'PDF'
+function documentKind(document: DocumentRecord): 'PDF' | 'Markdown' {
+  return document.media_type === MARKDOWN_MEDIA_TYPE ? 'Markdown' : 'PDF'
 }
 
 function noteBatchStorageKey(courseId: string): string {
@@ -194,6 +198,265 @@ function currentBatchItem(batch: NoteBatchSnapshot): NoteItemSnapshot | undefine
   return (
     batch.items.find((item) => !TERMINAL_ITEM_STATUSES.has(item.status)) ??
     batch.items[batch.items.length - 1]
+  )
+}
+
+function markdownText(children: React.ReactNode): string {
+  return React.Children.toArray(children)
+    .map((child) => {
+      if (typeof child === 'string' || typeof child === 'number') return String(child)
+      if (React.isValidElement<{ children?: React.ReactNode }>(child)) {
+        return markdownText(child.props.children)
+      }
+      return ''
+    })
+    .join('')
+}
+
+function normalizeMarkdownText(value: string): string {
+  return value.replace(/\s+/g, ' ').trim()
+}
+
+function stripLegacySourceMapping(body: string): string {
+  return body.replace(/^#{2,6}\s+来源对应\s*$[\s\S]*/m, '').trim()
+}
+
+interface MarkdownHeading {
+  id: string
+  level: number
+  line: number
+  text: string
+}
+
+function headingText(value: string): string {
+  return value
+    .replace(/\s+#+\s*$/, '')
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/[`*_~]/g, '')
+    .trim()
+}
+
+function headingAnchorId(text: string, line: number): string {
+  const slug = text
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48)
+  return `note-heading-${line}-${slug || 'section'}`
+}
+
+function extractMarkdownHeadings(body: string): MarkdownHeading[] {
+  return stripLegacySourceMapping(body)
+    .split(/\r?\n/)
+    .flatMap((line, index) => {
+      const match = /^(#{1,6})\s+(.+?)\s*$/.exec(line)
+      if (!match) return []
+      const rawLevel = match[1]
+      const rawText = match[2]
+      if (!rawLevel || !rawText) return []
+      const text = headingText(rawText)
+      if (!text) return []
+      const lineNumber = index + 1
+      return [{
+        id: headingAnchorId(text, lineNumber),
+        level: rawLevel.length,
+        line: lineNumber,
+        text,
+      }]
+    })
+}
+
+interface NoteSectionNode {
+  children: NoteSectionNode[]
+  label: string
+  notes: NoteRecord[]
+  path: string[]
+}
+
+function noteSectionPath(note: NoteRecord): string[] {
+  return note.section_path.length ? note.section_path : ['未分类']
+}
+
+function buildNoteSectionTree(notes: NoteRecord[]): NoteSectionNode[] {
+  const roots: NoteSectionNode[] = []
+  for (const note of notes) {
+    let level = roots
+    const path: string[] = []
+    const sectionPath = noteSectionPath(note)
+    for (const [index, label] of sectionPath.entries()) {
+      path.push(label)
+      let node = level.find((candidate) => candidate.label === label)
+      if (!node) {
+        node = { children: [], label, notes: [], path: [...path] }
+        level.push(node)
+      }
+      if (index === sectionPath.length - 1) {
+        node.notes.push(note)
+      }
+      level = node.children
+    }
+  }
+  return roots
+}
+
+function noteMatchesSearch(note: NoteRecord, query: string): boolean {
+  const haystack = [note.title, note.section_path.join(' / '), note.body_markdown]
+    .join('\n')
+    .toLocaleLowerCase()
+  return haystack.includes(query.toLocaleLowerCase())
+}
+
+function matchingKnowledgePoint(
+  text: string,
+  points: NoteRecord['knowledge_points'],
+) {
+  const normalized = normalizeMarkdownText(text)
+  if (!normalized) return undefined
+  return points.find((point) => {
+    const pointText = normalizeMarkdownText(point.text)
+    return (
+      normalized === pointText ||
+      normalized.startsWith(`${pointText} (来源:`) ||
+      normalized.startsWith(`${pointText}（来源：`)
+    )
+  })
+}
+
+function NoteMarkdown({ body, note }: { body: string; note: NoteRecord }) {
+  const [preview, setPreview] = useState<SourcePreview | null>(null)
+  const previewMutation = useMutation({
+    mutationFn: (sourceId: string) => studyApi.getNoteSourcePreview(note.id, sourceId),
+    onSuccess: setPreview,
+  })
+  const points = note.knowledge_points ?? []
+  const sourceById = useMemo(
+    () => new Map(note.sources.map((source) => [source.id, source])),
+    [note.sources],
+  )
+  const sourceLinks = (point: NoteRecord['knowledge_points'][number]) => (
+    <span aria-label="知识点来源" className="note-inline-sources">
+      {point.source_ids.map((sourceId) => {
+        const source = sourceById.get(sourceId)
+        if (!source) return null
+        return source.available && !source.stale ? (
+          <button
+            className="button button--small note-source-open"
+            disabled={previewMutation.isPending}
+            key={source.id}
+            onClick={() => previewMutation.mutate(source.id)}
+            type="button"
+          >
+            {previewMutation.isPending && previewMutation.variables === source.id ? (
+              <LoaderCircle aria-hidden="true" className="spin" size={14} />
+            ) : (
+              <Eye aria-hidden="true" size={14} />
+            )}
+            查看原文 · {source.document_name} · {formatSourceLocator(source.locator)}
+          </button>
+        ) : (
+          <span className="source-state source-state--unavailable" key={source.id}>
+            来源不可用
+          </span>
+        )
+      })}
+    </span>
+  )
+
+  const renderBlock = (Tag: 'p' | 'li') => ({ children }: { children?: React.ReactNode }) => {
+    const renderedText = markdownText(children)
+    const point = matchingKnowledgePoint(renderedText, points)
+    return (
+      <Tag>
+        {children}
+        {point ? sourceLinks(point) : null}
+      </Tag>
+    )
+  }
+
+  const renderHeading =
+    (Tag: 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6') =>
+    ({ children, node }: { children?: React.ReactNode; node?: HastElement }) => {
+      const text = headingText(markdownText(children))
+      const line = node?.position?.start.line ?? 0
+      return (
+        <Tag id={headingAnchorId(text, line)}>
+          {children}
+        </Tag>
+      )
+    }
+
+  const components: Components = {
+    h1: renderHeading('h1'),
+    h2: renderHeading('h2'),
+    h3: renderHeading('h3'),
+    h4: renderHeading('h4'),
+    h5: renderHeading('h5'),
+    h6: renderHeading('h6'),
+    li: renderBlock('li'),
+    p: renderBlock('p'),
+  }
+
+  return (
+    <>
+      <ReactMarkdown components={components} skipHtml>
+        {stripLegacySourceMapping(body)}
+      </ReactMarkdown>
+      {previewMutation.isError ? (
+        <div className="note-inline-source-error">
+          <ErrorNotice error={previewMutation.error} title="原文不可用" />
+        </div>
+      ) : null}
+      <SourceViewer onClose={() => setPreview(null)} source={preview} />
+    </>
+  )
+}
+
+function NoteSwitcherTree({
+  nodes,
+  onSelect,
+  selectedId,
+}: {
+  nodes: NoteSectionNode[]
+  onSelect: (noteId: string) => void
+  selectedId: string
+}) {
+  return (
+    <ul className="note-switcher__tree">
+      {nodes.map((node) => (
+        <li key={node.path.join('\u0000') || node.label}>
+          <div
+            className="note-section-node"
+            style={{ paddingLeft: `${8 + (node.path.length - 1) * 12}px` }}
+          >
+            {node.label}
+          </div>
+          {node.notes.length ? (
+            <ul className="note-switcher__notes">
+              {node.notes.map((note) => (
+                <li key={note.id}>
+                  <button
+                    aria-label={note.title}
+                    aria-current={note.id === selectedId ? 'page' : undefined}
+                    onClick={() => onSelect(note.id)}
+                    type="button"
+                  >
+                    <FileClock aria-hidden="true" size={16} />
+                    <span>
+                      <strong>{note.title}</strong>
+                      <small>{noteSectionPath(note).join(' / ')}</small>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {node.children.length ? (
+            <NoteSwitcherTree nodes={node.children} onSelect={onSelect} selectedId={selectedId} />
+          ) : null}
+        </li>
+      ))}
+    </ul>
   )
 }
 
@@ -300,12 +563,12 @@ function CreateNoteDialog({
                 <span>
                   {activeSelectedIds.length} / {eligibleDocuments.length} 已选择
                 </span>
-                <span className="muted">已就绪的 PDF/PPTX</span>
+                <span className="muted">已就绪的 PDF/Markdown</span>
               </div>
               <div className="note-batch-documents__list">
                 {eligibleDocuments.map((document) => {
                   const checked = activeSelectedIds.includes(document.id)
-                  const isPptx = documentKind(document) === 'PPTX'
+                  const kind = documentKind(document)
                   return (
                     <label className="note-batch-document" key={document.id}>
                       <input
@@ -317,15 +580,12 @@ function CreateNoteDialog({
                       <span className="note-batch-document__check" aria-hidden="true">
                         {checked ? <Check size={14} /> : null}
                       </span>
-                      {isPptx ? (
-                        <Presentation aria-hidden="true" size={18} />
-                      ) : (
-                        <FileText aria-hidden="true" size={18} />
-                      )}
+                      <FileText aria-hidden="true" size={18} />
                       <span className="note-batch-document__details">
                         <strong>{document.filename}</strong>
                         <small>
-                          {documentKind(document)} · {document.page_count ?? '未知'} 页
+                          {kind} · {document.page_count ?? '未知'}{' '}
+                          {kind === 'Markdown' ? '个章节' : '页'}
                         </small>
                       </span>
                     </label>
@@ -377,16 +637,22 @@ function CreateNoteDialog({
             ))}
           </div>
         </fieldset>
-        <label className="field" htmlFor="new-note-section">
-          <span>章节路径（可选）</span>
-          <input
-            autoFocus
-            id="new-note-section"
-            maxLength={1000}
-            onChange={(event) => setSection(event.target.value)}
-            value={section}
-          />
-        </label>
+        <div className="field">
+          <label htmlFor="new-note-section">
+            <span>章节路径（可选）</span>
+            <input
+              autoFocus
+              id="new-note-section"
+              maxLength={1000}
+              onChange={(event) => setSection(event.target.value)}
+              placeholder="例如：第一章 / 进程管理 / 调度"
+              value={section}
+            />
+          </label>
+          <small className="field__hint" id="new-note-section-hint">
+            保存后会在笔记切换区按层级归类
+          </small>
+        </div>
         <label className="field" htmlFor="new-note-title">
           <span>标题（可选）</span>
           <input
@@ -473,7 +739,8 @@ function NoteEditor({
         <div>
           <h3>{note.title}</h3>
           <span>
-            版本 {note.version} · 生成 {note.generation}
+            版本 {note.version} · 生成 {note.generation} ·{' '}
+            {note.generated_by_model ? 'DeepSeek 生成' : '本地摘录演示'}
           </span>
         </div>
         <div>
@@ -585,7 +852,7 @@ function NoteEditor({
       ) : (
         <article aria-label="笔记阅读视图" className="note-preview">
           {draft.trim() ? (
-            <ReactMarkdown skipHtml>{draft}</ReactMarkdown>
+            <NoteMarkdown body={draft} note={note} />
           ) : (
             <p className="muted">暂无正文</p>
           )}
@@ -595,7 +862,13 @@ function NoteEditor({
   )
 }
 
-function NoteBatchProgress({ batch }: { batch: NoteBatchSnapshot }) {
+function NoteBatchProgress({
+  batch,
+  previewMarkdown,
+}: {
+  batch: NoteBatchSnapshot
+  previewMarkdown?: string
+}) {
   const item = currentBatchItem(batch)
   const failureCode = item?.failure_code
 
@@ -637,51 +910,16 @@ function NoteBatchProgress({ batch }: { batch: NoteBatchSnapshot }) {
         </div>
       </div>
       {failureCode ? <p className="note-batch-progress__failure">失败代码：{failureCode}</p> : null}
+      {previewMarkdown?.trim() ? (
+        <article aria-label="笔记实时预览" className="note-generation-preview">
+          <header>
+            <strong>实时预览</strong>
+            <span>生成中，尚未保存</span>
+          </header>
+          <ReactMarkdown skipHtml>{previewMarkdown}</ReactMarkdown>
+        </article>
+      ) : null}
     </section>
-  )
-}
-
-function SourcesPanel({ note }: { note: NoteRecord }) {
-  const hasUnavailableSource = note.sources.some((source) => !source.available || source.stale)
-
-  return (
-    <aside className="note-sources" aria-label="笔记来源">
-      <header>
-        <h3>来源</h3>
-        <StatusBadge tone={hasUnavailableSource ? 'warning' : 'success'}>
-          {note.sources.length} 条
-        </StatusBadge>
-      </header>
-      {note.sources.length ? (
-        <ol>
-          {note.sources.map((source) => (
-            <li key={source.id}>
-              <div>
-                <BookOpen aria-hidden="true" size={16} />
-                <span>
-                  <strong>{source.document_name}</strong>
-                  <small>
-                    {source.locator.kind === 'slide' ? '幻灯片' : '页'} {source.locator.ordinal}
-                  </small>
-                </span>
-              </div>
-              <blockquote>{source.quote}</blockquote>
-              <span
-                className={`source-state source-state--${!source.available ? 'unavailable' : source.stale ? 'stale' : 'active'}`}
-              >
-                {!source.available
-                  ? `不可用${source.unavailable_reason ? ` · ${source.unavailable_reason}` : ''}`
-                  : source.stale
-                    ? '旧版本'
-                    : '活动来源'}
-              </span>
-            </li>
-          ))}
-        </ol>
-      ) : (
-        <p className="muted">无来源</p>
-      )}
-    </aside>
   )
 }
 
@@ -689,6 +927,7 @@ export function NotesPage() {
   const { courseId, capabilities } = useWorkspace()
   const queryClient = useQueryClient()
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [noteSearch, setNoteSearch] = useState('')
   const [createDialog, setCreateDialog] = useState({ courseId, open: false })
   const batchStorageKey = noteBatchStorageKey(courseId)
   const [activeBatch, setActiveBatch] = useState(() => ({
@@ -696,6 +935,7 @@ export function NotesPage() {
     id: localStorage.getItem(batchStorageKey),
   }))
   const [createdBatch, setCreatedBatch] = useState<NoteBatchSnapshot | null>(null)
+  const [previewMarkdown, setPreviewMarkdown] = useState('')
   const completedBatchRef = useRef<string | null>(null)
   const createCommandKeyRef = useRef<string | null>(null)
   const regenerationCommandKeysRef = useRef(new Map<string, string>())
@@ -736,8 +976,17 @@ export function NotesPage() {
       return status && TERMINAL_BATCH_STATUSES.includes(status) ? false : 250
     },
   })
-  const notes = notesQuery.data ?? []
+  const notes = useMemo(() => notesQuery.data ?? [], [notesQuery.data])
   const selected = notes.find((note) => note.id === selectedId) ?? notes[0]
+  const normalizedNoteSearch = noteSearch.trim()
+  const visibleNotes = useMemo(
+    () =>
+      normalizedNoteSearch
+        ? notes.filter((note) => noteMatchesSearch(note, normalizedNoteSearch))
+        : notes,
+    [normalizedNoteSearch, notes],
+  )
+  const noteSectionTree = useMemo(() => buildNoteSectionTree(visibleNotes), [visibleNotes])
   const providerReady = capabilities?.provider.status === 'available'
   const noteWorkflowReady =
     capabilities?.note_workflow.enabled === true &&
@@ -749,6 +998,7 @@ export function NotesPage() {
   }
   const activateBatch = (snapshot: NoteBatchSnapshot) => {
     completedBatchRef.current = null
+    setPreviewMarkdown('')
     queryClient.setQueryData(['note-batch', snapshot.id], snapshot)
     localStorage.setItem(batchStorageKey, snapshot.id)
     setCreatedBatch(snapshot)
@@ -793,6 +1043,21 @@ export function NotesPage() {
   const batchInProgress =
     activeBatchId !== null &&
     (!batchSnapshot || !TERMINAL_BATCH_STATUSES.includes(batchSnapshot.status))
+  const selectedHeadings = selected ? extractMarkdownHeadings(selected.body_markdown) : []
+
+  useEffect(() => {
+    if (!activeBatchId || !batchInProgress) {
+      return
+    }
+    return studyApi.subscribe<NoteGenerationEventData>(
+      `/note-batches/${encodeURIComponent(activeBatchId)}/events`,
+      (event) => {
+        if (event.event_type === 'note.preview.delta' && event.data.delta) {
+          setPreviewMarkdown((current) => current + event.data.delta)
+        }
+      },
+    )
+  }, [activeBatchId, batchInProgress])
 
   useEffect(() => {
     if (
@@ -858,9 +1123,14 @@ export function NotesPage() {
         }
         kicker="Notes"
         meta={`${notes.length} 篇笔记`}
-        title="章节笔记"
+        title="学习笔记"
       />
-      {batchSnapshot ? <NoteBatchProgress batch={batchSnapshot} /> : null}
+      {batchSnapshot ? (
+        <NoteBatchProgress
+          batch={batchSnapshot}
+          previewMarkdown={batchInProgress ? previewMarkdown : undefined}
+        />
+      ) : null}
       {batchQuery.isError ? (
         <ErrorNotice
           error={batchQuery.error}
@@ -881,23 +1151,70 @@ export function NotesPage() {
         </section>
       ) : selected ? (
         <div className="note-workspace">
-          <nav aria-label="笔记章节" className="note-tree">
-            <h3>章节</h3>
-            {notes.map((note) => (
-              <button
-                aria-current={note.id === selected.id ? 'page' : undefined}
-                key={note.id}
-                onClick={() => setSelectedId(note.id)}
-                type="button"
-              >
-                <FileClock aria-hidden="true" size={16} />
-                <span>
-                  <strong>{note.title}</strong>
-                  <small>{note.section_path.join(' / ') || '未分类'}</small>
-                </span>
-              </button>
-            ))}
-          </nav>
+          <aside aria-label="笔记导航" className="note-tree">
+            <section aria-label="切换笔记" className="note-switcher">
+              <h3>切换笔记</h3>
+              <div className="note-search">
+                <Search aria-hidden="true" size={15} />
+                <label className="sr-only" htmlFor="note-search-input">
+                  搜索笔记
+                </label>
+                <input
+                  id="note-search-input"
+                  onChange={(event) => setNoteSearch(event.target.value)}
+                  placeholder="搜索标题、路径或正文"
+                  type="search"
+                  value={noteSearch}
+                />
+                {noteSearch ? (
+                  <button
+                    aria-label="清除笔记搜索"
+                    className="note-search__clear"
+                    onClick={() => setNoteSearch('')}
+                    title="清除搜索"
+                    type="button"
+                  >
+                    <X aria-hidden="true" size={14} />
+                  </button>
+                ) : null}
+              </div>
+              {visibleNotes.length ? (
+                <NoteSwitcherTree
+                  nodes={noteSectionTree}
+                  onSelect={setSelectedId}
+                  selectedId={selected.id}
+                />
+              ) : (
+                <p className="muted note-search__empty">没有匹配的笔记</p>
+              )}
+            </section>
+            <nav aria-label="正文目录" className="note-outline">
+              <h3>正文目录</h3>
+              {selectedHeadings.length ? (
+                <ol>
+                  {selectedHeadings.map((heading) => (
+                    <li key={heading.id}>
+                      <a
+                        href={`#${heading.id}`}
+                        onClick={(event) => {
+                          event.preventDefault()
+                          document.getElementById(heading.id)?.scrollIntoView({
+                            behavior: 'smooth',
+                            block: 'start',
+                          })
+                        }}
+                        style={{ paddingLeft: `${8 + (heading.level - 1) * 12}px` }}
+                      >
+                        {heading.text}
+                      </a>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <p className="muted">正文暂无标题</p>
+              )}
+            </nav>
+          </aside>
           <NoteEditor
             batchInProgress={batchInProgress}
             key={`${selected.id}-${selected.version}`}
@@ -934,7 +1251,6 @@ export function NotesPage() {
                 regenerateLegacy.variables === selected.id)
             }
           />
-          <SourcesPanel note={selected} />
         </div>
       ) : (
         <section className="empty-state">

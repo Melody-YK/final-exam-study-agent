@@ -26,7 +26,11 @@ from study_agent.infrastructure.db.session import Database
 from study_agent.modules.answering.events import append_query_event
 from study_agent.modules.answering.retrieval import QueryEvidence, RetrievedEvidence
 from study_agent.modules.answering.service import TrustedAnswerService
-from study_agent.modules.answering.types import AnswerExecution, AuthorizedEvidence
+from study_agent.modules.answering.types import (
+    AnswerExecution,
+    AuthorizedEvidence,
+    ConceptEvidenceContext,
+)
 from study_agent.observability.trace import get_trace_id, new_trace_id
 from study_agent.providers.errors import ProviderError, ProviderErrorCode
 from study_agent.providers.factory import ProviderRegistry
@@ -127,6 +131,7 @@ class QueryRepository:
         document_ids: frozenset[str] | None,
         *,
         conversation_id: str | None = None,
+        concept_context: ConceptEvidenceContext | None = None,
     ) -> str:
         normalized = question.strip()
         if not normalized:
@@ -163,6 +168,15 @@ class QueryRepository:
                 )
                 if available != set(document_ids):
                     raise LookupError("document scope is unavailable")
+            if concept_context is not None:
+                context_available = await self._concept_context_available(
+                    session,
+                    course,
+                    concept_context,
+                    document_ids=document_ids,
+                )
+                if not context_available:
+                    raise LookupError("concept context is unavailable")
             query = QueryRunModel(
                 id=query_id,
                 user_id=course.user_id,
@@ -196,6 +210,56 @@ class QueryRepository:
                 retention=self._event_retention,
             )
         return query_id
+
+    @staticmethod
+    async def _concept_context_available(
+        session: AsyncSession,
+        course: CourseModel,
+        context: ConceptEvidenceContext,
+        *,
+        document_ids: frozenset[str] | None,
+    ) -> bool:
+        expected = {
+            (anchor.document_id, anchor.revision_id, anchor.chunk_id) for anchor in context.anchors
+        }
+        if document_ids is not None and any(
+            anchor.document_id not in document_ids for anchor in context.anchors
+        ):
+            return False
+        rows = (
+            await session.execute(
+                select(
+                    DocumentModel.id.label("document_id"),
+                    RevisionChunkModel.revision_id,
+                    RevisionChunkModel.id.label("chunk_id"),
+                    RevisionChunkModel.text,
+                )
+                .select_from(RevisionChunkModel)
+                .join(
+                    DocumentModel,
+                    and_(
+                        DocumentModel.active_revision_id == RevisionChunkModel.revision_id,
+                        DocumentModel.course_id == course.id,
+                        DocumentModel.user_id == course.user_id,
+                    ),
+                )
+                .where(
+                    RevisionChunkModel.id.in_(anchor.chunk_id for anchor in context.anchors),
+                    DocumentModel.id.in_(anchor.document_id for anchor in context.anchors),
+                    DocumentModel.deleted_at.is_(None),
+                    DocumentModel.corpus_role == "corpus",
+                    DocumentModel.status == "ready",
+                    DocumentModel.review_status == "approved",
+                )
+            )
+        ).all()
+        label = context.label.strip().casefold()
+        actual = {
+            (str(row.document_id), str(row.revision_id), str(row.chunk_id))
+            for row in rows
+            if label in str(row.text).casefold()
+        }
+        return actual == expected
 
     async def start_retrieval(self, principal: Principal, query_id: str) -> None:
         async with self._database.session(principal) as session:
@@ -1004,6 +1068,7 @@ class QueryService:
         *,
         document_ids: frozenset[str] | None = None,
         conversation_id: str | None = None,
+        concept_context: ConceptEvidenceContext | None = None,
     ) -> QuerySnapshot:
         query_id = await self._repository.create(
             principal,
@@ -1011,6 +1076,7 @@ class QueryService:
             question,
             document_ids,
             conversation_id=conversation_id,
+            concept_context=concept_context,
         )
         await self._repository.start_retrieval(principal, query_id)
         conversation_context = await self._repository.recent_context(principal, query_id)
@@ -1021,6 +1087,7 @@ class QueryService:
                 course_id,
                 retrieval_question,
                 document_ids=document_ids,
+                concept_context=concept_context,
             )
         except ProviderError as exc:
             return await self._repository.finalize(

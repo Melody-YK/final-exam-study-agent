@@ -1,9 +1,10 @@
-import { screen, waitFor } from '@testing-library/react'
+import { act, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
+import { StrictMode } from 'react'
 
 import { ApiError, studyApi } from '../../api/client'
-import type { NoteBatchSnapshot, RuntimeCapabilities } from '../../api/types'
-import { documentRecord, noteRecord, problem } from '../../test/fixtures'
+import type { NoteBatchSnapshot, NoteRecord, RuntimeCapabilities } from '../../api/types'
+import { documentRecord, noteRecord, problem, sourcePreview } from '../../test/fixtures'
 import { availableCapabilities, renderInWorkspace } from '../../test/render'
 import { NotesPage } from './NotesPage'
 
@@ -55,6 +56,144 @@ function noteBatchSnapshot(
 }
 
 describe('NotesPage', () => {
+  it('keeps legacy notes readable when knowledge-point sources are absent', async () => {
+    const legacyNote = { ...noteRecord(), knowledge_points: undefined } as unknown as NoteRecord
+    vi.spyOn(studyApi, 'listNotes').mockResolvedValue([legacyNote])
+
+    renderInWorkspace(<NotesPage />)
+
+    expect(await screen.findByLabelText('笔记阅读视图')).toHaveTextContent('原始正文')
+    expect(screen.queryByLabelText('知识点来源')).not.toBeInTheDocument()
+  })
+
+  it('shows a source jump next to each knowledge point', async () => {
+    const note = noteRecord({
+      body_markdown: '# 进程\n\n进程拥有独立的地址空间。',
+      knowledge_points: [
+        {
+          id: 'knowledge-point-1',
+          text: '进程拥有独立的地址空间。',
+          source_ids: ['note-source-1'],
+        },
+      ],
+    })
+    vi.spyOn(studyApi, 'listNotes').mockResolvedValue([note])
+    vi.spyOn(studyApi, 'getNoteSourcePreview').mockResolvedValue(sourcePreview())
+    const { user } = renderInWorkspace(
+      <StrictMode>
+        <NotesPage />
+      </StrictMode>,
+    )
+
+    const article = await screen.findByLabelText('笔记阅读视图')
+    const point = within(article).getByText('进程拥有独立的地址空间。')
+    expect(within(point).getByRole('button', { name: /chapter-1\.pdf/ })).toBeInTheDocument()
+    expect(screen.queryByLabelText('笔记来源')).not.toBeInTheDocument()
+    await user.click(within(point).getByRole('button', { name: /chapter-1\.pdf/ }))
+    expect(studyApi.getNoteSourcePreview).toHaveBeenCalledWith('note-1', 'note-source-1')
+  })
+
+  it('separates note switching from the current note heading outline', async () => {
+    const note = noteRecord({
+      body_markdown: '# 进程\n\n概念总览。\n\n## 调度\n\n调度决定下一个运行任务。\n\n### 时间片\n\n轮转分配 CPU 时间。',
+    })
+    vi.spyOn(studyApi, 'listNotes').mockResolvedValue([note])
+    const scrollIntoView = vi.fn()
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView,
+    })
+    const { user } = renderInWorkspace(<NotesPage />)
+
+    const switcher = await screen.findByLabelText('切换笔记')
+    expect(within(switcher).getByRole('button', { name: /进程基础/ })).toBeInTheDocument()
+    const outline = screen.getByRole('navigation', { name: '正文目录' })
+    expect(within(outline).getByRole('link', { name: '进程' })).toHaveAttribute(
+      'href',
+      '#note-heading-1-进程',
+    )
+    expect(within(outline).getByRole('link', { name: '调度' })).toHaveAttribute(
+      'href',
+      '#note-heading-5-调度',
+    )
+    expect(screen.getByRole('heading', { name: '调度' })).toHaveAttribute(
+      'id',
+      'note-heading-5-调度',
+    )
+
+    await user.click(within(outline).getByRole('link', { name: '调度' }))
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'start' })
+  })
+
+  it('groups notes by section path and filters the switcher by search', async () => {
+    const first = noteRecord({
+      id: 'note-process',
+      section_path: ['第一章', '进程管理'],
+      title: '进程基础',
+    })
+    const second = noteRecord({
+      id: 'note-index',
+      section_path: ['第二章', '数据库'],
+      title: '索引笔记',
+      body_markdown: '# 索引\n\nB+ 树可以加速查询。',
+    })
+    vi.spyOn(studyApi, 'listNotes').mockResolvedValue([first, second])
+    const { user } = renderInWorkspace(<NotesPage />)
+
+    const switcher = await screen.findByLabelText('切换笔记')
+    expect(within(switcher).getByText('第一章')).toBeInTheDocument()
+    expect(within(switcher).getByText('进程管理')).toBeInTheDocument()
+    expect(within(switcher).getByText('第二章')).toBeInTheDocument()
+    expect(within(switcher).getByRole('button', { name: '索引笔记' })).toBeInTheDocument()
+
+    const search = within(switcher).getByRole('searchbox', { name: '搜索笔记' })
+    await user.type(search, '索引')
+    expect(within(switcher).getByRole('button', { name: '索引笔记' })).toBeInTheDocument()
+    expect(within(switcher).queryByRole('button', { name: '进程基础' })).not.toBeInTheDocument()
+
+    await user.click(within(switcher).getByRole('button', { name: '清除笔记搜索' }))
+    expect(within(switcher).getByRole('button', { name: '进程基础' })).toBeInTheDocument()
+  })
+
+  it('moves legacy source mappings out of the visible note body', async () => {
+    const note = noteRecord({
+      body_markdown:
+        '# 进程\n\n- **进程**拥有独立的地址空间。\n\n### 来源对应\n- 进程拥有独立的地址空间。 (来源: chapter-1.pdf · 第 3 页)',
+      knowledge_points: [
+        {
+          id: 'knowledge-point-legacy',
+          text: '进程拥有独立的地址空间。',
+          source_ids: ['note-source-1'],
+        },
+      ],
+    })
+    vi.spyOn(studyApi, 'listNotes').mockResolvedValue([note])
+
+    renderInWorkspace(<NotesPage />)
+
+    const article = await screen.findByLabelText('笔记阅读视图')
+    expect(article).not.toHaveTextContent('来源对应')
+    expect(within(article).getByRole('button', { name: /chapter-1\.pdf/ })).toBeInTheDocument()
+  })
+
+  it('renders streamed note preview deltas while a batch is running', async () => {
+    localStorage.setItem('study-agent.note-batch:course-1', 'note-batch-stream')
+    let pushEvent: ((event: { event_type: string; data: { delta?: string } }) => void) | null = null
+    vi.spyOn(studyApi, 'listNotes').mockResolvedValue([])
+    vi.spyOn(studyApi, 'getNoteBatch').mockResolvedValue(noteBatchSnapshot())
+    vi.spyOn(studyApi, 'subscribe').mockImplementation((_path, onEvent) => {
+      pushEvent = onEvent as typeof pushEvent
+      return vi.fn()
+    })
+    renderInWorkspace(<NotesPage />)
+
+    await screen.findByLabelText('笔记生成进度')
+    await act(async () => {
+      pushEvent?.({ event_type: 'note.preview.delta', data: { delta: '# 实时预览' } })
+    })
+    expect(screen.getByLabelText('笔记实时预览')).toHaveTextContent('实时预览')
+  })
+
   it('edits a note while preserving active, stale, and unavailable source states', async () => {
     const note = noteRecord({
       sources: [
@@ -97,10 +236,94 @@ describe('NotesPage', () => {
     )
     expect(await screen.findByText(/版本 2/)).toBeInTheDocument()
     expect(screen.getByLabelText('笔记阅读视图')).toHaveTextContent('更新正文')
-    expect(screen.getByText('活动来源')).toBeInTheDocument()
-    expect(screen.getByText('旧版本')).toBeInTheDocument()
-    expect(screen.getByText('不可用 · SOURCE_DELETED')).toBeInTheDocument()
-    expect(screen.getByText('deleted.pdf')).toBeInTheDocument()
+    expect(screen.queryByLabelText('笔记来源')).not.toBeInTheDocument()
+  })
+
+  it('opens an active Markdown note source at its validated section', async () => {
+    const note = noteRecord({
+      body_markdown: '# 进程\n\n进程拥有独立的地址空间。',
+      knowledge_points: [
+        {
+          id: 'knowledge-point-1',
+          text: '进程拥有独立的地址空间。',
+          source_ids: ['note-source-1'],
+        },
+      ],
+      sources: [
+        {
+          ...noteRecord().sources[0]!,
+          document_name: 'outline.md',
+          locator: { kind: 'section', ordinal: 2 },
+        },
+      ],
+    })
+    vi.spyOn(studyApi, 'listNotes').mockResolvedValue([note])
+    vi.spyOn(studyApi, 'getNoteSourcePreview').mockResolvedValue(
+      sourcePreview({
+        document_name: 'outline.md',
+        locator: { kind: 'section', ordinal: 2 },
+        section_path: ['进程管理', '调度'],
+        media_type: 'text/markdown',
+        read_url: '/api/v1/notes/note-1/sources/note-source-1/preview/content',
+      }),
+    )
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response('# 基础\n\n前一章。\n\n## 调度\n\n**就绪队列**', {
+          status: 200,
+          headers: { 'Content-Type': 'text/markdown' },
+        }),
+      ),
+    )
+    const { user } = renderInWorkspace(<NotesPage />)
+
+    await user.click(await screen.findByRole('button', { name: /查看原文 · outline\.md/ }))
+
+    expect(studyApi.getNoteSourcePreview).toHaveBeenCalledWith('note-1', 'note-source-1')
+    expect(await screen.findByRole('heading', { name: '调度' })).toBeInTheDocument()
+    expect(screen.getByText('就绪队列').tagName).toBe('STRONG')
+    expect(screen.queryByText('前一章。')).not.toBeInTheDocument()
+    expect(screen.getAllByText('进程管理 / 调度').length).toBeGreaterThan(0)
+  })
+
+  it('shows a preview failure beside the note source that was opened', async () => {
+    const firstSource = noteRecord().sources[0]!
+    const note = noteRecord({
+      body_markdown: '# 进程\n\n进程拥有独立的地址空间。',
+      knowledge_points: [
+        {
+          id: 'knowledge-point-1',
+          text: '进程拥有独立的地址空间。',
+          source_ids: ['note-source-1', 'note-source-2'],
+        },
+      ],
+      sources: [
+        firstSource,
+        {
+          ...firstSource,
+          id: 'note-source-2',
+          document_name: 'legacy-slides.pptx',
+        },
+      ],
+    })
+    vi.spyOn(studyApi, 'listNotes').mockResolvedValue([note])
+    vi.spyOn(studyApi, 'getNoteSourcePreview').mockRejectedValue(
+      new ApiError(
+        problem({
+          title: 'PPTX 预览页不可用',
+          detail: '请先转换为 PDF 后重新上传。',
+        }),
+      ),
+    )
+    const { user } = renderInWorkspace(<NotesPage />)
+
+    const openButtons = await screen.findAllByRole('button', { name: /查看原文/ })
+    await user.click(openButtons[1]!)
+
+    const alert = await screen.findByRole('alert')
+    expect(screen.getByRole('button', { name: /legacy-slides\.pptx/ })).toBeVisible()
+    expect(alert).toHaveTextContent('请先转换为 PDF 后重新上传。')
   })
 
   it('detects a version conflict and loads the latest server note', async () => {
@@ -150,16 +373,16 @@ describe('NotesPage', () => {
       body_markdown: '# 虚拟内存\n\n> 笔记模板: 考前速记\n\n生成后的正文。',
     })
     const readyPdf = documentRecord()
-    const readyPptx = documentRecord({
-      id: 'slides-ready',
-      filename: 'memory.pptx',
-      media_type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-      active_revision_id: 'revision-slides',
+    const readyMarkdown = documentRecord({
+      id: 'markdown-ready',
+      filename: 'memory.md',
+      media_type: 'text/markdown',
+      active_revision_id: 'revision-markdown',
     })
     vi.spyOn(studyApi, 'listNotes').mockResolvedValueOnce([]).mockResolvedValue([generated])
     vi.spyOn(studyApi, 'listDocuments').mockResolvedValue([
       readyPdf,
-      readyPptx,
+      readyMarkdown,
       documentRecord({ id: 'image-ready', filename: 'scan.png', media_type: 'image/png' }),
       documentRecord({ id: 'pdf-queued', filename: 'queued.pdf', status: 'queued' }),
       documentRecord({
@@ -195,7 +418,8 @@ describe('NotesPage', () => {
 
     await user.click(screen.getByRole('button', { name: '新建笔记' }))
     expect(await screen.findByText('chapter-1.pdf')).toBeInTheDocument()
-    expect(screen.getByText('memory.pptx')).toBeInTheDocument()
+    expect(screen.getByText('memory.md')).toBeInTheDocument()
+    expect(screen.getByText('已就绪的 PDF/Markdown')).toBeInTheDocument()
     expect(screen.queryByText('scan.png')).not.toBeInTheDocument()
     expect(screen.queryByText('queued.pdf')).not.toBeInTheDocument()
     expect(screen.queryByText('question-bank.pdf')).not.toBeInTheDocument()
@@ -210,7 +434,7 @@ describe('NotesPage', () => {
       expect(studyApi.createNoteBatch).toHaveBeenCalledWith('course-1', {
         schema_version: '1.0',
         mode: 'merged',
-        document_ids: ['document-1', 'slides-ready'],
+        document_ids: ['document-1', 'markdown-ready'],
         style: 'exam_focus',
         section_path: ['第二章', '内存'],
         title: '虚拟内存',
@@ -308,7 +532,7 @@ describe('NotesPage', () => {
       'page',
     )
     expect(screen.getAllByRole('button', { name: /原批次笔记/ })).toHaveLength(1)
-    expect(screen.getByText('版本 2 · 生成 2')).toBeInTheDocument()
+    expect(screen.getByText(/版本 2 · 生成 2 · 本地摘录演示/)).toBeInTheDocument()
     expect(screen.getByLabelText('笔记阅读视图')).toHaveTextContent('新正文')
   })
 
@@ -412,7 +636,7 @@ describe('NotesPage', () => {
     expect(screen.getByText('最短 · 最多 12 条')).toBeInTheDocument()
     expect(screen.getByText('定义、条件、区别和公式优先')).toBeInTheDocument()
     expect(screen.getByText('中等 · 最多 30 条')).toBeInTheDocument()
-    expect(screen.getByText('按资料和页码快速梳理层级')).toBeInTheDocument()
+    expect(screen.getByText('按资料和来源位置快速梳理层级')).toBeInTheDocument()
     expect(screen.getByText('最长 · 最多 40 条 / 12,000 字符')).toBeInTheDocument()
     expect(screen.getByText('按来源顺序保留完整上下文')).toBeInTheDocument()
 
@@ -422,9 +646,9 @@ describe('NotesPage', () => {
     expect(examSample.children).toHaveLength(3)
     expect(examSample).toHaveTextContent('资料名称• 高频定义或公式• 关键条件与区别')
     expect(outlineSample.children).toHaveLength(3)
-    expect(outlineSample).toHaveTextContent('1. 资料名称1.1 第 1 页1. 关键知识点')
+    expect(outlineSample).toHaveTextContent('1. 资料名称1.1 来源位置1. 关键知识点')
     expect(completeSample.children).toHaveLength(3)
-    expect(completeSample).toHaveTextContent('资料名称第 1 页来源正文段落')
+    expect(completeSample).toHaveTextContent('资料名称来源位置来源正文段落')
     expect(examSample).toHaveAttribute('aria-current', 'true')
     expect(outlineSample).not.toHaveAttribute('aria-current')
     expect(completeSample).not.toHaveAttribute('aria-current')
