@@ -8,7 +8,13 @@ from pathlib import Path
 from typing import Literal, Protocol
 
 from study_contracts import JobArtifactReceipt, JobProgress, WorkerCapabilities, WorkerLease
-from study_worker.capabilities import OCR_PROFILE, OcrCapabilityStatus
+from study_worker.capabilities import (
+    MINERU_PROFILE,
+    OCR_PROFILE,
+    DoclingCapabilityStatus,
+    MineruCapabilityStatus,
+    OcrCapabilityStatus,
+)
 from study_worker.sandbox import Sandbox
 
 NATIVE_PROFILE = "native-v1"
@@ -23,7 +29,7 @@ OCR_MEDIA_TYPES = (
     "image/png",
     "image/tiff",
 )
-DISABLED_OCR_PROFILES = frozenset({"mineru-v1", "paid-ocr-v1"})
+DISABLED_OCR_PROFILES = frozenset({"paid-ocr-v1"})
 
 
 def _require_error_code(value: str) -> None:
@@ -127,9 +133,11 @@ class Dispatcher:
         *,
         parse_handler: TaskHandler,
         ocr_handler: TaskHandler | None = None,
+        mineru_handler: TaskHandler | None = None,
     ) -> None:
         self._parse_handler = parse_handler
         self._ocr_handler = ocr_handler
+        self._mineru_handler = mineru_handler
 
     async def dispatch(
         self,
@@ -149,6 +157,14 @@ class Dispatcher:
                     summary="isolated OCR handler is not installed",
                 )
             return await self._ocr_handler(lease, sandbox, reporter)
+        if lease.parser_profile == MINERU_PROFILE:
+            if self._mineru_handler is None:
+                raise TaskExecutionError(
+                    code="MINERU_CAPABILITY_UNAVAILABLE",
+                    retryable=True,
+                    summary="self-hosted MinerU handler is not available",
+                )
+            return await self._mineru_handler(lease, sandbox, reporter)
         if lease.parser_profile in DISABLED_OCR_PROFILES:
             raise TaskExecutionError(
                 code="PARSER_CAPABILITY_DISABLED",
@@ -158,14 +174,19 @@ class Dispatcher:
         raise UnsupportedTaskError
 
 
-def native_capabilities(*, max_input_bytes: int, max_pages: int) -> WorkerCapabilities:
+def native_capabilities(
+    *,
+    max_input_bytes: int,
+    max_pages: int,
+    supports_rendering: bool = False,
+) -> WorkerCapabilities:
     """Advertise only the native P4 profile; OCR/rendering remain unavailable."""
 
     return WorkerCapabilities(
         parser_profiles=[NATIVE_PROFILE],
         media_types=list(NATIVE_MEDIA_TYPES),
         supports_ocr=False,
-        supports_rendering=False,
+        supports_rendering=supports_rendering,
         max_input_bytes=max_input_bytes,
         max_pages=max_pages,
     )
@@ -177,6 +198,9 @@ def capabilities_for_handlers(
     max_pages: int,
     ocr_status: OcrCapabilityStatus | None = None,
     ocr_handler_available: bool = False,
+    docling_status: DoclingCapabilityStatus | None = None,
+    mineru_status: MineruCapabilityStatus | None = None,
+    mineru_handler_available: bool = False,
 ) -> WorkerCapabilities:
     """Advertise OCR only when both the isolated probe and a handler are available."""
 
@@ -186,12 +210,22 @@ def capabilities_for_handlers(
         or not ocr_status.supports_ocr
         or not ocr_handler_available
     ):
-        return native_capabilities(max_input_bytes=max_input_bytes, max_pages=max_pages)
+        profiles = [NATIVE_PROFILE]
+        media_types = list(NATIVE_MEDIA_TYPES)
+        supports_ocr = False
+    else:
+        profiles = [NATIVE_PROFILE, OCR_PROFILE]
+        media_types = list(dict.fromkeys((*NATIVE_MEDIA_TYPES, *OCR_MEDIA_TYPES)))
+        supports_ocr = True
+    if mineru_status is not None and mineru_status.ready and mineru_handler_available:
+        profiles.append(MINERU_PROFILE)
+        if "application/pdf" not in media_types:
+            media_types.append("application/pdf")
     return WorkerCapabilities(
-        parser_profiles=[NATIVE_PROFILE, OCR_PROFILE],
-        media_types=list(dict.fromkeys((*NATIVE_MEDIA_TYPES, *OCR_MEDIA_TYPES))),
-        supports_ocr=True,
-        supports_rendering=False,
+        parser_profiles=profiles,
+        media_types=media_types,
+        supports_ocr=supports_ocr,
+        supports_rendering=docling_status is not None and docling_status.vlm_ready,
         max_input_bytes=max_input_bytes,
         max_pages=max_pages,
     )

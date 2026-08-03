@@ -46,6 +46,70 @@ function document(overrides: Record<string, unknown> = {}) {
   }
 }
 
+function learningEvidence(quote: string, chunkId: string) {
+  return {
+    chunk_id: chunkId,
+    content_sha256: 'b'.repeat(64),
+    document_id: 'document-ready',
+    document_name: '操作系统课程.pdf',
+    locator: { kind: 'page', ordinal: 6 },
+    quote,
+    revision_id: 'revision-active',
+  }
+}
+
+function learningUnit(
+  id: string,
+  label: string,
+  kind: 'section' | 'concept',
+  status: 'available' | 'stale' | 'unavailable' = 'available',
+) {
+  return {
+    id,
+    course_id: courseId,
+    canonical_key: id,
+    label,
+    kind,
+    parent_id: null,
+    status,
+    mastery_level: 'new' as const,
+    next_review_at: null,
+    sources: [
+      {
+        document_id: 'document-ready',
+        revision_id: 'revision-active',
+        chunk_id: `${id}-chunk`,
+        content_sha256: 'b'.repeat(64),
+        locator: { kind: 'page', ordinal: 6 },
+        status: status === 'available' ? 'valid' : status === 'stale' ? 'stale' : 'unavailable',
+      },
+    ],
+  }
+}
+
+function practiceQuestion(
+  id: string,
+  learningUnitId: string,
+  prompt: string,
+  correctAnswer: string,
+  quote: string,
+) {
+  return {
+    id,
+    learning_unit_id: learningUnitId,
+    prompt,
+    question_type: 'single_choice' as const,
+    difficulty: 1,
+    options: [
+      { id: 'a', label: '进程负责资源分配' },
+      { id: 'b', label: '线程负责资源分配' },
+    ],
+    status: 'ready' as const,
+    evidence_refs: [learningEvidence(quote, `${id}-chunk`)],
+    correctAnswer,
+  }
+}
+
 function note(version = 1) {
   return {
     id: 'note-e2e',
@@ -302,6 +366,9 @@ export interface MockApiOptions {
   includeNoteEligibilityDriftDocuments?: boolean
   invitationCapacityRaceOnce?: boolean
   noteBatchPollsBeforeSuccess?: number
+  practiceBatchPollsBeforeSuccess?: number
+  practiceBatchPartialSuccess?: boolean
+  learningQuestionStale?: boolean
   providerAvailable?: boolean
   seedCourseSelection?: boolean
 }
@@ -464,7 +531,45 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
   const availableAccountSeats = () =>
     Math.max(accountCapacity - activeAccountCount() - availableInvitationCount(), 0)
   const noteBatchPollsBeforeSuccess = options.noteBatchPollsBeforeSuccess ?? 3
+  const practiceBatchPollsBeforeSuccess = options.practiceBatchPollsBeforeSuccess ?? 2
   const providerAvailable = options.providerAvailable ?? true
+  const learningUnits = [
+    learningUnit('unit-process', '进程管理', 'section'),
+    learningUnit('unit-scheduling', '进程调度', 'concept'),
+    learningUnit('unit-stale', '旧版资料引用', 'concept', 'stale'),
+  ]
+  const learningQuestions = [
+    practiceQuestion('question-process', 'unit-process', '进程在系统中主要承担什么职责？', 'a', '进程是资源分配的基本单位。'),
+    practiceQuestion('question-scheduling', 'unit-scheduling', '线程在调度模型中通常承担什么职责？', 'b', '线程是调度的基本单位。'),
+  ]
+  const reviewQueue = [
+    {
+      learning_unit_id: 'unit-scheduling',
+      label: '进程调度',
+      kind: 'concept' as const,
+      mastery_level: 'learning' as const,
+      weakness_score: 0.72,
+      next_review_at: '2026-08-02T09:00:00Z',
+      source_status: 'valid' as const,
+    },
+  ]
+  let learningSummary = {
+    course_id: courseId,
+    accuracy: 0,
+    correct_questions: 0,
+    total_questions: 0,
+    due_review_count: reviewQueue.length,
+    next_action: '先复习进程调度，再开始下一组题。',
+    units: learningUnits,
+    weak_units: reviewQueue,
+  }
+  let learningBatchPolls = 0
+  let learningBatchId = 'practice-batch-e2e'
+  let learningBatchPayload: { learning_unit_ids: string[]; question_count: number } | null = null
+  let learningBatchQuestionIds: string[] = []
+  let learningBatchCommandKey: string | null = null
+  let practiceSession: Record<string, unknown> | null = null
+  const practiceAttempts = new Map<string, Record<string, unknown>>()
   let notesVersion = 1
   let generatedNoteRecord: ReturnType<typeof generatedNote> | null = null
   let importedNoteRecord: ReturnType<typeof note> | null = null
@@ -702,6 +807,78 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
       created_at: '2026-07-19T05:35:00Z',
       started_at: status === 'queued' ? null : '2026-07-19T05:35:01Z',
       completed_at: succeeded ? '2026-07-19T05:35:12Z' : null,
+    }
+  }
+
+  function practiceBatchSnapshot(status: 'queued' | 'running' | 'partial_success' | 'succeeded' | 'failed') {
+    const totalItems = learningBatchQuestionIds.length
+    const completedItems = status === 'succeeded' || status === 'partial_success' ? totalItems : 0
+    return {
+      id: learningBatchId,
+      course_id: courseId,
+      learning_unit_ids: (learningBatchPayload?.learning_unit_ids ?? []).slice(),
+      target_question_count: learningBatchPayload?.question_count ?? 0,
+      total_items: totalItems,
+      completed_items: completedItems,
+      status,
+      phase: status === 'running' ? 'generating' : status === 'queued' ? 'validating_inputs' : null,
+      question_ids: learningBatchQuestionIds,
+      items: learningQuestions.map((question) => ({
+        id: `practice-item-${question.id}`,
+        attempt_count: status === 'queued' ? 0 : 1,
+        failure_code: null,
+        question_id: learningBatchQuestionIds.includes(question.id) ? question.id : null,
+        status: learningBatchQuestionIds.includes(question.id)
+          ? status === 'queued' || status === 'running'
+            ? 'queued'
+            : 'succeeded'
+          : 'failed',
+      })),
+      failure_code: status === 'failed' ? 'PRACTICE_PROVIDER_UNAVAILABLE' : null,
+      created_at: '2026-08-02T08:00:00Z',
+      started_at: status === 'queued' ? null : '2026-08-02T08:00:01Z',
+      completed_at: status === 'succeeded' || status === 'partial_success' ? '2026-08-02T08:00:03Z' : null,
+    }
+  }
+
+  function practiceSessionSnapshot() {
+    const questions = learningQuestions
+      .filter((question) => learningBatchQuestionIds.includes(question.id))
+      .map((question) => {
+        const attempt = Array.from(practiceAttempts.values()).find(
+          (attempt) => attempt.question_id === question.id,
+        )
+        const answered = attempt !== undefined
+        const mastery = attempt?.mastery as { reason?: string } | undefined
+        return {
+          id: question.id,
+          learning_unit_id: question.learning_unit_id,
+          prompt: question.prompt,
+          question_type: question.question_type,
+          difficulty: question.difficulty,
+          options: question.options,
+          status: options.learningQuestionStale && question.id === 'question-scheduling' ? 'stale' : question.status,
+          evidence_refs:
+            options.learningQuestionStale && question.id === 'question-scheduling'
+              ? []
+              : question.evidence_refs,
+          answered,
+          outcome: attempt?.outcome ?? null,
+          submitted_answer: answered ? attempt.submitted_answer : null,
+          explanation: answered ? attempt.explanation : null,
+          mastery_reason: answered ? (mastery?.reason ?? '掌握度已更新。') : null,
+          viewed_hint: answered ? Boolean(attempt.viewed_hint) : null,
+        }
+      })
+    const complete = questions.length > 0 && questions.every((question) => question.answered)
+    return {
+      id: 'practice-session-e2e',
+      course_id: courseId,
+      question_count: questions.length,
+      questions,
+      started_at: '2026-08-02T08:01:00Z',
+      completed_at: complete ? '2026-08-02T08:03:00Z' : null,
+      status: complete ? 'completed' : 'active',
     }
   }
 
@@ -1118,6 +1295,10 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
             status: 'worker_required',
             label: '需要本地 OCR Worker',
           },
+          mineru_parser: {
+            status: 'worker_required',
+            label: '需要自建 MinerU 服务',
+          },
           demo_lab_enabled: true,
           note_workflow: {
             enabled: true,
@@ -1138,6 +1319,127 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
           },
         },
       })
+    }
+    if (method === 'GET' && path === `/courses/${courseId}/learning-units`) {
+      return route.fulfill({ json: learningUnits })
+    }
+    if (method === 'GET' && path === `/courses/${courseId}/learning-summary`) {
+      return route.fulfill({ json: learningSummary })
+    }
+    if (method === 'GET' && path === `/courses/${courseId}/review-queue`) {
+      return route.fulfill({ json: reviewQueue })
+    }
+    if (method === 'POST' && path === `/courses/${courseId}/practice-batches`) {
+      if (!providerAvailable) {
+        return route.fulfill({
+          status: 503,
+          json: problem(503, 'PRACTICE_PROVIDER_UNAVAILABLE', 'Provider 未配置，不能生成新题目'),
+        })
+      }
+      const commandKey = request.headers()['idempotency-key'] ?? null
+      if (commandKey !== null && commandKey === learningBatchCommandKey) {
+        return route.fulfill({ status: 202, json: practiceBatchSnapshot('queued') })
+      }
+      learningBatchCommandKey = commandKey
+      learningBatchPayload = request.postDataJSON() as typeof learningBatchPayload
+      learningBatchPolls = 0
+      learningBatchId = 'practice-batch-e2e'
+      const requestedCount = learningBatchPayload?.question_count ?? learningQuestions.length
+      learningBatchQuestionIds = learningQuestions.slice(0, Math.min(requestedCount, learningQuestions.length)).map((question) => question.id)
+      return route.fulfill({ status: 202, json: practiceBatchSnapshot('queued') })
+    }
+    if (method === 'GET' && path === `/practice-batches/${learningBatchId}`) {
+      learningBatchPolls += 1
+      if (learningBatchPolls < practiceBatchPollsBeforeSuccess) {
+        return route.fulfill({ json: practiceBatchSnapshot('running') })
+      }
+      if (options.practiceBatchPartialSuccess) {
+        learningBatchQuestionIds = learningBatchQuestionIds.slice(0, 1)
+        return route.fulfill({ json: practiceBatchSnapshot('partial_success') })
+      }
+      return route.fulfill({ json: practiceBatchSnapshot('succeeded') })
+    }
+    if (method === 'POST' && path === `/courses/${courseId}/practice-sessions`) {
+      const payload = request.postDataJSON() as { question_ids: string[] }
+      learningBatchQuestionIds = payload.question_ids.filter((id) => learningQuestions.some((question) => question.id === id))
+      practiceAttempts.clear()
+      practiceSession = practiceSessionSnapshot()
+      return route.fulfill({ status: 201, json: practiceSession })
+    }
+    if (method === 'GET' && path === '/practice-sessions/practice-session-e2e') {
+      practiceSession = practiceSessionSnapshot()
+      return route.fulfill({ json: practiceSession })
+    }
+    if (
+      method === 'POST' &&
+      /^\/practice-sessions\/practice-session-e2e\/questions\/[^/]+\/tutor$/.test(path)
+    ) {
+      const questionId = path.split('/')[4]
+      const question = learningQuestions.find((item) => item.id === questionId)
+      if (!question) {
+        return route.fulfill({
+          status: 404,
+          json: problem(404, 'RESOURCE_NOT_FOUND', '练习题不存在'),
+        })
+      }
+      const answered = Array.from(practiceAttempts.values()).some(
+        (attempt) => attempt.question_id === question.id,
+      )
+      return route.fulfill({
+        json: {
+          mode: answered ? 'review' : 'hint',
+          answer_markdown: answered
+            ? '进程负责资源分配，线程负责执行调度。'
+            : '先比较题干强调的是资源归属还是执行调度。',
+          evidence_refs: question.evidence_refs,
+        },
+      })
+    }
+    if (method === 'POST' && path === '/practice-sessions/practice-session-e2e/attempts') {
+      const commandKey = request.headers()['idempotency-key']
+      if (commandKey && practiceAttempts.has(commandKey)) {
+        return route.fulfill({ status: 201, json: practiceAttempts.get(commandKey) })
+      }
+      const payload = request.postDataJSON() as {
+        question_id: string
+        answer: string
+        viewed_hint?: boolean
+      }
+      const question = learningQuestions.find((item) => item.id === payload.question_id)
+      if (!question || !learningBatchQuestionIds.includes(payload.question_id)) {
+        return route.fulfill({ status: 409, json: problem(409, 'PRACTICE_QUESTION_INVALID', '题目不属于当前练习') })
+      }
+      if (options.learningQuestionStale && question.id === 'question-scheduling') {
+        return route.fulfill({ status: 409, json: problem(409, 'PRACTICE_SOURCE_STALE', '题目来源已失效') })
+      }
+      const correct = question.correctAnswer === payload.answer
+      const result = {
+        id: `attempt-${payload.question_id}`,
+        question_id: payload.question_id,
+        outcome: correct ? 'correct' : 'incorrect',
+        score: correct ? 1 : 0,
+        explanation: correct ? '答案可以直接由当前课程资料中的定义得到。' : '请回到来源定义，重新区分进程与线程的职责。',
+        evidence_refs: question.evidence_refs,
+        submitted_answer: payload.answer,
+        viewed_hint: payload.viewed_hint ?? false,
+        mastery: {
+          learning_unit_id: question.learning_unit_id,
+          previous_level: 'new',
+          level: correct ? 'learning' : 'new',
+          reason: correct ? '首次正确，掌握度上升一级。' : '本次回答不正确，安排再次复习。',
+          next_review_at: '2026-08-03T09:00:00Z',
+        },
+      }
+      if (commandKey) practiceAttempts.set(commandKey, result)
+      const correctQuestions = Array.from(practiceAttempts.values()).filter((attempt) => attempt.outcome === 'correct').length
+      learningSummary = {
+        ...learningSummary,
+        accuracy: practiceAttempts.size === 0 ? 0 : correctQuestions / practiceAttempts.size,
+        correct_questions: correctQuestions,
+        total_questions: practiceAttempts.size,
+        next_action: '继续复习进程调度，巩固刚才答错或待复习的单元。',
+      }
+      return route.fulfill({ status: 201, json: result })
     }
     if (method === 'GET' && path === `/courses/${courseId}/documents`) {
       return route.fulfill({ json: documents })

@@ -25,6 +25,7 @@ from study_agent.api.routers.auth import router as auth_router
 from study_agent.api.routers.courses import router as courses_router
 from study_agent.api.routers.job_events import router as job_events_router
 from study_agent.api.routers.knowledge_graph import router as knowledge_graph_router
+from study_agent.api.routers.learning_loop import router as learning_loop_router
 from study_agent.api.routers.note_batches import router as note_batches_router
 from study_agent.api.routers.notes import router as notes_router
 from study_agent.api.routers.queries import router as queries_router
@@ -42,6 +43,8 @@ from study_agent.modules.answering.source_tokens import LocalReadTokenSigner
 from study_agent.modules.jobs.clock import SystemClock
 from study_agent.modules.jobs.presence import WorkerPresenceRegistry
 from study_agent.modules.jobs.waiter import AsyncioClaimWaiter, ClaimWaiter
+from study_agent.modules.learning.runner import LearningBatchRunner
+from study_agent.modules.learning.service import LearningLoopService
 from study_agent.modules.notes.demo_runner import DemoNoteRunner
 from study_agent.modules.retrieval.bm25_index import Bm25IndexStore
 from study_agent.modules.retrieval.dense import DenseRetriever
@@ -233,6 +236,7 @@ def _boundary_rejection(status_code: int, title: str) -> JSONResponse:
 
 
 _QUERY_PATH = re.compile(r"^/api/v1/courses/[^/]+/queries$")
+_PRACTICE_TUTOR_PATH = re.compile(r"^/api/v1/practice-sessions/[^/]+/questions/[^/]+/tutor$")
 _UPLOAD_DECLARATION_PATH = re.compile(r"^/api/v1/courses/[^/]+/documents$")
 _UPLOAD_BYTES_PATH = re.compile(r"^/api/v1/uploads/[^/]+$")
 
@@ -240,7 +244,9 @@ _UPLOAD_BYTES_PATH = re.compile(r"^/api/v1/uploads/[^/]+$")
 def _expensive_request_bucket(request: Request) -> tuple[str, int] | None:
     settings = request.app.state.settings
     path = request.url.path
-    if request.method == "POST" and _QUERY_PATH.fullmatch(path):
+    if request.method == "POST" and (
+        _QUERY_PATH.fullmatch(path) or _PRACTICE_TUTOR_PATH.fullmatch(path)
+    ):
         return "provider-query", settings.query_requests_per_minute
     if (request.method == "POST" and _UPLOAD_DECLARATION_PATH.fullmatch(path)) or (
         request.method == "PUT" and _UPLOAD_BYTES_PATH.fullmatch(path)
@@ -279,6 +285,18 @@ def create_app(
         resolved_clock,
         provider_registry=resolved_registry,
     )
+    resolved_learning_service = LearningLoopService(
+        resolved_database,
+        resolved_settings,
+        resolved_clock,
+        resolved_registry,
+    )
+    resolved_learning_runner = LearningBatchRunner(
+        resolved_database,
+        resolved_settings,
+        resolved_clock,
+        resolved_learning_service,
+    )
     resolved_query_evidence = query_evidence
     if resolved_query_evidence is None:
         lexical = LexicalRetriever(
@@ -304,9 +322,11 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         await resolved_note_runner.recover_pending()
+        await resolved_learning_runner.recover_pending()
         try:
             yield
         finally:
+            await resolved_learning_runner.shutdown()
             await resolved_note_runner.shutdown()
 
     application = FastAPI(
@@ -327,6 +347,8 @@ def create_app(
     application.state.worker_presence = worker_presence or WorkerPresenceRegistry()
     application.state.local_read_signer = local_read_signer or LocalReadTokenSigner()
     application.state.note_runner = resolved_note_runner
+    application.state.learning_service = resolved_learning_service
+    application.state.learning_runner = resolved_learning_runner
     application.state.abuse_limiter = SlidingWindowLimiter()
     application.middleware("http")(add_trace_id)
     application.middleware("http")(enforce_http_security)
@@ -342,6 +364,7 @@ def create_app(
     application.include_router(courses_router)
     application.include_router(job_events_router)
     application.include_router(knowledge_graph_router)
+    application.include_router(learning_loop_router)
     application.include_router(note_batches_router)
     application.include_router(notes_router)
     application.include_router(queries_router)

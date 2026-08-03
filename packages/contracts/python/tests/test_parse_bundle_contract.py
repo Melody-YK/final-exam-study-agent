@@ -328,6 +328,77 @@ def test_parse_attempt_accepts_an_ordered_page_subset_with_canonical_hash() -> N
     assert ParseAttemptResult.model_validate_json(attempt.model_dump_json()) == attempt
 
 
+def test_parse_attempt_accepts_mixed_page_backends_with_a_mixed_summary() -> None:
+    payload = _bundle_payload()
+    first_page = Page.model_validate(payload["pages"][0])
+    second_page = first_page.model_copy(deep=True)
+    second_page.ordinal = 2
+    second_page.source_backend = "docling-vlm"
+    second_page.source_version = "2.117.0"
+    second_page.raw_result_ref = "raw/page-2-docling.json"
+    second_page.blocks[0].id = "block-2"
+    second_page.blocks[0].source_backend = "docling-vlm"
+    second_page.blocks[0].source_version = "2.117.0"
+    second_page.blocks[0].raw_result_ref = second_page.raw_result_ref
+    attempt_payload = {
+        "schema_version": "1.0",
+        "document_sha256": "a" * 64,
+        "parser_profile": "native-v1",
+        "source_backend": "mixed",
+        "source_version": "mixed",
+        "total_page_count": 2,
+        "requested_page_ordinals": [1, 2],
+        "covered_page_ordinals": [1, 2],
+        "pages": [
+            first_page.model_dump(mode="json"),
+            second_page.model_dump(mode="json"),
+        ],
+        "assets": [],
+    }
+
+    attempt = ParseAttemptResult(
+        **attempt_payload,
+        canonical_sha256=canonical_sha256(attempt_payload),
+    )
+
+    assert attempt.source_backend == "mixed"
+    assert [page.source_backend for page in attempt.pages] == ["pdf-native", "docling-vlm"]
+
+    invalid_summary = {
+        **attempt_payload,
+        "source_backend": "pdf-native",
+        "source_version": "1.0",
+    }
+    with pytest.raises(ValidationError, match="summarize"):
+        ParseAttemptResult(
+            **invalid_summary,
+            canonical_sha256=canonical_sha256(invalid_summary),
+        )
+
+
+def test_parse_attempt_preserves_parser_provenance_when_no_page_was_covered() -> None:
+    attempt_payload = {
+        "schema_version": "1.0",
+        "document_sha256": "a" * 64,
+        "parser_profile": "native-v1",
+        "source_backend": "pdf-native",
+        "source_version": "1.0",
+        "total_page_count": 1,
+        "requested_page_ordinals": [1],
+        "covered_page_ordinals": [],
+        "pages": [],
+        "assets": [],
+    }
+
+    attempt = ParseAttemptResult(
+        **attempt_payload,
+        canonical_sha256=canonical_sha256(attempt_payload),
+    )
+
+    assert attempt.source_backend == "pdf-native"
+    assert attempt.covered_page_ordinals == []
+
+
 def test_parse_attempt_rejects_bad_coverage_order_and_hash() -> None:
     payload = _bundle_payload()
     page = payload["pages"][0]

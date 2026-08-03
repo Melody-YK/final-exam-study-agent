@@ -25,8 +25,14 @@ def test_worker_claim_policy_accepts_only_consistent_native_or_ocr_profiles() ->
     )
 
 
-def test_worker_claim_policy_keeps_mineru_paid_and_unknown_profiles_unavailable() -> None:
-    for profile in ("mineru-v1", "paid-ocr-v1", "shell-v1"):
+def test_worker_claim_policy_accepts_mineru_without_claiming_generic_ocr() -> None:
+    assert claim_capabilities_are_eligible(
+        _capabilities(profiles=["mineru-v1"], supports_ocr=False)
+    )
+
+
+def test_worker_claim_policy_keeps_paid_and_unknown_profiles_unavailable() -> None:
+    for profile in ("paid-ocr-v1", "shell-v1"):
         assert not claim_capabilities_are_eligible(
             _capabilities(profiles=[profile], supports_ocr=True)
         )

@@ -13,6 +13,7 @@ from study_contracts import JobClaimRequest
 class WorkerAvailability:
     native_parser: bool
     ocr_parser: bool
+    mineru_parser: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +57,7 @@ class WorkerPresenceRegistry:
                 "ocr-v1" in presence.parser_profiles and presence.supports_ocr
                 for presence in presences
             ),
+            mineru_parser=any("mineru-v1" in presence.parser_profiles for presence in presences),
         )
 
     def _remove_stale(self, now: datetime, *, max_age: timedelta) -> None:

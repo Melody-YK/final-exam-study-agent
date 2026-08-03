@@ -9,13 +9,16 @@ import { UploadDialog } from './UploadDialog'
 
 function UploadHarness({
   onUploaded = () => undefined,
+  mineruAvailable = true,
 }: {
   onUploaded?: () => void
+  mineruAvailable?: boolean
 }) {
   const [open, setOpen] = useState(true)
   return (
     <UploadDialog
       courseId="course-1"
+      mineruAvailable={mineruAvailable}
       onClose={() => setOpen(false)}
       onUploaded={onUploaded}
       open={open}
@@ -72,6 +75,7 @@ describe('UploadDialog', () => {
         'corpus',
         expect.any(Function),
         expect.any(AbortSignal),
+        'enhanced',
       )
       expect(onUploaded).toHaveBeenCalledWith(uploaded)
     },
@@ -166,10 +170,47 @@ describe('UploadDialog', () => {
       'corpus',
       expect.any(Function),
       expect.any(AbortSignal),
+      'enhanced',
     )
     await user.click(screen.getByRole('button', { name: '取消上传' }))
 
     expect(uploadSignal?.aborted).toBe(true)
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('offers MinerU only for PDFs and submits the selected strategy', async () => {
+    const upload = vi
+      .spyOn(studyApi, 'uploadDocument')
+      .mockResolvedValue(documentRecord({ filename: 'chapter.pdf' }))
+    const { user } = renderInWorkspace(<UploadHarness />)
+    const file = new File(['pdf body'], 'chapter.pdf', {
+      type: 'application/pdf',
+    })
+
+    await user.upload(screen.getByLabelText(/选择文件/), file)
+    await user.click(screen.getByRole('radio', { name: /MinerU/ }))
+    await user.click(screen.getByRole('button', { name: '上传' }))
+
+    expect(upload).toHaveBeenCalledWith(
+      'course-1',
+      file,
+      'corpus',
+      expect.any(Function),
+      expect.any(AbortSignal),
+      'mineru',
+    )
+  })
+
+  it('disables MinerU when the self-hosted service is unavailable', async () => {
+    const { user } = renderInWorkspace(
+      <UploadHarness mineruAvailable={false} />,
+    )
+    await user.upload(
+      screen.getByLabelText(/选择文件/),
+      new File(['pdf body'], 'chapter.pdf', { type: 'application/pdf' }),
+    )
+
+    expect(screen.getByRole('radio', { name: /MinerU/ })).toBeDisabled()
+    expect(screen.getByText('服务未就绪')).toBeVisible()
   })
 })

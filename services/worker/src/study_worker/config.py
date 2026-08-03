@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import StrEnum
 from ipaddress import ip_address
 from pathlib import Path
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -49,9 +49,14 @@ class WorkerSettings(BaseSettings):
     soffice_bin: Path | None = None
     paddle_profile_bin: Path | None = None
     paddle_model_cache: Path | None = None
+    docling_profile_bin: Path | None = None
+    docling_artifacts_root: Path | None = None
+    mineru_base_url: AnyHttpUrl | None = None
+    mineru_token: SecretStr | None = None
+    mineru_backend: Literal["pipeline"] = "pipeline"
     complex_parser_enabled: bool = False
 
-    @field_validator("token", mode="before")
+    @field_validator("token", "mineru_token", mode="before")
     @classmethod
     def empty_token_is_unconfigured(cls, value: object) -> object:
         if isinstance(value, str) and not value.strip():
@@ -77,6 +82,8 @@ class WorkerSettings(BaseSettings):
         "soffice_bin",
         "paddle_profile_bin",
         "paddle_model_cache",
+        "docling_profile_bin",
+        "docling_artifacts_root",
         mode="before",
     )
     @classmethod
@@ -92,7 +99,13 @@ class WorkerSettings(BaseSettings):
             return None
         return value.expanduser().resolve()
 
-    @field_validator("paddle_profile_bin", "paddle_model_cache", mode="after")
+    @field_validator(
+        "paddle_profile_bin",
+        "paddle_model_cache",
+        "docling_profile_bin",
+        "docling_artifacts_root",
+        mode="after",
+    )
     @classmethod
     def make_optional_ocr_path_absolute(cls, value: Path | None) -> Path | None:
         if value is None:
@@ -123,6 +136,28 @@ class WorkerSettings(BaseSettings):
             raise ValueError("production worker API must use HTTPS")
         if self.mode is WorkerMode.PRODUCTION and self.token is not None:
             _validate_production_token(self.token)
+
+        if self.mineru_base_url is not None:
+            mineru_host = self.mineru_base_url.host
+            if mineru_host is None:
+                raise ValueError("MinerU URL must include a host")
+            if (
+                self.mineru_base_url.username is not None
+                or self.mineru_base_url.password is not None
+                or self.mineru_base_url.query is not None
+                or self.mineru_base_url.fragment is not None
+            ):
+                raise ValueError("MinerU URL must not include credentials, query, or fragment")
+            try:
+                mineru_loopback = ip_address(mineru_host).is_loopback
+            except ValueError:
+                mineru_loopback = mineru_host == "localhost"
+            if (
+                self.mode is WorkerMode.PRODUCTION
+                and self.mineru_base_url.scheme != "https"
+                and not mineru_loopback
+            ):
+                raise ValueError("production MinerU URL must use HTTPS unless it is loopback")
 
         if self.request_timeout_seconds <= self.poll_wait_seconds:
             raise ValueError("request timeout must exceed the long-poll wait")

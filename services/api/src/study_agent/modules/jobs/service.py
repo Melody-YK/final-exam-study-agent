@@ -100,8 +100,14 @@ async def enqueue_parse_job(
     now: datetime,
     max_attempts: int,
     event_retention: timedelta,
+    parser_profile: str | None = None,
 ) -> ParseJobModel:
     is_image = document.media_type.startswith("image/")
+    selected_profile = parser_profile or ("ocr-v1" if is_image else "native-v1")
+    if selected_profile not in {"native-v1", "ocr-v1", "mineru-v1"}:
+        raise ValueError("unsupported parser profile")
+    if selected_profile == "mineru-v1" and document.media_type != "application/pdf":
+        raise ValueError("MinerU profile only accepts PDF documents")
     job = ParseJobModel(
         id=new_trace_id(),
         user_id=document.user_id,
@@ -113,13 +119,13 @@ async def enqueue_parse_job(
         state_version=1,
         attempt=0,
         max_attempts=max_attempts,
-        parser_profile="ocr-v1" if is_image else "native-v1",
+        parser_profile=selected_profile,
         parser_schema_version="1.0",
         media_type=document.media_type,
         document_sha256=document.verified_sha256,
         document_deletion_epoch=document.deletion_epoch,
         input_size_bytes=stored_object.size_bytes,
-        requires_ocr=is_image,
+        requires_ocr=selected_profile == "ocr-v1",
         requires_rendering=False,
         requested_pages=[],
         available_at=now,

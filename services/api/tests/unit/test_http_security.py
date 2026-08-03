@@ -46,6 +46,57 @@ async def test_local_api_rejects_dns_rebinding_cross_origin_and_forwarded_header
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("origin", ["http://127.0.0.1:5173", "http://localhost:5173"])
+async def test_local_api_accepts_default_frontend_origins_on_post(
+    tmp_path: Path,
+    origin: str,
+) -> None:
+    app = _local_app(tmp_path)
+
+    async def security_probe() -> dict[str, str]:
+        return {"status": "ok"}
+
+    app.add_api_route("/security-probe", security_probe, methods=["POST"])
+    transport = ASGITransport(app=app, client=("127.0.0.1", 51000))
+    async with AsyncClient(transport=transport, base_url="http://127.0.0.1:8000") as client:
+        response = await client.post("/security-probe", headers={"Origin": origin})
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_local_api_accepts_explicit_vite_port_without_widening_defaults(
+    tmp_path: Path,
+) -> None:
+    default_app = _local_app(tmp_path / "default")
+    assert "http://127.0.0.1:5176" not in default_app.state.settings.effective_allowed_origins
+
+    app = _local_app(
+        tmp_path / "explicit",
+        allowed_origins=("http://127.0.0.1:5176", "http://localhost:5176"),
+    )
+
+    async def security_probe() -> dict[str, str]:
+        return {"status": "ok"}
+
+    app.add_api_route("/security-probe", security_probe, methods=["POST"])
+    transport = ASGITransport(app=app, client=("127.0.0.1", 51000))
+    async with AsyncClient(transport=transport, base_url="http://127.0.0.1:8000") as client:
+        allowed = await client.post(
+            "/security-probe",
+            headers={"Origin": "http://127.0.0.1:5176"},
+        )
+        rejected = await client.post(
+            "/security-probe",
+            headers={"Origin": "http://127.0.0.1:5175"},
+        )
+
+    assert allowed.status_code == 200
+    assert rejected.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_api_adds_browser_security_headers(tmp_path: Path) -> None:
     app = _local_app(tmp_path)
     transport = ASGITransport(app=app, client=("127.0.0.1", 51000))
@@ -319,12 +370,22 @@ def test_production_app_refuses_local_principal_fallback(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
-async def test_expensive_endpoint_rate_limit_is_bounded_per_client(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/v1/courses/course/queries",
+        "/api/v1/practice-sessions/session/questions/question/tutor",
+    ],
+)
+async def test_expensive_endpoint_rate_limit_is_bounded_per_client(
+    tmp_path: Path,
+    path: str,
+) -> None:
     app = _local_app(tmp_path, query_requests_per_minute=1)
     transport = ASGITransport(app=app, client=("127.0.0.1", 51000))
     async with AsyncClient(transport=transport, base_url="http://127.0.0.1:8000") as client:
-        first = await client.post("/api/v1/courses/course/queries", json={})
-        second = await client.post("/api/v1/courses/course/queries", json={})
+        first = await client.post(path, json={})
+        second = await client.post(path, json={})
 
     assert first.status_code == 422
     assert second.status_code == 429

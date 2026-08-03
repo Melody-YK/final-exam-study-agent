@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-本文件记录当前直接依赖和公开 fixture 的许可入口，不替代各上游项目随包发布的完整许可文本。精确版本和传递依赖以 `uv.lock`、`services/worker/profiles/paddle/uv.lock` 和 `package-lock.json` 为准。
+本文件记录当前直接依赖和公开 fixture 的许可入口，不替代各上游项目随包发布的完整许可文本。精确版本和传递依赖以 `uv.lock`、`services/worker/profiles/paddle/uv.lock`、`services/worker/profiles/docling/uv.lock` 和 `package-lock.json` 为准。
 
 ## Public Fixtures
 
@@ -26,6 +26,7 @@ Hash、用途和 attribution 由 `evals/manifests/public.json` 管理。fixture 
 | pdfplumber, python-pptx, Typer | MIT |
 | Pillow | HPND |
 | pypdf | BSD-3-Clause |
+| Docling (optional isolated profile) | MIT |
 
 ## Optional PDF Text Repair
 
@@ -47,6 +48,19 @@ Poppler `pdftotext` 使用 `GPL-2.0-only OR GPL-3.0-only`。它作为宿主机�
 ## Isolated OCR Profile
 
 `paddleocr` 与 `paddlepaddle` 使用 Apache-2.0，且只存在于 `services/worker/profiles/paddle/` 的独立锁定 profile。默认 API/Worker 不安装它们，capability probe 不下载模型。模型权重可能有独立条款，必须在本地获取前另行核查；本仓库不分发权重。
+
+## Optional MinerU Service
+
+本仓库只包含对自建 MinerU HTTP API 的适配，不把 MinerU 或其模型安装进基础
+Worker，也不代用户调用第三方托管服务。当前对接版本 MinerU 3.4.4 采用
+Apache-2.0 并附加商业规模门槛与在线服务标识义务：基于 MinerU 向第三方提供在线
+服务时，必须在产品界面或公开文档显著标明使用 MinerU；月活超过 1 亿或月总收入
+超过 2000 万美元时需要另行取得商业许可。部署方必须以实际使用版本随附的
+`LICENSE.md` 为准。MinerU 使用的模型、OCR 引擎和字体可能有额外许可，部署前必须
+逐项核查；本仓库不分发这些权重。
+
+GraniteDocling 等 Docling VLM 权重也可能具有独立模型许可证。profile 的 lock
+文件只锁定 Python 包版本，不代表模型权重许可已获组织批准。
 
 ## Verification Boundary
 

@@ -4,8 +4,9 @@ from study_contracts import WorkerCapabilities
 
 NATIVE_PROFILE = "native-v1"
 OCR_PROFILE = "ocr-v1"
-ALLOWED_PARSER_PROFILES = frozenset({NATIVE_PROFILE, OCR_PROFILE})
-DISABLED_PARSER_PROFILES = frozenset({"mineru-v1", "paid-ocr-v1"})
+MINERU_PROFILE = "mineru-v1"
+ALLOWED_PARSER_PROFILES = frozenset({NATIVE_PROFILE, OCR_PROFILE, MINERU_PROFILE})
+DISABLED_PARSER_PROFILES = frozenset({"paid-ocr-v1"})
 
 
 def claim_capabilities_are_eligible(capabilities: WorkerCapabilities) -> bool:

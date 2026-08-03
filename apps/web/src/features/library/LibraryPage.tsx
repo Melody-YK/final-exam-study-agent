@@ -327,6 +327,7 @@ export function LibraryPage() {
       ) : null}
       <UploadDialog
         courseId={courseId}
+        mineruAvailable={capabilities?.mineru_parser.status === 'available'}
         onClose={() => setUploadOpen(false)}
         onUploaded={() => void queryClient.invalidateQueries({ queryKey: ['documents', courseId] })}
         open={uploadOpen}

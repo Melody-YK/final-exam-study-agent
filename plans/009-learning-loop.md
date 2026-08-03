@@ -3,17 +3,26 @@
 > **执行者说明**：按本文档顺序执行。每一步都必须先完成实现，再运行该步的验证命令并确认预期结果，才能进入下一步。遇到“停止条件”时停止并报告，不要自行扩大范围。完成后更新 `plans/README.md` 中本计划的状态；除非调度者另有要求，不要提交、推送或创建 PR。
 >
 > **漂移检查（第一步执行）**：
-> `git diff --stat abe7fcb -- packages/contracts/python/src/study_contracts services/api/alembic services/api/src/study_agent/infrastructure/db/models services/api/src/study_agent/api services/api/src/study_agent/modules apps/web/src/api apps/web/src/features apps/web/src/app/navigation.tsx tests/e2e`
-> 当前主工作树在计划编写时存在未提交改动。执行者必须在干净的实现分支上执行本计划；如果上述范围存在未提交改动，先停止并报告，不要把当前脏工作树直接当作基线。
+> `git diff --stat a6ce61a -- packages/contracts/python/src/study_contracts services/api/alembic services/api/src/study_agent/infrastructure/db/models services/api/src/study_agent/api services/api/src/study_agent/modules apps/web/src/api apps/web/src/features apps/web/src/app/navigation.tsx tests/e2e`
+> 当前主工作树已经提交并推送；执行者必须在基于该提交的干净隔离工作区执行本计划。
 
 ## 状态
 
+- **执行状态**：DONE；基线实现、主题投影、审查和全量验证已完成；2026-08-03 完成标题展示、作答草稿恢复和学习单元重新整理增量修复
 - **优先级**：P0
 - **工作量**：L
 - **风险**：HIGH
 - **依赖**：计划 004、005、006 的资料就绪、可操作概念地图和可预测笔记行为；不依赖计划 007 的图谱算法重做
 - **类别**：direction
-- **计划基线**：commit `abe7fcb`，2026-08-01
+- **计划基线**：commit `a6ce61a`，2026-08-02
+
+### 2026-08-03 增量收口
+
+- 学习单元标题在展示边界去除单级章节编号（如 `16.`、`2.`、`2)`），保留 `6.5.3` 这类层级编号；原始 `canonical_key`、题目来源和证据绑定不变。
+- 练习会话按 `sessionId` 将当前题号和未提交选项保存到浏览器本地；重新进入或刷新页面时恢复，提交答案仍以服务端为准，完成练习后清除草稿。
+- 退出练习会重新拉取会话，避免使用过期的内存快照；未提交草稿暂不跨设备同步。
+- 学习单元增加显式“重新整理学习单元”动作：从文件名提取章节主题，将扁平小标题归入文档主题，隐藏子章节练习入口，并把旧投影标记为 stale/unavailable 但保留历史题目、来源和掌握度引用。该动作只重建学习单元投影，不自动重新调用题目生成 Provider。
+- 收口证据：前端组件测试、标题清洗单测、Web 静态检查/构建，以及 Chromium/WebKit 桌面/移动 E2E 均通过；具体命令和结果见 AIWF `00_EVIDENCE.md` / `00_TEST_AUDIT.md`。
 
 ## 为什么做
 
@@ -99,6 +108,7 @@ OpenAPI 或 TypeScript 生成文件必须通过仓库现有命令生成：`npm r
 - `services/api/tests/unit/learning/test_mastery.py`（新增）
 - `services/api/tests/unit/learning/test_scheduling.py`（新增）
 - `services/api/tests/integration/test_learning_loop.py`（新增）
+- `services/api/tests/integration/__init__.py`（新增；避免与契约测试同名模块在全量 pytest 收集时冲突）
 - `services/api/tests/contract/test_openapi.py`（仅在需要添加 schema 断言时修改）
 - `packages/contracts/openapi/openapi.json`（仅由生成命令更新）
 - `apps/web/src/api/client.ts`
@@ -150,6 +160,7 @@ V1 掌握规则必须是纯函数并有测试。例如可使用 0-3 等级：首
 建议至少提供以下 Principal scoped 路由，具体路径和命名在实现前保持一致，不要同时发布两套近似 API：
 
 - `GET /courses/{course_id}/learning-units`：列出当前课程可用学习单元及来源状态。
+- `POST /courses/{course_id}/learning-units/regenerate`：显式重新整理当前学习单元投影；保留历史引用，不删除题目、来源或掌握度。
 - `POST /courses/{course_id}/practice-batches`：按单元和题数创建题目生成批次，要求 `Idempotency-Key`。
 - `GET /practice-batches/{batch_id}`：读取生成进度和题目结果。
 - `POST /courses/{course_id}/practice-sessions`：从有效题目创建一次练习会话。
@@ -305,15 +316,15 @@ V1 掌握规则必须是纯函数并有测试。例如可使用 0-3 等级：首
 
 ## 完成标准
 
-- [ ] 用户能够从一个已就绪课程进入练习，完成不超过 10 道有据题目，并看到每题的来源依据。
-- [ ] 每次作答都保存一次、可幂等重放，并更新对应学习单元的掌握度。
-- [ ] 用户完成会话后能看到至少一个明确的下一步复习动作；到期后 review queue 能再次返回该单元。
-- [ ] 题目永远不会引用未授权、已删除或非活动 Revision 的来源。
-- [ ] Provider 不可用时不会伪造新题目，已有有效题目仍可练习。
-- [ ] 课程、用户、题目、会话、attempt、掌握度和来源绑定均通过服务器端 scope 校验。
-- [ ] `make check` 通过，或所有外部阻塞均已记录并保持计划为 `BLOCKED`，不能标记为 DONE。
-- [ ] `git status --short` 只显示本计划允许的文件，且 `git diff --check` 通过。
-- [ ] `plans/README.md` 中本计划状态已更新。
+- [x] 用户能够从一个已就绪课程进入练习，完成不超过 10 道有据题目，并看到每题的来源依据。
+- [x] 每次作答都保存一次、可幂等重放，并更新对应学习单元的掌握度。
+- [x] 用户完成会话后能看到至少一个明确的下一步复习动作；到期后 review queue 能再次返回该单元。
+- [x] 题目永远不会引用未授权、已删除或非活动 Revision 的来源。
+- [x] Provider 不可用时不会伪造新题目，已有有效题目仍可练习。
+- [x] 课程、用户、题目、会话、attempt、掌握度和来源绑定均通过服务器端 scope 校验。
+- [x] `make check` 通过；唯一跳过项为需要外部 Provider 凭据的 live test。
+- [x] `git status --short` 只显示本计划允许的文件，且 `git diff --check` 通过。
+- [x] `plans/README.md` 中本计划状态已更新。
 
 ## 停止条件
 

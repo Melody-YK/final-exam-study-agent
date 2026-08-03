@@ -228,6 +228,8 @@ def main() -> int:
         Path("evals/fixtures/public/rag-seed-v1.jsonl"),
         Path("infra/compose/compose.yml"),
         Path("uv.lock"),
+        Path("services/worker/profiles/paddle/uv.lock"),
+        Path("services/worker/profiles/docling/uv.lock"),
         Path("package-lock.json"),
         Path(".local/evidence/sbom.cdx.json"),
         Path(".local/evidence/playwright/results.json"),

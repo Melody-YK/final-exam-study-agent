@@ -37,7 +37,10 @@ async def test_presence_reports_only_recent_authenticated_claim_capabilities() -
 
     assert native.native_parser is True
     assert native.ocr_parser is False
+    assert native.mineru_parser is False
     assert ocr.native_parser is True
     assert ocr.ocr_parser is True
+    assert ocr.mineru_parser is False
     assert expired.native_parser is False
     assert expired.ocr_parser is False
+    assert expired.mineru_parser is False

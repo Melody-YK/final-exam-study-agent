@@ -286,19 +286,27 @@ class RevisionService:
             raise self._hash_mismatch("attempt document hash 与 Job 不一致。")
         if attempt.parser_profile != job.parser_profile or attempt.schema_version != "1.0":
             raise self._invalid_schema("attempt parser profile 或 schema 不受支持。")
-        native_backend = {
-            "text/markdown": "markdown-native",
-            "application/pdf": "pdf-native",
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation": (
+        page_backends = {page.source_backend for page in attempt.pages} or {attempt.source_backend}
+        native_backends = {
+            "text/markdown": {"markdown-native"},
+            "application/pdf": {"pdf-native", "docling-standard", "docling-vlm"},
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation": {
                 "pptx-native"
-            ),
-        }.get(job.media_type)
-        backend_allowed = (
-            attempt.source_backend == native_backend
-            if job.parser_profile == "native-v1"
-            else job.parser_profile == "ocr-v1"
-            and attempt.source_backend in {"paddleocr-general", "pp-structure-v3"}
-        )
+            },
+        }.get(job.media_type, set())
+        if job.parser_profile == "native-v1":
+            backend_allowed = page_backends <= native_backends
+        elif job.parser_profile == "ocr-v1":
+            backend_allowed = page_backends <= {
+                "paddleocr-general",
+                "pp-structure-v3",
+            }
+        else:
+            backend_allowed = (
+                job.parser_profile == "mineru-v1"
+                and job.media_type == "application/pdf"
+                and page_backends == {"mineru-pipeline"}
+            )
         if not backend_allowed:
             raise self._invalid_schema("attempt backend 与文档媒体类型不一致。")
         expected_requested = list(job.requested_pages) or list(

@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from study_contracts import JobArtifactReceipt, JobProgress, WorkerLease
-from study_worker.capabilities import OcrCapabilityStatus
+from study_worker.capabilities import MineruCapabilityStatus, OcrCapabilityStatus
 from study_worker.dispatcher import (
     Dispatcher,
     JobReporter,
@@ -99,7 +99,9 @@ def test_native_capabilities_do_not_advertise_ocr_or_rendering() -> None:
 
 
 @pytest.mark.asyncio
-async def test_dispatcher_routes_ocr_only_to_an_explicit_handler(tmp_path: Path) -> None:
+async def test_dispatcher_routes_optional_profiles_only_to_explicit_handlers(
+    tmp_path: Path,
+) -> None:
     expected = TaskResult(
         result_manifest_ref="objects/ocr-manifest.json",
         result_sha256="c" * 64,
@@ -122,6 +124,13 @@ async def test_dispatcher_routes_ocr_only_to_an_explicit_handler(tmp_path: Path)
         calls.append(f"ocr:{lease.parser_profile}")
         return expected
 
+    async def mineru_handler(
+        lease: WorkerLease, sandbox: Sandbox, reporter: JobReporter
+    ) -> TaskResult:
+        del sandbox, reporter
+        calls.append(f"mineru:{lease.parser_profile}")
+        return expected
+
     sandbox = Sandbox(tmp_path, tmp_path / "input", tmp_path / "output")
     ocr_lease = _lease().model_copy(update={"parser_profile": "ocr-v1", "requested_pages": [2]})
     without_ocr = Dispatcher(parse_handler=native_handler)
@@ -134,9 +143,17 @@ async def test_dispatcher_routes_ocr_only_to_an_explicit_handler(tmp_path: Path)
     assert calls == ["ocr:ocr-v1"]
 
     mineru_lease = ocr_lease.model_copy(update={"parser_profile": "mineru-v1"})
-    with pytest.raises(TaskExecutionError, match="PARSER_CAPABILITY_DISABLED") as disabled:
+    with pytest.raises(TaskExecutionError, match="MINERU_CAPABILITY_UNAVAILABLE") as unavailable:
         await dispatcher.dispatch(mineru_lease, sandbox, ReporterStub())
-    assert disabled.value.retryable is False
+    assert unavailable.value.retryable is True
+
+    dispatcher = Dispatcher(
+        parse_handler=native_handler,
+        ocr_handler=ocr_handler,
+        mineru_handler=mineru_handler,
+    )
+    assert await dispatcher.dispatch(mineru_lease, sandbox, ReporterStub()) == expected
+    assert calls == ["ocr:ocr-v1", "mineru:mineru-v1"]
 
 
 def test_ocr_claim_capability_requires_both_verified_probe_and_handler() -> None:
@@ -166,3 +183,29 @@ def test_ocr_claim_capability_requires_both_verified_probe_and_handler() -> None
     assert with_handler.parser_profiles == ["native-v1", "ocr-v1"]
     assert with_handler.supports_ocr is True
     assert "image/png" in with_handler.media_types
+
+
+def test_mineru_claim_capability_requires_health_probe_and_handler() -> None:
+    ready = MineruCapabilityStatus(
+        ready=True,
+        reason_code=None,
+        source_version="3.4.4",
+        protocol_version=2,
+    )
+
+    no_handler = capabilities_for_handlers(
+        max_input_bytes=1234,
+        max_pages=42,
+        mineru_status=ready,
+        mineru_handler_available=False,
+    )
+    with_handler = capabilities_for_handlers(
+        max_input_bytes=1234,
+        max_pages=42,
+        mineru_status=ready,
+        mineru_handler_available=True,
+    )
+
+    assert no_handler.parser_profiles == ["native-v1"]
+    assert with_handler.parser_profiles == ["native-v1", "mineru-v1"]
+    assert with_handler.supports_ocr is False

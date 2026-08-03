@@ -14,6 +14,7 @@ from study_agent.modules.courses.documents import (
     Document,
     DocumentReviewStatus,
     DocumentService,
+    PdfParserStrategy,
     UploadReceipt,
 )
 from study_agent.modules.courses.manifest import CorpusRole
@@ -88,6 +89,7 @@ class UploadCompleteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     upload_session_id: str = Field(min_length=1, max_length=255)
+    parser_strategy: PdfParserStrategy = PdfParserStrategy.ENHANCED
 
 
 class DeletionAccepted(BaseModel):
@@ -315,6 +317,7 @@ async def complete_document_upload(
             payload.upload_session_id,
             idempotency_key,
             UploadValidator(_settings(request).max_upload_bytes),
+            payload.parser_strategy,
         )
     except UploadRejected as exc:
         raise _upload_problem(exc) from exc

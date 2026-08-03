@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from typing import Any, Literal, Protocol, cast
 from uuid import uuid4
 
@@ -37,6 +38,11 @@ from study_agent.providers.protocols import Clock, ObjectMetadata, ObjectScope, 
 from study_agent.storage.local import StorageUploadTooLarge
 
 type DocumentReviewStatus = Literal["pending", "approved", "rejected"]
+
+
+class PdfParserStrategy(StrEnum):
+    ENHANCED = "enhanced"
+    MINERU = "mineru"
 
 
 @dataclass(frozen=True, slots=True)
@@ -363,10 +369,15 @@ class DocumentService:
         upload_session_id: str,
         idempotency_key: str,
         validator: UploadValidator,
+        parser_strategy: PdfParserStrategy = PdfParserStrategy.ENHANCED,
     ) -> Document:
         operation = "document.upload_complete"
         request_hash = self._idempotency.request_hash(
-            {"document_id": document_id, "upload_session_id": upload_session_id}
+            {
+                "document_id": document_id,
+                "upload_session_id": upload_session_id,
+                "parser_strategy": parser_strategy.value,
+            }
         )
 
         async with self._database.session(principal) as session:
@@ -408,6 +419,15 @@ class DocumentService:
                 return completed
             if upload_session.status != "uploaded":
                 raise self._state_conflict("对象尚未完成上传。")
+            if (
+                parser_strategy is PdfParserStrategy.MINERU
+                and document.media_type != "application/pdf"
+            ):
+                raise ApiProblem(
+                    status=422,
+                    code=ProblemCode.INVALID_REQUEST,
+                    title="MinerU 解析仅支持 PDF",
+                )
             self._ensure_upload_not_expired(upload_session)
             declaration = ValidatedUpload(
                 filename=document.filename,
@@ -483,6 +503,9 @@ class DocumentService:
                     now=self._clock.now(),
                     max_attempts=self._job_max_attempts,
                     event_retention=self._job_event_retention,
+                    parser_profile=(
+                        "mineru-v1" if parser_strategy is PdfParserStrategy.MINERU else None
+                    ),
                 )
             completed = _document_from_model(document)
             self._store_completion_response(

@@ -132,6 +132,16 @@ class Settings(BaseSettings):
     note_docx_renderer_enabled: bool = False
     note_docx_cjk_font_family: str = "Noto Sans CJK SC"
 
+    # Active-recall generation is disabled by default and only accepts work
+    # when a real JSON-capable chat provider is configured.
+    practice_generation_enabled: bool = False
+    practice_runner_enabled: bool = False
+    practice_runner_poll_seconds: float = Field(default=1.0, gt=0, le=60)
+    practice_runner_lease_seconds: int = Field(default=60, ge=5, le=900)
+    practice_generation_max_attempts: int = Field(default=3, ge=1, le=20)
+    practice_batch_max_questions: int = Field(default=10, ge=1, le=10)
+    practice_max_active_batches_per_user: int = Field(default=3, ge=1, le=100)
+
     reranker_enabled: bool = False
     complex_parser_enabled: bool = False
     partial_ready_enabled: bool = False

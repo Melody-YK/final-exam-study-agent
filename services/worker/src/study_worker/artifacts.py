@@ -102,16 +102,23 @@ async def package_parse_page(
         sandbox=sandbox,
         reporter=reporter,
     )
-    quality = (
-        build_ocr_quality(
+    if raw_document.parser_profile == "ocr-v1":
+        quality = build_ocr_quality(
             raw_page.blocks,
             experimental=any(
                 block.metadata.get("ocr_backend") == "pp-structure-v3" for block in raw_page.blocks
             ),
         )
-        if raw_document.parser_profile == "ocr-v1"
-        else evaluate_page_quality(raw_page)
-    )
+    else:
+        quality = evaluate_page_quality(raw_page)
+        if raw_document.source_backend in {
+            "docling-standard",
+            "docling-vlm",
+            "mineru-pipeline",
+        }:
+            quality = quality.model_copy(
+                update={"text_layer": "mixed" if quality.text_char_count else "none"}
+            )
     page = normalize_page(
         raw_page,
         raw_result_ref=raw_receipt.artifact_ref,
@@ -163,13 +170,17 @@ async def finalize_parse_attempt(
         raise ValueError("packaged page coverage does not match the request")
     assets = [asset for packaged in packaged_pages for asset in packaged.assets]
     failed_pages = [packaged.page.ordinal for packaged in packaged_pages if packaged.failed]
+    page_provenance = {(page.source_backend, page.source_version) for page in pages}
+    attempt_backend, attempt_version = (
+        next(iter(page_provenance)) if len(page_provenance) == 1 else ("mixed", "mixed")
+    )
 
     attempt_payload = {
         "schema_version": "1.0",
         "document_sha256": raw_document.document_sha256,
         "parser_profile": raw_document.parser_profile,
-        "source_backend": raw_document.source_backend,
-        "source_version": raw_document.source_version,
+        "source_backend": attempt_backend,
+        "source_version": attempt_version,
         "total_page_count": raw_document.total_page_count,
         "requested_page_ordinals": list(requested),
         "covered_page_ordinals": list(covered),

@@ -58,6 +58,7 @@ CHECK_ALL_QUICK=1 ./scripts/check_all.sh
 - [评测协议](docs/evaluation.md)
 - [演示脚本](docs/demo.md)
 - [第三方与 fixture 许可](THIRD_PARTY_NOTICES.md)
+- [PDF 解析链配置](docs/parsing.md)
 
 ## 数据与凭据边界
 

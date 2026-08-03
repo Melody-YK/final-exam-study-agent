@@ -15,6 +15,7 @@ ANSWERING_TABLES = {
     "query_runs",
     "retrieval_snapshots",
 }
+CURRENT_HEAD = "20260802_0014"
 
 
 @pytest.mark.integration
@@ -56,7 +57,7 @@ async def test_head_creates_conversation_query_note_and_dependency_schema(
     finally:
         await engine.dispose()
 
-    assert version == "20260724_0012"
+    assert version == CURRENT_HEAD
     assert tables >= ANSWERING_TABLES
     assert constraints == {
         "ck_query_runs_status",

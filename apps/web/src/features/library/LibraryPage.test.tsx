@@ -115,6 +115,7 @@ describe('LibraryPage', () => {
       provider: { status: 'not_configured', label: '未配置回答模型' },
       native_parser: { status: 'unavailable', label: '原生解析不可用' },
       ocr_parser: { status: 'worker_required', label: '需要本地 OCR Worker' },
+      mineru_parser: { status: 'worker_required', label: '需要自建 MinerU 服务' },
     }
     vi.spyOn(studyApi, 'listDocuments').mockResolvedValue([documentRecord()])
 

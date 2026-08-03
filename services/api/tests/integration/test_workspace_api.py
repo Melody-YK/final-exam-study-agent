@@ -201,6 +201,7 @@ async def test_workspace_lists_status_and_retries_only_requested_pages_idempoten
             job.status = "failed"
             job.failed_pages = [2]
             job.retryable = False
+            job.parser_profile = "mineru-v1"
             persisted_document.status = "failed"
             persisted_document.review_status = "approved"
 
@@ -220,6 +221,16 @@ async def test_workspace_lists_status_and_retries_only_requested_pages_idempoten
             headers={"Idempotency-Key": "retry-second-job"},
         )
         after = await client.get(f"/api/v1/courses/{course_id}/documents")
+
+        async with database.session(principal) as session:
+            latest_job = await session.scalar(
+                select(ParseJobModel)
+                .where(ParseJobModel.document_id == document["id"])
+                .order_by(ParseJobModel.created_at.desc(), ParseJobModel.id.desc())
+                .limit(1)
+            )
+            assert latest_job is not None
+            assert latest_job.parser_profile == "mineru-v1"
 
     assert retried.status_code == 202
     assert retried.json()["failed_pages"] == [2]

@@ -241,9 +241,15 @@ async def test_runtime_advertises_and_routes_ocr_only_after_both_startup_gates(
         captured["client"] = kwargs
         return object()
 
-    def dispatcher(*, parse_handler: TaskHandler, ocr_handler: TaskHandler | None) -> object:
+    def dispatcher(
+        *,
+        parse_handler: TaskHandler,
+        ocr_handler: TaskHandler | None,
+        mineru_handler: TaskHandler | None,
+    ) -> object:
         captured["parse_handler"] = parse_handler
         captured["ocr_handler"] = ocr_handler
+        captured["mineru_handler"] = mineru_handler
         return object()
 
     def poller(**kwargs: object) -> object:
@@ -264,5 +270,6 @@ async def test_runtime_advertises_and_routes_ocr_only_after_both_startup_gates(
     capabilities = captured["poller"]["capabilities"]  # type: ignore[index]
     assert captured["parse_handler"] is native_handler
     assert captured["ocr_handler"] is (ocr_handler if handler_available else None)
+    assert captured["mineru_handler"] is None
     assert capabilities.supports_ocr is handler_available
     assert ("ocr-v1" in capabilities.parser_profiles) is handler_available

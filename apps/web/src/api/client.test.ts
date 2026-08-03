@@ -309,6 +309,7 @@ describe('StudyApiClient', () => {
     expect(new Headers(completeInit.headers).get('Idempotency-Key')).toBe('upload-complete-uuid-1')
     expect(JSON.parse(String(completeInit.body))).toEqual({
       upload_session_id: 'upload-1',
+      parser_strategy: 'enhanced',
     })
     expect(progress.mock.calls.map(([value]) => value)).toEqual([8, 24, 82, 100])
   })

@@ -27,6 +27,8 @@ import type {
   KnowledgeGraphResponse,
   LabTrace,
   LoginRequest,
+  LearningSummary,
+  LearningUnit,
   MergedNoteBatchRequest,
   NoteBatchSnapshot,
   NoteCreate,
@@ -34,12 +36,22 @@ import type {
   NotePatch,
   NoteRecord,
   ParseRetryRequest,
+  PdfParserStrategy,
   ProblemDetails,
+  PracticeAttemptRequest,
+  PracticeAttemptResult,
+  PracticeBatchRequest,
+  PracticeBatchSnapshot,
+  PracticeSessionRequest,
+  PracticeSessionSnapshot,
+  PracticeTutorRequest,
+  PracticeTutorResponse,
   QueryCreate,
   QueryConceptContext,
   QuerySnapshot,
   RegisterRequest,
   RuntimeCapabilities,
+  ReviewQueueItem,
   SourcePreview,
   UploadCompleteRequest,
 } from './types'
@@ -194,6 +206,7 @@ export class StudyApiClient {
     corpusRole: CorpusRole,
     onProgress?: (progress: number) => void,
     signal?: AbortSignal,
+    parserStrategy: PdfParserStrategy = 'enhanced',
   ): Promise<DocumentRecord> {
     const digest = await sha256File(file)
     const mediaType = uploadMediaType(file)
@@ -226,6 +239,7 @@ export class StudyApiClient {
         headers: { 'Idempotency-Key': idempotencyKey('upload-complete') },
         body: jsonBody<UploadCompleteRequest>({
           upload_session_id: created.upload.id,
+          parser_strategy: parserStrategy,
         }),
       },
     )
@@ -477,6 +491,80 @@ export class StudyApiClient {
 
   getLabTrace(courseId: string): Promise<LabTrace> {
     return this.request(`/courses/${courseId}/lab/trace`)
+  }
+
+  listLearningUnits(courseId: string): Promise<LearningUnit[]> {
+    return this.request(`/courses/${encodeURIComponent(courseId)}/learning-units`)
+  }
+
+  regenerateLearningUnits(courseId: string): Promise<LearningUnit[]> {
+    return this.request(`/courses/${encodeURIComponent(courseId)}/learning-units/regenerate`, {
+      method: 'POST',
+    })
+  }
+
+  getLearningSummary(courseId: string): Promise<LearningSummary> {
+    return this.request(`/courses/${encodeURIComponent(courseId)}/learning-summary`)
+  }
+
+  getReviewQueue(courseId: string): Promise<ReviewQueueItem[]> {
+    return this.request(`/courses/${encodeURIComponent(courseId)}/review-queue`)
+  }
+
+  createPracticeBatch(
+    courseId: string,
+    input: PracticeBatchRequest,
+    commandKey?: string,
+  ): Promise<PracticeBatchSnapshot> {
+    return this.request(`/courses/${encodeURIComponent(courseId)}/practice-batches`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': commandKey ?? idempotencyKey('practice-batch-create') },
+      body: jsonBody(input),
+    })
+  }
+
+  getPracticeBatch(batchId: string): Promise<PracticeBatchSnapshot> {
+    return this.request(`/practice-batches/${encodeURIComponent(batchId)}`)
+  }
+
+  createPracticeSession(
+    courseId: string,
+    input: PracticeSessionRequest,
+  ): Promise<PracticeSessionSnapshot> {
+    return this.request(`/courses/${encodeURIComponent(courseId)}/practice-sessions`, {
+      method: 'POST',
+      body: jsonBody(input),
+    })
+  }
+
+  getPracticeSession(sessionId: string): Promise<PracticeSessionSnapshot> {
+    return this.request(`/practice-sessions/${encodeURIComponent(sessionId)}`)
+  }
+
+  submitPracticeAttempt(
+    sessionId: string,
+    input: PracticeAttemptRequest,
+    commandKey?: string,
+  ): Promise<PracticeAttemptResult> {
+    return this.request(`/practice-sessions/${encodeURIComponent(sessionId)}/attempts`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': commandKey ?? idempotencyKey('practice-attempt') },
+      body: jsonBody(input),
+    })
+  }
+
+  askPracticeTutor(
+    sessionId: string,
+    questionId: string,
+    input: PracticeTutorRequest,
+  ): Promise<PracticeTutorResponse> {
+    return this.request(
+      `/practice-sessions/${encodeURIComponent(sessionId)}/questions/${encodeURIComponent(questionId)}/tutor`,
+      {
+        method: 'POST',
+        body: jsonBody(input),
+      },
+    )
   }
 
   subscribe<T>(

@@ -129,6 +129,13 @@ def _locked_sync() -> None:
             "services/worker/profiles/paddle",
             "--locked",
         ),
+        (
+            "uv",
+            "sync",
+            "--project",
+            "services/worker/profiles/docling",
+            "--locked",
+        ),
     )
     for command in commands:
         result = subprocess.run(
@@ -155,10 +162,17 @@ def main() -> int:
             "paddle": installed_environment_sha256(
                 _ROOT / "services" / "worker" / "profiles" / "paddle" / ".venv"
             ),
+            "docling": installed_environment_sha256(
+                _ROOT / "services" / "worker" / "profiles" / "docling" / ".venv"
+            ),
         }
         workspace, workspace_exit = _pip_audit("workspace", _ROOT / ".venv")
         paddle, paddle_exit = _pip_audit(
             "paddle", _ROOT / "services" / "worker" / "profiles" / "paddle" / ".venv"
+        )
+        docling, docling_exit = _pip_audit(
+            "docling",
+            _ROOT / "services" / "worker" / "profiles" / "docling" / ".venv",
         )
         npm, npm_exit = _npm_audit()
     except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
@@ -166,6 +180,7 @@ def main() -> int:
         return 77
     workspace_vulnerabilities = _pip_vulnerability_count(workspace)
     paddle_vulnerabilities = _pip_vulnerability_count(paddle)
+    docling_vulnerabilities = _pip_vulnerability_count(docling)
     npm_vulnerabilities = npm.get("metadata", {}).get("vulnerabilities", {})
     npm_total = (
         int(npm_vulnerabilities.get("total", 0)) if isinstance(npm_vulnerabilities, dict) else -1
@@ -173,9 +188,11 @@ def main() -> int:
     passed = (
         workspace_exit == 0
         and paddle_exit == 0
+        and docling_exit == 0
         and npm_exit == 0
         and workspace_vulnerabilities == 0
         and paddle_vulnerabilities == 0
+        and docling_vulnerabilities == 0
         and npm_total == 0
     )
     summary = {
@@ -187,11 +204,15 @@ def main() -> int:
         "lock_sha256": {
             "uv": _sha256(_ROOT / "uv.lock"),
             "paddle_uv": _sha256(_ROOT / "services" / "worker" / "profiles" / "paddle" / "uv.lock"),
+            "docling_uv": _sha256(
+                _ROOT / "services" / "worker" / "profiles" / "docling" / "uv.lock"
+            ),
             "npm": _sha256(_ROOT / "package-lock.json"),
         },
         "vulnerability_counts": {
             "workspace_python": workspace_vulnerabilities,
             "paddle_python": paddle_vulnerabilities,
+            "docling_python": docling_vulnerabilities,
             "npm_production": npm_total,
         },
         "installed_environment_sha256": environment_sha256,
@@ -203,6 +224,7 @@ def main() -> int:
     print(f"advisory_audit_status={summary['status']}")
     print(f"workspace_python_vulnerabilities={workspace_vulnerabilities}")
     print(f"paddle_python_vulnerabilities={paddle_vulnerabilities}")
+    print(f"docling_python_vulnerabilities={docling_vulnerabilities}")
     print(f"npm_production_vulnerabilities={npm_total}")
     return 0 if passed else 1
 

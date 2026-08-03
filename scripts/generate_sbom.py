@@ -12,20 +12,25 @@ from typing import Any
 
 def build_sbom(root: Path) -> dict[str, object]:
     components: dict[str, dict[str, object]] = {}
-    uv_payload = tomllib.loads((root / "uv.lock").read_text(encoding="utf-8"))
-    for package in uv_payload.get("package", []):
-        if not isinstance(package, dict):
-            continue
-        name = package.get("name")
-        version = package.get("version")
-        if isinstance(name, str) and isinstance(version, str):
-            purl = f"pkg:pypi/{name}@{version}"
-            components[purl] = {
-                "type": "library",
-                "name": name,
-                "version": version,
-                "purl": purl,
-            }
+    for relative in (
+        Path("uv.lock"),
+        Path("services/worker/profiles/paddle/uv.lock"),
+        Path("services/worker/profiles/docling/uv.lock"),
+    ):
+        uv_payload = tomllib.loads((root / relative).read_text(encoding="utf-8"))
+        for package in uv_payload.get("package", []):
+            if not isinstance(package, dict):
+                continue
+            name = package.get("name")
+            version = package.get("version")
+            if isinstance(name, str) and isinstance(version, str):
+                purl = f"pkg:pypi/{name}@{version}"
+                components[purl] = {
+                    "type": "library",
+                    "name": name,
+                    "version": version,
+                    "purl": purl,
+                }
 
     npm_payload = json.loads((root / "package-lock.json").read_text(encoding="utf-8"))
     packages = npm_payload.get("packages", {})

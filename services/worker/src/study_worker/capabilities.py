@@ -8,7 +8,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+import httpx
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from study_worker.sandbox import (
     CommandPolicy,
@@ -19,7 +28,10 @@ from study_worker.sandbox import (
 )
 
 OCR_PROFILE = "ocr-v1"
+MINERU_PROFILE = "mineru-v1"
 ISOLATED_PADDLE_PROFILE = "paddle-ocr-v1"
+DOCLING_STANDARD_MARKER = ".study-agent-docling-standard-ready.json"
+DOCLING_VLM_MARKER = ".study-agent-docling-vlm-ready.json"
 _VERSION_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+~-]{0,99}")
 
 
@@ -82,6 +94,44 @@ class _PaddleProfileReport(BaseModel):
         return self
 
 
+class _DoclingProfileReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["1.0"] = "1.0"
+    profile: Literal["docling-v1"]
+    standard_ready: bool
+    standard_reason_code: str | None = Field(default=None, pattern=r"^[A-Z][A-Z0-9_]*$")
+    vlm_ready: bool
+    vlm_reason_code: str | None = Field(default=None, pattern=r"^[A-Z][A-Z0-9_]*$")
+    versions: dict[str, str] = Field(default_factory=dict)
+    artifacts_root: str = Field(min_length=1)
+
+    @field_validator("versions")
+    @classmethod
+    def docling_versions_must_be_bounded(cls, value: dict[str, str]) -> dict[str, str]:
+        if len(value) > 32 or any(
+            not name.strip()
+            or len(name) > 100
+            or not version.strip()
+            or len(version) > 100
+            or _VERSION_TOKEN.fullmatch(name) is None
+            or _VERSION_TOKEN.fullmatch(version) is None
+            for name, version in value.items()
+        ):
+            raise ValueError("profile versions are invalid")
+        return value
+
+    @model_validator(mode="after")
+    def readiness_fields_must_agree(self) -> _DoclingProfileReport:
+        if self.standard_ready == (self.standard_reason_code is not None):
+            raise ValueError("standard readiness reason is inconsistent")
+        if self.vlm_ready == (self.vlm_reason_code is not None):
+            raise ValueError("VLM readiness reason is inconsistent")
+        if self.vlm_ready and not self.standard_ready:
+            raise ValueError("VLM readiness requires the standard backend")
+        return self
+
+
 @dataclass(frozen=True, slots=True)
 class OcrCapabilityStatus:
     """Sanitized capability facts safe to use for Worker claim construction."""
@@ -108,6 +158,55 @@ class OcrCapabilityStatus:
 
     @classmethod
     def unavailable(cls, reason_code: str) -> OcrCapabilityStatus:
+        return cls(ready=False, reason_code=reason_code)
+
+
+@dataclass(frozen=True, slots=True)
+class DoclingCapabilityStatus:
+    """Readiness of the two isolated Docling backends."""
+
+    standard_ready: bool
+    vlm_ready: bool
+    standard_reason_code: str | None
+    vlm_reason_code: str | None
+    versions: tuple[tuple[str, str], ...] = field(default_factory=tuple)
+
+    def __post_init__(self) -> None:
+        if self.standard_ready == (self.standard_reason_code is not None):
+            raise ValueError("standard Docling readiness is inconsistent")
+        if self.vlm_ready == (self.vlm_reason_code is not None):
+            raise ValueError("VLM Docling readiness is inconsistent")
+        if self.vlm_ready and not self.standard_ready:
+            raise ValueError("VLM Docling readiness requires standard readiness")
+
+    @classmethod
+    def unavailable(cls, reason_code: str) -> DoclingCapabilityStatus:
+        return cls(
+            standard_ready=False,
+            vlm_ready=False,
+            standard_reason_code=reason_code,
+            vlm_reason_code=reason_code,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class MineruCapabilityStatus:
+    """Sanitized facts from a self-hosted MinerU API health probe."""
+
+    ready: bool
+    reason_code: str | None
+    source_version: str | None = None
+    protocol_version: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.ready:
+            if self.reason_code is not None or not self.source_version:
+                raise ValueError("ready MinerU status is inconsistent")
+        elif self.reason_code is None or self.source_version is not None:
+            raise ValueError("unavailable MinerU status must fail closed")
+
+    @classmethod
+    def unavailable(cls, reason_code: str) -> MineruCapabilityStatus:
         return cls(ready=False, reason_code=reason_code)
 
 
@@ -194,6 +293,143 @@ async def probe_paddle_profile(
     if result.returncode == 3 and not report.ready and report.reason_code is not None:
         return OcrCapabilityStatus.unavailable(report.reason_code)
     return OcrCapabilityStatus.unavailable("OCR_PROFILE_REPORT_INVALID")
+
+
+async def probe_docling_profile(
+    *,
+    executable: Path | None,
+    artifacts_root: Path | None,
+    sandbox: Sandbox,
+    timeout_seconds: float = 10,
+    max_output_bytes: int = 64 * 1024,
+) -> DoclingCapabilityStatus:
+    """Probe Docling readiness without importing it or allowing implicit downloads."""
+
+    if executable is None:
+        return DoclingCapabilityStatus.unavailable("DOCLING_PROFILE_NOT_CONFIGURED")
+    if artifacts_root is None:
+        return DoclingCapabilityStatus.unavailable("DOCLING_ARTIFACTS_NOT_CONFIGURED")
+    if timeout_seconds <= 0 or max_output_bytes <= 0:
+        raise ValueError("probe limits must be positive")
+
+    configured_executable = executable.expanduser()
+    if (
+        not configured_executable.is_absolute()
+        or configured_executable.is_symlink()
+        or not configured_executable.is_file()
+        or not os.access(configured_executable, os.X_OK)
+    ):
+        return DoclingCapabilityStatus.unavailable("DOCLING_PROFILE_UNAVAILABLE")
+    configured_artifacts = artifacts_root.expanduser()
+    if not configured_artifacts.is_absolute() or configured_artifacts.is_symlink():
+        return DoclingCapabilityStatus.unavailable("DOCLING_ARTIFACTS_UNAVAILABLE")
+    try:
+        resolved_artifacts = configured_artifacts.resolve(strict=True)
+    except OSError:
+        return DoclingCapabilityStatus.unavailable("DOCLING_ARTIFACTS_UNAVAILABLE")
+    if not resolved_artifacts.is_dir():
+        return DoclingCapabilityStatus.unavailable("DOCLING_ARTIFACTS_UNAVAILABLE")
+
+    expected_args = ("capabilities", "--artifacts-root", str(resolved_artifacts))
+    try:
+        runner = RestrictedProcessRunner(
+            (
+                CommandPolicy(
+                    name="docling-capabilities",
+                    executable=configured_executable,
+                    validate_args=lambda args: args == expected_args,
+                ),
+            ),
+            max_output_bytes=max_output_bytes,
+        )
+        result = await runner.run(
+            "docling-capabilities",
+            expected_args,
+            sandbox=sandbox,
+            timeout_seconds=timeout_seconds,
+        )
+    except ProcessTimeoutError:
+        return DoclingCapabilityStatus.unavailable("DOCLING_PROFILE_PROBE_TIMEOUT")
+    except (ProcessBoundaryError, OSError, ValueError):
+        return DoclingCapabilityStatus.unavailable("DOCLING_PROFILE_PROBE_FAILED")
+
+    try:
+        report = _DoclingProfileReport.model_validate_json(result.stdout)
+        reported_artifacts = Path(report.artifacts_root).expanduser().resolve(strict=True)
+    except (OSError, ValidationError, ValueError):
+        return DoclingCapabilityStatus.unavailable("DOCLING_PROFILE_REPORT_INVALID")
+    if reported_artifacts != resolved_artifacts:
+        return DoclingCapabilityStatus.unavailable("DOCLING_PROFILE_REPORT_INVALID")
+    if result.returncode not in {0, 3}:
+        return DoclingCapabilityStatus.unavailable("DOCLING_PROFILE_REPORT_INVALID")
+    if result.returncode == 0 and not report.standard_ready:
+        return DoclingCapabilityStatus.unavailable("DOCLING_PROFILE_REPORT_INVALID")
+    if result.returncode == 3 and report.standard_ready:
+        return DoclingCapabilityStatus.unavailable("DOCLING_PROFILE_REPORT_INVALID")
+    return DoclingCapabilityStatus(
+        standard_ready=report.standard_ready,
+        vlm_ready=report.vlm_ready,
+        standard_reason_code=report.standard_reason_code,
+        vlm_reason_code=report.vlm_reason_code,
+        versions=tuple(sorted(report.versions.items())),
+    )
+
+
+async def probe_mineru_api(
+    *,
+    base_url: str | None,
+    token: SecretStr | None,
+    timeout_seconds: float = 10,
+    max_output_bytes: int = 64 * 1024,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> MineruCapabilityStatus:
+    """Probe only the configured self-hosted API; never invoke a hosted paid service."""
+
+    if base_url is None:
+        return MineruCapabilityStatus.unavailable("MINERU_API_NOT_CONFIGURED")
+    if timeout_seconds <= 0 or max_output_bytes <= 0:
+        raise ValueError("probe limits must be positive")
+    headers = {"Accept": "application/json"}
+    if token is not None:
+        headers["Authorization"] = f"Bearer {token.get_secret_value()}"
+    try:
+        async with httpx.AsyncClient(
+            timeout=timeout_seconds,
+            follow_redirects=False,
+            transport=transport,
+        ) as client:
+            response = await client.get(f"{base_url.rstrip('/')}/health", headers=headers)
+    except (httpx.HTTPError, ValueError):
+        return MineruCapabilityStatus.unavailable("MINERU_API_UNREACHABLE")
+    if response.status_code != 200:
+        return MineruCapabilityStatus.unavailable("MINERU_API_UNHEALTHY")
+    if len(response.content) > max_output_bytes:
+        return MineruCapabilityStatus.unavailable("MINERU_HEALTH_RESPONSE_TOO_LARGE")
+    try:
+        payload = response.json()
+    except ValueError:
+        return MineruCapabilityStatus.unavailable("MINERU_HEALTH_RESPONSE_INVALID")
+    if not isinstance(payload, dict):
+        return MineruCapabilityStatus.unavailable("MINERU_HEALTH_RESPONSE_INVALID")
+    status = str(payload.get("status", "")).lower()
+    if status not in {"ok", "healthy", "ready"}:
+        return MineruCapabilityStatus.unavailable("MINERU_API_UNHEALTHY")
+    version_value = payload.get("version") or payload.get("mineru_version") or "unknown"
+    if not isinstance(version_value, str) or not version_value.strip() or len(version_value) > 100:
+        return MineruCapabilityStatus.unavailable("MINERU_HEALTH_RESPONSE_INVALID")
+    protocol_value = payload.get("protocol_version")
+    if protocol_value is not None and (
+        not isinstance(protocol_value, int)
+        or isinstance(protocol_value, bool)
+        or protocol_value < 1
+    ):
+        return MineruCapabilityStatus.unavailable("MINERU_HEALTH_RESPONSE_INVALID")
+    return MineruCapabilityStatus(
+        ready=True,
+        reason_code=None,
+        source_version=version_value.strip(),
+        protocol_version=protocol_value,
+    )
 
 
 def _contains_model_file(cache_root: Path) -> bool:

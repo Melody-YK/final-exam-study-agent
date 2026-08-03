@@ -20,6 +20,8 @@ def test_sbom_uses_committed_locks_without_claiming_an_advisory_audit(
     assert serialized["bomFormat"] == "CycloneDX"
     assert serialized["specVersion"] == "1.5"
     assert any(purl.startswith("pkg:pypi/fastapi@") for purl in purls)
+    assert any(purl.startswith("pkg:pypi/docling@") for purl in purls)
+    assert any(purl.startswith("pkg:pypi/paddleocr@") for purl in purls)
     assert any(purl.startswith("pkg:npm/react@") for purl in purls)
     assert serialized["metadata"]["properties"] == [
         {"name": "study-agent:scope", "value": "local-lock-inventory"},

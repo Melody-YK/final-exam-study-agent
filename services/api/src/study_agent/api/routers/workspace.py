@@ -84,6 +84,7 @@ class RuntimeCapabilitiesResponse(BaseModel):
     embedding: CapabilityResponse
     native_parser: CapabilityResponse
     ocr_parser: CapabilityResponse
+    mineru_parser: CapabilityResponse
     demo_lab_enabled: bool
     note_workflow: NoteWorkflowCapabilityResponse
 
@@ -217,6 +218,15 @@ async def get_runtime_capabilities(request: Request) -> RuntimeCapabilitiesRespo
                 "本地 OCR Worker 在线" if availability.ocr_parser else "需要已验证的本地 OCR Worker"
             ),
             error_code=None if availability.ocr_parser else "OCR_WORKER_REQUIRED",
+        ),
+        mineru_parser=CapabilityResponse(
+            status="available" if availability.mineru_parser else "worker_required",
+            label=(
+                "自建 MinerU 解析服务在线"
+                if availability.mineru_parser
+                else "需要已配置并通过健康检查的自建 MinerU 服务"
+            ),
+            error_code=None if availability.mineru_parser else "MINERU_WORKER_REQUIRED",
         ),
         demo_lab_enabled=settings.demo_lab_enabled,
         note_workflow=NoteWorkflowCapabilityResponse(
@@ -447,11 +457,11 @@ async def retry_document_parse(
                     now=_clock(request).now(),
                     max_attempts=settings.job_max_attempts,
                     event_retention=timedelta(seconds=settings.job_event_retention_seconds),
+                    parser_profile=(None if latest_job is None else latest_job.parser_profile),
                 )
                 if payload.failed_pages:
                     job.requested_pages = list(payload.failed_pages)
-                if latest_job is not None and latest_job.parser_profile == "ocr-v1":
-                    job.parser_profile = "ocr-v1"
+                if job.parser_profile == "ocr-v1":
                     job.requires_ocr = True
                 await session.flush()
         except IntegrityError as exc:

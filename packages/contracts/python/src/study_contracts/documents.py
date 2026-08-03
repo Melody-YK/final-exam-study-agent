@@ -313,16 +313,16 @@ class ParseAttemptResult(ContractModel):
             raise ValueError("pages must exactly match covered_page_ordinals")
         if any(page.quality is None for page in self.pages):
             raise ValueError("every attempt page requires quality metadata")
-        if any(
-            page.source_backend != self.source_backend or page.source_version != self.source_version
-            for page in self.pages
-        ):
-            raise ValueError("page parser provenance must match the attempt")
+        page_provenance = {(page.source_backend, page.source_version) for page in self.pages}
+        if page_provenance:
+            expected_attempt_provenance = (
+                next(iter(page_provenance)) if len(page_provenance) == 1 else ("mixed", "mixed")
+            )
+            if (self.source_backend, self.source_version) != expected_attempt_provenance:
+                raise ValueError("attempt parser provenance must summarize its pages")
         blocks = [block for page in self.pages for block in page.blocks]
         if any(
-            block.source_backend != self.source_backend
-            or block.source_version != self.source_version
-            or block.source_backend != page.source_backend
+            block.source_backend != page.source_backend
             or block.source_version != page.source_version
             for page in self.pages
             for block in page.blocks
@@ -346,8 +346,8 @@ class ParseAttemptResult(ContractModel):
             raise ValueError("asset locator must reference a covered page")
         pages_by_ordinal = {page.ordinal: page for page in self.pages}
         if any(
-            asset.source_backend != self.source_backend
-            or asset.source_version != self.source_version
+            asset.source_backend != pages_by_ordinal[asset.locator.ordinal].source_backend
+            or asset.source_version != pages_by_ordinal[asset.locator.ordinal].source_version
             or asset.raw_result_ref != pages_by_ordinal[asset.locator.ordinal].raw_result_ref
             or asset.locator.kind != pages_by_ordinal[asset.locator.ordinal].source_kind
             for asset in self.assets

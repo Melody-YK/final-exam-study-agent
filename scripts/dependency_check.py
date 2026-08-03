@@ -11,6 +11,11 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 _HASH = re.compile(r"sha256:[0-9a-f]{64}")
+_UV_LOCKS = (
+    Path("uv.lock"),
+    Path("services/worker/profiles/paddle/uv.lock"),
+    Path("services/worker/profiles/docling/uv.lock"),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,7 +26,7 @@ class DependencyFinding:
 
 def check_dependency_locks(root: Path) -> list[DependencyFinding]:
     findings: list[DependencyFinding] = []
-    for relative in (Path("uv.lock"), Path("services/worker/profiles/paddle/uv.lock")):
+    for relative in _UV_LOCKS:
         path = root / relative
         try:
             payload = tomllib.loads(path.read_text(encoding="utf-8"))

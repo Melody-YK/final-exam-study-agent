@@ -61,6 +61,7 @@ P1_PHASES = (
 )
 UNIT_TYPES = ("slide", "pdf_section", "pdf_page_window")
 SHA256 = "a" * 64
+CURRENT_HEAD = "20260802_0014"
 _DIALECT = postgresql.dialect()
 _TEXT_CAST = re.compile(
     r"::\s*(?:character\s+varying|text)(?:\s*\[\s*\])?",
@@ -939,7 +940,7 @@ async def test_note_workflow_inventory_head_and_temporary_defaults(
             )
         }
 
-    assert head == "20260724_0012"
+    assert head == CURRENT_HEAD
     assert tables >= SELECTED_TABLES
     assert DEFERRED_TABLES.isdisjoint(tables)
     assert constraints >= REQUIRED_CONSTRAINTS

@@ -37,6 +37,7 @@ def _verify_advisory() -> None:
     expected_locks = {
         "uv": _sha256("uv.lock"),
         "paddle_uv": _sha256("services/worker/profiles/paddle/uv.lock"),
+        "docling_uv": _sha256("services/worker/profiles/docling/uv.lock"),
         "npm": _sha256("package-lock.json"),
     }
     counts = report.get("vulnerability_counts")
@@ -44,6 +45,9 @@ def _verify_advisory() -> None:
         "workspace": installed_environment_sha256(_ROOT / ".venv"),
         "paddle": installed_environment_sha256(
             _ROOT / "services" / "worker" / "profiles" / "paddle" / ".venv"
+        ),
+        "docling": installed_environment_sha256(
+            _ROOT / "services" / "worker" / "profiles" / "docling" / ".venv"
         ),
     }
     if (

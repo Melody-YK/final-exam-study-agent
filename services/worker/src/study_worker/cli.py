@@ -11,7 +11,14 @@ import typer
 from pydantic import ValidationError
 
 from study_worker import __version__
-from study_worker.capabilities import OcrCapabilityStatus, probe_paddle_profile
+from study_worker.capabilities import (
+    DoclingCapabilityStatus,
+    MineruCapabilityStatus,
+    OcrCapabilityStatus,
+    probe_docling_profile,
+    probe_mineru_api,
+    probe_paddle_profile,
+)
 from study_worker.config import WorkerSettings
 from study_worker.dispatcher import Dispatcher, TaskHandler, capabilities_for_handlers
 from study_worker.poller.client import WorkerClient
@@ -21,7 +28,7 @@ from study_worker.poller.poller import (
     WorkerEventLogger,
     run_with_signal_handlers,
 )
-from study_worker.runtime import build_ocr_handler
+from study_worker.runtime import build_mineru_handler, build_ocr_handler
 from study_worker.sandbox import SandboxManager
 
 app = typer.Typer(
@@ -82,6 +89,42 @@ def ocr_capabilities() -> None:
         raise typer.Exit(code=3)
 
 
+@app.command("docling-capabilities")
+def docling_capabilities() -> None:
+    """Probe pre-warmed Docling standard and VLM backends."""
+
+    settings = _load_settings()
+    sandboxes = SandboxManager(settings.work_root)
+    status = asyncio.run(_prepare_docling_runtime(settings, sandboxes))
+    payload = {
+        "standard_ready": status.standard_ready,
+        "standard_reason_code": status.standard_reason_code,
+        "vlm_ready": status.vlm_ready,
+        "vlm_reason_code": status.vlm_reason_code,
+        "versions": dict(status.versions),
+    }
+    typer.echo(json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True))
+    if not status.standard_ready:
+        raise typer.Exit(code=3)
+
+
+@app.command("mineru-capabilities")
+def mineru_capabilities() -> None:
+    """Probe the configured self-hosted MinerU API."""
+
+    settings = _load_settings()
+    status, _handler = asyncio.run(_prepare_mineru_runtime(settings))
+    payload = {
+        "ready": status.ready,
+        "reason_code": status.reason_code,
+        "source_version": status.source_version,
+        "protocol_version": status.protocol_version,
+    }
+    typer.echo(json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True))
+    if not status.ready:
+        raise typer.Exit(code=3)
+
+
 class NativeHandlerUnavailable(RuntimeError):
     """An installed native handler entry point is invalid or ambiguous."""
 
@@ -126,12 +169,17 @@ async def run_worker(
         return
 
     sandboxes = SandboxManager(settings.work_root)
+    docling_status = await _prepare_docling_runtime(settings, sandboxes)
     ocr_status, ocr_handler = await _prepare_ocr_runtime(settings, sandboxes)
+    mineru_status, mineru_handler = await _prepare_mineru_runtime(settings)
     capabilities = capabilities_for_handlers(
         max_input_bytes=settings.max_input_bytes,
         max_pages=settings.max_pages,
         ocr_status=ocr_status,
         ocr_handler_available=ocr_handler is not None,
+        docling_status=docling_status,
+        mineru_status=mineru_status,
+        mineru_handler_available=mineru_handler is not None,
     )
     client = WorkerClient(
         base_url=str(settings.api_base_url),
@@ -142,7 +190,11 @@ async def run_worker(
     )
     poller = Poller(
         client=client,
-        dispatcher=Dispatcher(parse_handler=parse_handler, ocr_handler=ocr_handler),
+        dispatcher=Dispatcher(
+            parse_handler=parse_handler,
+            ocr_handler=ocr_handler,
+            mineru_handler=mineru_handler,
+        ),
         sandboxes=sandboxes,
         worker_id=settings.instance_id,
         capabilities=capabilities,
@@ -175,6 +227,35 @@ async def _prepare_ocr_runtime(
         return OcrCapabilityStatus.unavailable("OCR_HANDLER_UNAVAILABLE"), None
 
 
+async def _prepare_docling_runtime(
+    settings: WorkerSettings,
+    sandboxes: SandboxManager,
+) -> DoclingCapabilityStatus:
+    with sandboxes.create() as sandbox:
+        return await probe_docling_profile(
+            executable=settings.docling_profile_bin,
+            artifacts_root=settings.docling_artifacts_root,
+            sandbox=sandbox,
+            timeout_seconds=min(10, settings.external_process_timeout_seconds),
+        )
+
+
+async def _prepare_mineru_runtime(
+    settings: WorkerSettings,
+) -> tuple[MineruCapabilityStatus, TaskHandler | None]:
+    status = await probe_mineru_api(
+        base_url=None if settings.mineru_base_url is None else str(settings.mineru_base_url),
+        token=settings.mineru_token,
+        timeout_seconds=min(10, settings.external_process_timeout_seconds),
+    )
+    if not status.ready:
+        return status, None
+    try:
+        return status, build_mineru_handler(settings, status)
+    except (OSError, ValueError):
+        return MineruCapabilityStatus.unavailable("MINERU_HANDLER_UNAVAILABLE"), None
+
+
 @app.command()
 def run() -> None:
     """Run the persistent worker after a native parser handler is installed."""
@@ -189,7 +270,10 @@ def run() -> None:
     if parse_handler is None:
         typer.echo("Worker 已启动: state=idle capabilities=0 claims=disabled")
     else:
-        typer.echo("Worker 已启动: state=polling capabilities=native-v1 ocr=probe-at-start")
+        typer.echo(
+            "Worker 已启动: state=polling capabilities=native-v1 "
+            "docling=probe-at-start mineru=probe-at-start ocr=probe-at-start"
+        )
     try:
         asyncio.run(run_worker(settings, parse_handler))
     except KeyboardInterrupt:

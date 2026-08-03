@@ -3,11 +3,23 @@
 from __future__ import annotations
 
 from collections.abc import Collection
+from pathlib import Path
 from typing import Protocol
 
 from study_contracts import JobProgress, WorkerLease
-from study_worker.artifacts import PackagedPage, finalize_parse_attempt, package_parse_page
-from study_worker.capabilities import OcrCapabilityStatus
+from study_worker.artifacts import (
+    PackagedPage,
+    finalize_parse_attempt,
+    package_parse_attempt,
+    package_parse_page,
+)
+from study_worker.capabilities import (
+    DOCLING_STANDARD_MARKER,
+    DOCLING_VLM_MARKER,
+    MINERU_PROFILE,
+    MineruCapabilityStatus,
+    OcrCapabilityStatus,
+)
 from study_worker.config import WorkerSettings
 from study_worker.dispatcher import (
     NATIVE_MEDIA_TYPES,
@@ -18,6 +30,9 @@ from study_worker.dispatcher import (
     TaskHandler,
     TaskResult,
 )
+from study_worker.parsers.docling_process import DoclingSubprocessParser
+from study_worker.parsers.hybrid import HybridPdfParser
+from study_worker.parsers.mineru_http import MineruHttpParser
 from study_worker.parsers.native_process import NativeSubprocessParser
 from study_worker.parsers.normalize import RawDocument
 from study_worker.parsers.ocr_process import OcrSubprocessParser
@@ -193,8 +208,6 @@ class NativeTaskHandler:
         if baseline is not None and (
             result.document_sha256 != baseline.document_sha256
             or result.parser_profile != baseline.parser_profile
-            or result.source_backend != baseline.source_backend
-            or result.source_version != baseline.source_version
             or result.total_page_count != baseline.total_page_count
         ):
             raise TaskExecutionError(
@@ -232,17 +245,52 @@ class NativeTaskHandler:
 
 
 def build_native_handler(settings: WorkerSettings) -> TaskHandler:
-    """Build the one installed native handler from validated worker settings."""
+    """Build native parsing with optional, pre-warmed Docling page fallbacks."""
 
-    parser = NativeSubprocessParser(
+    native_parser = NativeSubprocessParser(
         max_pages=settings.max_pages,
         max_pixels=settings.max_pixels,
         max_result_bytes=settings.max_input_bytes,
+    )
+    standard_parser: ParserProcess | None = None
+    vlm_parser: ParserProcess | None = None
+    if (
+        settings.docling_profile_bin is not None
+        and settings.docling_artifacts_root is not None
+        and _docling_marker_ready(settings.docling_artifacts_root, DOCLING_STANDARD_MARKER)
+    ):
+        standard_parser = DoclingSubprocessParser(
+            executable=settings.docling_profile_bin,
+            artifacts_root=settings.docling_artifacts_root,
+            backend="standard",
+            max_pages=settings.max_pages,
+            max_result_bytes=settings.max_input_bytes,
+        )
+        if _docling_marker_ready(settings.docling_artifacts_root, DOCLING_VLM_MARKER):
+            vlm_parser = DoclingSubprocessParser(
+                executable=settings.docling_profile_bin,
+                artifacts_root=settings.docling_artifacts_root,
+                backend="vlm",
+                max_pages=settings.max_pages,
+                max_result_bytes=settings.max_input_bytes,
+            )
+    parser = HybridPdfParser(
+        native=native_parser,
+        docling_standard=standard_parser,
+        docling_vlm=vlm_parser,
     )
     return NativeTaskHandler(
         parser=parser,
         timeout_seconds=settings.external_process_timeout_seconds,
     )
+
+
+def _docling_marker_ready(root: Path, marker_name: str) -> bool:
+    marker = root / marker_name
+    try:
+        return not marker.is_symlink() and marker.is_file() and marker.stat().st_size > 0
+    except OSError:
+        return False
 
 
 class OcrTaskHandler(NativeTaskHandler):
@@ -278,6 +326,98 @@ def build_ocr_handler(settings: WorkerSettings, status: OcrCapabilityStatus) -> 
         pp_structure_available=status.supports_pp_structure,
     )
     return OcrTaskHandler(
+        parser=parser,
+        timeout_seconds=settings.external_process_timeout_seconds,
+    )
+
+
+class MineruTaskHandler:
+    """Run one remote MinerU request for the lease and checkpoint every returned page."""
+
+    def __init__(self, *, parser: ParserProcess, timeout_seconds: float) -> None:
+        if timeout_seconds <= 0:
+            raise ValueError("MinerU handler timeout must be positive")
+        self._parser = parser
+        self._timeout_seconds = timeout_seconds
+
+    async def __call__(
+        self,
+        lease: WorkerLease,
+        sandbox: Sandbox,
+        reporter: JobReporter,
+    ) -> TaskResult:
+        if lease.parser_profile != MINERU_PROFILE:
+            raise TaskExecutionError(
+                code="UNSUPPORTED_PARSER_PROFILE",
+                retryable=False,
+                summary="worker received an unsupported parser profile",
+            )
+        if lease.media_type != "application/pdf":
+            raise TaskExecutionError(
+                code="UNSUPPORTED_MEDIA_TYPE",
+                retryable=False,
+                summary="MinerU only accepts PDF documents",
+            )
+        reporter.update_progress(JobProgress(phase="parsing", completed_pages=0, total_pages=None))
+        request = ParseRequest(
+            job_id=lease.job_id,
+            document_id=lease.document_id,
+            document_sha256=lease.document_sha256,
+            media_type=lease.media_type,
+            input_path=sandbox.input_path,
+            output_dir=sandbox.output_dir,
+            requested_pages=tuple(sorted(lease.requested_pages)),
+        )
+        try:
+            result = await self._parser.parse(
+                request,
+                sandbox=sandbox,
+                timeout_seconds=self._timeout_seconds,
+            )
+            reporter.update_progress(
+                JobProgress(phase="parsing", completed_pages=0, total_pages=result.total_page_count)
+            )
+            return await package_parse_attempt(
+                result,
+                lease=lease,
+                sandbox=sandbox,
+                reporter=reporter,
+            )
+        except ParserExecutionError as exc:
+            raise TaskExecutionError(
+                code=exc.code,
+                retryable=exc.retryable,
+                summary="self-hosted MinerU parser rejected the document",
+            ) from None
+        except ValueError:
+            raise TaskExecutionError(
+                code="PARSER_RESULT_INVALID",
+                retryable=False,
+                summary="MinerU returned an invalid result",
+            ) from None
+        except OSError:
+            raise TaskExecutionError(
+                code="ARTIFACT_WRITE_FAILED",
+                retryable=True,
+                summary="worker could not persist MinerU artifacts",
+            ) from None
+
+
+def build_mineru_handler(
+    settings: WorkerSettings,
+    status: MineruCapabilityStatus,
+) -> TaskHandler:
+    if not status.ready or status.source_version is None or settings.mineru_base_url is None:
+        raise ValueError("MinerU handler requires a healthy self-hosted API")
+    parser = MineruHttpParser(
+        base_url=str(settings.mineru_base_url),
+        token=settings.mineru_token,
+        source_version=status.source_version,
+        backend=settings.mineru_backend,
+        max_pages=settings.max_pages,
+        max_result_bytes=settings.max_input_bytes,
+    )
+    return MineruTaskHandler(
         parser=parser,
         timeout_seconds=settings.external_process_timeout_seconds,
     )

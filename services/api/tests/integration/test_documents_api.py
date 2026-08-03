@@ -62,6 +62,86 @@ def _declaration(
 
 
 @pytest.mark.integration
+async def test_pdf_upload_can_select_mineru_and_rejects_it_for_other_media(
+    test_database_url: str,
+    tmp_path: Path,
+) -> None:
+    await upgrade_database(test_database_url)
+    database = Database(test_database_url)
+    app = create_app(
+        settings=_settings(test_database_url, tmp_path),
+        database=database,
+        storage=LocalStorage(tmp_path),
+    )
+    pdf_payload = b"%PDF-1.7\nself-authored mineru selection"
+    markdown_payload = b"# Native only"
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        course = await client.post("/api/v1/courses", json={"title": "Parser strategies"})
+        course_id = course.json()["id"]
+        pdf_created = await client.post(
+            f"/api/v1/courses/{course_id}/documents",
+            json=_declaration(pdf_payload, filename="mineru.pdf"),
+        )
+        pdf_document = pdf_created.json()["document"]
+        pdf_upload = pdf_created.json()["upload"]
+        await client.put(
+            pdf_upload["url"],
+            content=pdf_payload,
+            headers={"Content-Type": "application/pdf"},
+        )
+        completed = await client.post(
+            f"/api/v1/documents/{pdf_document['id']}/upload:complete",
+            json={
+                "upload_session_id": pdf_upload["id"],
+                "parser_strategy": "mineru",
+            },
+            headers={"Idempotency-Key": "complete-with-mineru"},
+        )
+        assert completed.status_code == 202
+
+        markdown_created = await client.post(
+            f"/api/v1/courses/{course_id}/documents",
+            json=_declaration(
+                markdown_payload,
+                filename="native.md",
+                media_type="text/markdown",
+            ),
+        )
+        markdown_document = markdown_created.json()["document"]
+        markdown_upload = markdown_created.json()["upload"]
+        await client.put(
+            markdown_upload["url"],
+            content=markdown_payload,
+            headers={"Content-Type": "text/markdown"},
+        )
+        invalid = await client.post(
+            f"/api/v1/documents/{markdown_document['id']}/upload:complete",
+            json={
+                "upload_session_id": markdown_upload["id"],
+                "parser_strategy": "mineru",
+            },
+            headers={"Idempotency-Key": "invalid-markdown-mineru"},
+        )
+        assert invalid.status_code == 422
+        assert invalid.json()["code"] == "INVALID_REQUEST"
+
+    principal = LocalPrincipalProvider().resolve("127.0.0.1")
+    async with database.session(principal) as session:
+        job = await session.scalar(
+            select(ParseJobModel).where(ParseJobModel.document_id == pdf_document["id"])
+        )
+        assert job is not None
+        assert job.parser_profile == "mineru-v1"
+        assert job.requires_ocr is False
+
+    await database.dispose()
+
+
+@pytest.mark.integration
 async def test_local_course_upload_dedup_and_delete_flow(
     test_database_url: str, tmp_path: Path
 ) -> None:

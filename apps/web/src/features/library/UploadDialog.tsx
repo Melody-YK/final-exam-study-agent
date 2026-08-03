@@ -2,7 +2,7 @@ import { FileUp, LoaderCircle, X } from 'lucide-react'
 import { useRef, useState, type FormEvent } from 'react'
 
 import { studyApi } from '../../api/client'
-import type { DocumentRecord } from '../../api/types'
+import type { DocumentRecord, PdfParserStrategy } from '../../api/types'
 import { ErrorNotice } from '../../components/ui/ErrorNotice'
 import { Modal } from '../../components/ui/Modal'
 
@@ -26,6 +26,7 @@ interface UploadDialogProps {
   open: boolean
   onClose: () => void
   onUploaded: (document: DocumentRecord) => void
+  mineruAvailable: boolean
 }
 
 function isSupportedUpload(file: File): boolean {
@@ -39,6 +40,10 @@ function isSupportedUpload(file: File): boolean {
 function isMarkdownUpload(file: File): boolean {
   const extension = file.name.slice(file.name.lastIndexOf('.') + 1).toLowerCase()
   return extension === 'md' || extension === 'markdown'
+}
+
+function isPdfUpload(file: File): boolean {
+  return file.name.toLowerCase().endsWith('.pdf')
 }
 
 function fileSelectionError(file: File): FileSelectionError | null {
@@ -64,12 +69,14 @@ export function UploadDialog({
   open,
   onClose,
   onUploaded,
+  mineruAvailable,
 }: UploadDialogProps) {
   const [file, setFile] = useState<File | null>(null)
   const [progress, setProgress] = useState(0)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<unknown>(null)
   const [fileError, setFileError] = useState<FileSelectionError | null>(null)
+  const [parserStrategy, setParserStrategy] = useState<PdfParserStrategy>('enhanced')
   const abortRef = useRef<AbortController | null>(null)
 
   const resetAndClose = () => {
@@ -80,6 +87,7 @@ export function UploadDialog({
     setPending(false)
     setError(null)
     setFileError(null)
+    setParserStrategy('enhanced')
     onClose()
   }
 
@@ -98,6 +106,7 @@ export function UploadDialog({
       return
     }
     setFile(selectedFile)
+    if (!isPdfUpload(selectedFile)) setParserStrategy('enhanced')
     setFileError(null)
   }
 
@@ -121,6 +130,7 @@ export function UploadDialog({
         'corpus',
         setProgress,
         controller.signal,
+        parserStrategy,
       )
       onUploaded(document)
       resetAndClose()
@@ -188,6 +198,47 @@ export function UploadDialog({
         </label>
         {fileError ? (
           <ErrorNotice error={fileError.error} title={fileError.title} />
+        ) : null}
+        {file && isPdfUpload(file) ? (
+          <fieldset className="parser-strategy" disabled={pending}>
+            <legend>PDF 解析方式</legend>
+            <div className="parser-strategy__options">
+              <label
+                className={parserStrategy === 'enhanced' ? 'is-selected' : undefined}
+              >
+                <input
+                  checked={parserStrategy === 'enhanced'}
+                  name="parser-strategy"
+                  onChange={() => setParserStrategy('enhanced')}
+                  type="radio"
+                  value="enhanced"
+                />
+                <span>
+                  <strong>智能回退</strong>
+                  <small>快速 / Docling / 多模态</small>
+                </span>
+              </label>
+              <label
+                aria-disabled={!mineruAvailable}
+                className={parserStrategy === 'mineru' ? 'is-selected' : undefined}
+              >
+                <input
+                  checked={parserStrategy === 'mineru'}
+                  disabled={!mineruAvailable}
+                  name="parser-strategy"
+                  onChange={() => setParserStrategy('mineru')}
+                  type="radio"
+                  value="mineru"
+                />
+                <span>
+                  <strong>MinerU</strong>
+                  <small>
+                    {mineruAvailable ? '由自建 MinerU 服务解析' : '服务未就绪'}
+                  </small>
+                </span>
+              </label>
+            </div>
+          </fieldset>
         ) : null}
         <div
           aria-label={`上传进度 ${progress}%`}

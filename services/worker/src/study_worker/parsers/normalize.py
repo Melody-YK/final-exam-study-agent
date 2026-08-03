@@ -102,13 +102,16 @@ class RawPage(RawModel):
 class RawDocument(RawModel):
     schema_version: Literal["1.0"] = "1.0"
     document_sha256: Sha256Hex
-    parser_profile: Literal["native-v1", "ocr-v1"] = "native-v1"
+    parser_profile: Literal["native-v1", "ocr-v1", "mineru-v1"] = "native-v1"
     source_backend: Literal[
         "markdown-native",
         "pdf-native",
         "pptx-native",
         "paddleocr-general",
         "pp-structure-v3",
+        "docling-standard",
+        "docling-vlm",
+        "mineru-pipeline",
     ]
     source_version: str = Field(min_length=1)
     total_page_count: int = Field(gt=0)
