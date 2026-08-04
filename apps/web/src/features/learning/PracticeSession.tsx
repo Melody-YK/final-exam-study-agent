@@ -19,7 +19,7 @@ import type {
 } from '../../api/types'
 import { ErrorNotice } from '../../components/ui/ErrorNotice'
 import { PracticeEvidenceModal } from './PracticeEvidenceModal'
-import { PracticeTutorModal, type TutorChatMessage } from './PracticeTutorModal'
+import { PracticeTutorModal } from './PracticeTutorModal'
 
 interface PracticeSessionProps {
   aiAvailable?: boolean
@@ -125,7 +125,9 @@ function readPracticeProgress(session: PracticeSessionSnapshot): PracticeProgres
         : []
 
     const nonReadyPendingIds = new Set(
-      pendingQuestions.filter((question) => question.status !== 'ready').map((question) => question.id),
+      pendingQuestions
+        .filter((question) => question.status !== 'ready')
+        .map((question) => question.id),
     )
     const savedIndex = draft.questionIndex
     const questionIndex =
@@ -177,9 +179,6 @@ export function PracticeSession({
     () => new Set(restoredProgress?.skippedQuestionIds ?? []),
   )
   const [localAttempts, setLocalAttempts] = useState<Record<string, LocalAttempt>>({})
-  const [tutorConversations, setTutorConversations] = useState<
-    Record<string, TutorChatMessage[]>
-  >({})
   const [submitError, setSubmitError] = useState<unknown>(null)
   const [submitting, setSubmitting] = useState(false)
   const [evidenceOpen, setEvidenceOpen] = useState(false)
@@ -190,7 +189,10 @@ export function PracticeSession({
   const currentAttempt = currentQuestion ? localAttempts[currentQuestion.id] : undefined
   const currentAnswered = Boolean(currentQuestion?.answered || currentAttempt)
   const selectedAnswer = currentQuestion
-    ? (currentAttempt?.answer ?? currentQuestion.submitted_answer ?? draftAnswers[currentQuestion.id] ?? '')
+    ? (currentAttempt?.answer ??
+      currentQuestion.submitted_answer ??
+      draftAnswers[currentQuestion.id] ??
+      '')
     : ''
   const answeredIds = useMemo(() => {
     const ids = new Set(
@@ -336,7 +338,6 @@ export function PracticeSession({
     ...currentQuestion,
     answered: currentAnswered,
   }
-  const currentTutorMessages = tutorConversations[currentQuestion.id] ?? []
   const constructedResponse = isConstructedResponse(currentQuestion.question_type)
   const answerReady = Boolean(selectedAnswer.trim())
 
@@ -354,7 +355,9 @@ export function PracticeSession({
       </header>
 
       <div className="learning-practice__track" aria-hidden="true">
-        <span style={{ width: `${(processedCount / Math.max(1, session.question_count)) * 100}%` }} />
+        <span
+          style={{ width: `${(processedCount / Math.max(1, session.question_count)) * 100}%` }}
+        />
       </div>
 
       {currentQuestion.status !== 'ready' ? (
@@ -379,9 +382,7 @@ export function PracticeSession({
             <span>{questionTypeLabel(currentQuestion.question_type)}</span>
             <span>难度 {difficultyLabel(currentQuestion.difficulty)}</span>
             <span>依据 {currentQuestion.evidence_refs.length} 条</span>
-            {currentQuestion.practice_mode === 'exercise_variant' ? (
-              <span>同型变式</span>
-            ) : null}
+            {currentQuestion.practice_mode === 'exercise_variant' ? <span>同型变式</span> : null}
             {hintedQuestionIds.has(currentQuestion.id) ? <span>已使用 AI 提示</span> : null}
           </div>
           <button
@@ -391,8 +392,7 @@ export function PracticeSession({
             title={!aiAvailable ? 'AI Provider 当前不可用' : undefined}
             type="button"
           >
-            <MessageCircleQuestion aria-hidden="true" size={15} />
-            问 AI
+            <MessageCircleQuestion aria-hidden="true" size={15} />问 AI
           </button>
         </header>
         <h2>{currentQuestion.prompt}</h2>
@@ -553,16 +553,9 @@ export function PracticeSession({
       />
       <PracticeTutorModal
         key={currentQuestion.id}
-        messages={currentTutorMessages}
         onClose={() => setTutorOpen(false)}
         onHintUsed={() =>
           setHintedQuestionIds((current) => new Set(current).add(currentQuestion.id))
-        }
-        onMessagesChange={(messages) =>
-          setTutorConversations((current) => ({
-            ...current,
-            [currentQuestion.id]: messages,
-          }))
         }
         open={tutorOpen}
         question={tutorQuestion}

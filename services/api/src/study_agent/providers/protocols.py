@@ -38,10 +38,19 @@ class ConversationContextTurn:
 
 
 @dataclass(frozen=True, slots=True)
+class LearnerMemoryContext:
+    memory_type: str
+    content: str
+
+
+@dataclass(frozen=True, slots=True)
 class EvidencePrompt:
     query: str
     passages: tuple[Passage, ...]
     conversation_context: tuple[ConversationContextTurn, ...] = ()
+    conversation_summary: str | None = None
+    learner_memories: tuple[LearnerMemoryContext, ...] = ()
+    standalone_question: str | None = None
     response_schema_version: str = "1.0"
 
 

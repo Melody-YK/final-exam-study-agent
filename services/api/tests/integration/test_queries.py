@@ -170,6 +170,33 @@ class FakeQueryEvidence:
         return self.current
 
 
+class SequencedQueryEvidence(FakeQueryEvidence):
+    def __init__(self, results: list[RetrievedEvidence]) -> None:
+        if not results:
+            raise ValueError("sequenced evidence requires at least one result")
+        super().__init__(results[-1])
+        self.results = results
+
+    async def retrieve(
+        self,
+        principal: object,
+        course_id: str,
+        question: str,
+        *,
+        document_ids: frozenset[str] | None,
+        concept_context: ConceptEvidenceContext | None,
+    ) -> RetrievedEvidence:
+        result = self.results.pop(0) if self.results else self.result
+        self.result = result
+        return await super().retrieve(
+            principal,
+            course_id,
+            question,
+            document_ids=document_ids,
+            concept_context=concept_context,
+        )
+
+
 class StaticPrincipalProvider:
     def __init__(self, principal: Principal) -> None:
         self._principal = principal
@@ -223,6 +250,7 @@ def _authorized(
     revision_id: str,
     chunk_id: str,
     content_sha256: str,
+    score: float = 0.9,
 ) -> AuthorizedEvidence:
     return AuthorizedEvidence(
         evidence=Evidence(
@@ -236,7 +264,7 @@ def _authorized(
             locator=SourceLocator(kind="page", ordinal=1),
         ),
         document_name=f"{document_id}.pdf",
-        score=0.9,
+        score=score,
         document_deletion_epoch=0,
         provenance=("pdf-native@1",),
     )
@@ -667,11 +695,11 @@ async def test_follow_up_uses_bounded_non_evidence_context_and_new_conversation_
         assert first.status_code == 202
         assert second.status_code == 202
         assert evidence.questions[0] == "什么是进程?"
-        assert "[NON_EVIDENCE_CONVERSATION_CONTEXT]" in evidence.questions[1]
-        assert "User: 什么是进程?" in evidence.questions[1]
-        assert "Assistant:" not in evidence.questions[1]
-        assert "进程是资源分配的基本单位。" not in evidence.questions[1]
-        assert evidence.questions[1].endswith("[CURRENT_QUESTION]\n它和线程有什么区别?")
+        assert evidence.questions[1] == "进程和线程有什么区别?"
+        assert second.json()["query_intent"] == "comparison"
+        assert second.json()["standalone_question"] == "进程和线程有什么区别?"
+        assert second.json()["retrieval_diagnostic"] == "initial_sufficient"
+        assert len(second.json()["retrieval_rounds"]) == 1
         assert provider.requests[0].conversation_context == ()
         assert [turn.question for turn in provider.requests[1].conversation_context] == [
             "什么是进程?"
@@ -718,7 +746,8 @@ async def test_follow_up_uses_bounded_non_evidence_context_and_new_conversation_
         )
         assert unsupported.status_code == 202
         assert unsupported.json()["status"] == "abstained"
-        assert unsupported.json()["answer"]["refusal"]["code"] == "INSUFFICIENT_EVIDENCE"
+        assert unsupported.json()["answer"]["refusal"]["code"] == "NO_CANDIDATES"
+        assert unsupported.json()["retrieval_diagnostic"] == "no_candidates"
         assert len(provider.requests) == 3
 
         repository = QueryRepository(
@@ -727,6 +756,21 @@ async def test_follow_up_uses_bounded_non_evidence_context_and_new_conversation_
             event_retention=timedelta(hours=1),
         )
         assert await repository.recent_context(principal, first.json()["id"]) == ()
+
+        evidence.result = answerable_result
+        fifth = await client.post(
+            f"/api/v1/courses/{course_id}/queries",
+            json={"question": "补充说明调度", "conversation_id": conversation_id},
+        )
+        sixth = await client.post(
+            f"/api/v1/courses/{course_id}/queries",
+            json={"question": "再总结一次", "conversation_id": conversation_id},
+        )
+        assert fifth.status_code == 202
+        assert sixth.status_code == 202
+        assert provider.requests[4].conversation_summary is not None
+        assert "什么是进程?" in provider.requests[4].conversation_summary
+        assert len(provider.requests[4].conversation_context) == 4
 
         fresh_conversation = await client.post(
             f"/api/v1/courses/{course_id}/conversations",
@@ -741,9 +785,147 @@ async def test_follow_up_uses_bounded_non_evidence_context_and_new_conversation_
             },
         )
         assert fresh.status_code == 202
-        assert evidence.questions[4] == "重新开始"
-        assert provider.requests[3].conversation_context == ()
+        assert evidence.questions[-1] == "重新开始"
+        assert provider.requests[5].conversation_context == ()
+        assert provider.requests[5].conversation_summary is None
 
+    await database.dispose()
+
+
+@pytest.mark.integration
+async def test_insufficient_first_retrieval_repairs_once_and_persists_diagnostics(
+    test_database_url: str,
+    tmp_path: Path,
+) -> None:
+    await upgrade_database(test_database_url)
+    database = Database(test_database_url)
+    provider = RecordingChatProvider()
+    inactive = RetrievedEvidence(active_index=False, candidates=())
+    evidence = SequencedQueryEvidence([inactive])
+    app = create_app(
+        settings=_settings(test_database_url, tmp_path),
+        database=database,
+        storage=LocalStorage(tmp_path),
+        provider_registry=_registry(provider),
+        query_evidence=evidence,
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        course = await client.post("/api/v1/courses", json={"title": "操作系统"})
+        course_id = course.json()["id"]
+        principal = LocalPrincipalProvider().resolve("127.0.0.1")
+        course_record = await CourseRepository(database).get(
+            CourseScope(principal=principal, course_id=course_id)
+        )
+        assert course_record is not None
+        document_id, revision_id, chunk_id, content_sha256 = await _seed_revision(
+            database,
+            principal=principal,
+            user_id=course_record.user_id,
+            course_id=course_id,
+        )
+        manifest_id = "lexical-repair"
+        async with database.session(principal) as session:
+            session.add(
+                LexicalManifestModel(
+                    id=manifest_id,
+                    user_id=course_record.user_id,
+                    course_id=course_id,
+                    version_id="query-repair-v1",
+                    storage_path=str(tmp_path / manifest_id),
+                    manifest_hash="f" * 64,
+                    document_set_hash="a" * 64,
+                    tokenizer_version="test-v1",
+                    dictionary_hash="b" * 64,
+                    chunk_count=1,
+                    document_ids=[document_id],
+                    revision_ids=[revision_id],
+                    status="active",
+                )
+            )
+            await session.flush()
+            course_model = await session.get(CourseModel, course_id)
+            assert course_model is not None
+            course_model.active_lexical_index_id = manifest_id
+
+        empty = RetrievedEvidence(
+            active_index=True,
+            candidates=(),
+            active_lexical_index_id=manifest_id,
+        )
+        answerable = RetrievedEvidence(
+            active_index=True,
+            candidates=(
+                _authorized(
+                    course_id,
+                    document_id=document_id,
+                    revision_id=revision_id,
+                    chunk_id=chunk_id,
+                    content_sha256=content_sha256,
+                ),
+            ),
+            active_lexical_index_id=manifest_id,
+        )
+        evidence.results = [empty, answerable]
+        repaired = await client.post(
+            f"/api/v1/courses/{course_id}/queries",
+            json={"question": "什么是进程?"},
+        )
+
+        fresh_conversation = await client.post(
+            f"/api/v1/courses/{course_id}/conversations",
+            json={},
+        )
+        evidence.results = [empty, empty, empty, empty]
+        exhausted = await client.post(
+            f"/api/v1/courses/{course_id}/queries",
+            json={
+                "question": "什么是信号量?",
+                "conversation_id": fresh_conversation.json()["id"],
+            },
+        )
+        evidence.results = [answerable]
+        personalized = await client.post(
+            f"/api/v1/courses/{course_id}/queries",
+            json={
+                "question": "我喜欢用例子解释。什么是进程?",
+                "conversation_id": fresh_conversation.json()["id"],
+            },
+        )
+        memories = await client.get(f"/api/v1/courses/{course_id}/learner-memories")
+        memory_id = memories.json()[0]["id"]
+        updated_memory = await client.put(
+            f"/api/v1/learner-memories/{memory_id}",
+            json={"memory_type": "preference", "content": "我更喜欢先看类比"},
+        )
+        deleted_memory = await client.delete(f"/api/v1/learner-memories/{memory_id}")
+        memories_after_delete = await client.get(f"/api/v1/courses/{course_id}/learner-memories")
+
+    assert repaired.status_code == 202
+    assert repaired.json()["status"] == "answered"
+    assert repaired.json()["retrieval_diagnostic"] == "repair_succeeded"
+    assert len(repaired.json()["retrieval_rounds"]) == 2
+    assert repaired.json()["retrieval_rounds"][0]["candidate_count"] == 0
+    assert repaired.json()["retrieval_rounds"][1]["candidate_count"] == 1
+    assert exhausted.status_code == 202
+    assert exhausted.json()["status"] == "abstained"
+    assert exhausted.json()["answer"]["refusal"]["code"] == "NO_CANDIDATES"
+    assert exhausted.json()["retrieval_diagnostic"] == "no_candidates"
+    assert len(exhausted.json()["retrieval_rounds"]) == 3
+    assert personalized.status_code == 202
+    assert memories.status_code == 200
+    assert len(memories.json()) == 1
+    assert memories.json()[0]["memory_type"] == "preference"
+    assert memories.json()[0]["source_kind"] == "explicit_user"
+    assert provider.requests[-1].learner_memories[0].content == "我喜欢用例子解释"
+    assert updated_memory.status_code == 200
+    assert updated_memory.json()["content"] == "我更喜欢先看类比"
+    assert deleted_memory.status_code == 204
+    assert memories_after_delete.json() == []
+    assert evidence.calls == 6
+    assert len(provider.requests) == 2
     await database.dispose()
 
 
@@ -899,11 +1081,11 @@ async def test_recent_context_enforces_default_turn_and_character_budgets(
 
     long_questions = [f"长问题-{index}-" + "问" * 1_200 for index in range(6)]
     long_answers = [f"长回答-{index}-" + "答" * 1_800 for index in range(6)]
-    raw_bounded_total = sum(
-        min(len(question), 1_000) + min(len(answer), 1_500)
+    raw_total = sum(
+        len(question) + len(answer)
         for question, answer in zip(long_questions[2:], long_answers[2:], strict=True)
     )
-    assert raw_bounded_total > 6_000
+    assert raw_total > 6_000
 
     async with database.session(principal) as session:
         for query_id, question, answer in zip(
@@ -924,31 +1106,20 @@ async def test_recent_context_enforces_default_turn_and_character_budgets(
         max_chars=20_000,
     )
     assert [(turn.question, turn.answer_markdown) for turn in source_current_context] == [
-        (question[:1_000], answer[:1_500])
+        (question, answer)
         for question, answer in zip(long_questions[2:], long_answers[2:], strict=True)
     ]
 
     bounded_context = await repository.recent_context(principal, current_id)
-    assert [turn.question for turn in bounded_context] == [
-        long_questions[index][:1_000] for index in (3, 4, 5)
-    ]
-    assert [turn.answer_markdown for turn in bounded_context] == [
-        None,
-        long_answers[4][:1_500],
-        long_answers[5][:1_500],
-    ]
-    assert all(len(turn.question) <= 1_000 for turn in bounded_context)
-    assert all(
-        turn.answer_markdown is None or len(turn.answer_markdown) <= 1_500
-        for turn in bounded_context
-    )
+    assert [turn.question for turn in bounded_context] == [long_questions[-1]]
+    assert [turn.answer_markdown for turn in bounded_context] == [long_answers[-1]]
     assert (
         sum(len(turn.question) + len(turn.answer_markdown or "") for turn in bounded_context)
-        == 6_000
+        < 6_000
     )
-    assert bounded_context[-1].question == long_questions[-1][:1_000]
+    assert bounded_context[-1].question == long_questions[-1]
     returned_long_questions = {turn.question for turn in bounded_context}
-    assert returned_long_questions.isdisjoint({question[:1_000] for question in long_questions[:3]})
+    assert returned_long_questions.isdisjoint(set(long_questions[:5]))
     assert current_question not in returned_long_questions
     await database.dispose()
 

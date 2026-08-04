@@ -269,15 +269,13 @@ def test_session_and_summary_contracts_reject_inconsistent_terminal_values() -> 
         )
 
 
-def test_practice_tutor_request_bounds_conversation_history() -> None:
-    request = PracticeTutorRequest(
-        message="这道题应该从哪里入手?",
-        history=[{"role": "assistant", "content": "先找题干里的定义关键词。"}],
-    )
-    assert request.history[0].role == "assistant"
+def test_practice_tutor_request_rejects_client_owned_history() -> None:
+    request = PracticeTutorRequest(message="这道题应该从哪里入手?", turn_id="turn-1")
+    assert request.message == "这道题应该从哪里入手?"
 
     with pytest.raises(ValidationError):
         PracticeTutorRequest(
             message="继续",
-            history=[{"role": "user", "content": str(index)} for index in range(9)],
+            history=[{"role": "assistant", "content": "旧提示"}],
+            turn_id="turn-2",
         )

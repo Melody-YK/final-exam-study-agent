@@ -5,8 +5,20 @@ import pytest
 from study_agent.modules.learning.tutor import PracticeTutor, TutorEvidence, TutorGenerationError
 from study_agent.providers.errors import ProviderErrorCode
 from study_agent.providers.factory import ProviderRegistry
-from study_agent.providers.protocols import ChatProvider, JsonCompletionPrompt, StructuredJsonDraft
-from study_contracts import EvidenceReference, PracticeTutorMode, QuestionOption, QuestionType
+from study_agent.providers.protocols import (
+    ChatProvider,
+    JsonCompletionPrompt,
+    LearnerMemoryContext,
+    StructuredJsonDraft,
+)
+from study_contracts import (
+    EvidenceReference,
+    PracticeTutorIntent,
+    PracticeTutorMode,
+    PracticeTutorTurn,
+    QuestionOption,
+    QuestionType,
+)
 
 
 def _evidence() -> TutorEvidence:
@@ -72,6 +84,48 @@ async def test_hint_mode_omits_answer_and_returns_authorized_evidence() -> None:
     assert isinstance(question_payload, dict)
     assert "correct_answer" not in question_payload
     assert "stored_explanation" not in question_payload
+
+
+@pytest.mark.asyncio
+async def test_current_example_request_overrides_an_old_answer_attempt() -> None:
+    provider = _TutorProvider(
+        [{"answer_markdown": "可以类比公司分配预算和员工执行任务。", "evidence_ids": ["E1"]}]
+    )
+
+    result = await _tutor(provider).answer(
+        mode=PracticeTutorMode.HINT,
+        question_type=QuestionType.SINGLE_CHOICE,
+        prompt="进程是什么?",
+        options=[
+            QuestionOption(id="a", label="资源分配的基本单位"),
+            QuestionOption(id="b", label="处理器调度的基本单位"),
+        ],
+        correct_answer="a",
+        explanation="进程负责资源分配。",
+        submitted_answer=None,
+        message="你能给个例子吗?",
+        history=[
+            PracticeTutorTurn(role="user", content="123"),
+            PracticeTutorTurn(role="assistant", content="先说明你的判断依据。"),
+        ],
+        evidence=(_evidence(),),
+        conversation_summary="较早对话询问过进程定义。",
+        learner_memories=(
+            LearnerMemoryContext(memory_type="preference", content="我喜欢先看例子"),
+        ),
+    )
+
+    assert result.intent is PracticeTutorIntent.EXAMPLE
+    assert provider.requests[0].payload["current_intent"] == "example"
+    assert provider.requests[0].payload["current_message"] == "你能给个例子吗?"
+    assert provider.requests[0].payload["conversation_history"] == [
+        {"role": "user", "content": "123"},
+        {"role": "assistant", "content": "先说明你的判断依据。"},
+    ]
+    assert provider.requests[0].payload["conversation_summary"] == "较早对话询问过进程定义。"
+    assert provider.requests[0].payload["learner_memories"] == [
+        {"memory_type": "preference", "content": "我喜欢先看例子"}
+    ]
 
 
 @pytest.mark.asyncio

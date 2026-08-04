@@ -2,7 +2,9 @@
 
 from study_agent.infrastructure.db.models.answers import (
     AnswerDependencyModel,
+    ConversationMessageModel,
     ConversationModel,
+    LearnerMemoryModel,
     QueryEventModel,
     QueryRunModel,
     RetrievalSnapshotModel,
@@ -88,6 +90,7 @@ __all__ = [
     "AnswerDependencyModel",
     "ChunkEmbeddingModel",
     "ChunkModel",
+    "ConversationMessageModel",
     "ConversationModel",
     "CourseModel",
     "DeletionJobModel",
@@ -98,6 +101,7 @@ __all__ = [
     "IndexJobModel",
     "JobArtifactModel",
     "JobEventModel",
+    "LearnerMemoryModel",
     "LearningMasteryModel",
     "LearningUnitModel",
     "LearningUnitSourceModel",

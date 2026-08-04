@@ -433,6 +433,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/courses/{course_id}/learner-memories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Learner Memories */
+        get: operations["list_learner_memories_api_v1_courses__course_id__learner_memories_get"];
+        put?: never;
+        /** Create Learner Memory */
+        post: operations["create_learner_memory_api_v1_courses__course_id__learner_memories_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/courses/{course_id}/learning-summary": {
         parameters: {
             query?: never;
@@ -674,6 +692,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/learner-memories/{memory_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Update Learner Memory */
+        put: operations["update_learner_memory_api_v1_learner_memories__memory_id__put"];
+        post?: never;
+        /** Delete Learner Memory */
+        delete: operations["delete_learner_memory_api_v1_learner_memories__memory_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/note-batches/{batch_id}": {
         parameters: {
             query?: never;
@@ -886,7 +922,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** Get Practice Tutor Conversation */
+        get: operations["get_practice_tutor_conversation_api_v1_practice_sessions__session_id__questions__question_id__tutor_get"];
         put?: never;
         /** Ask Practice Tutor */
         post: operations["ask_practice_tutor_api_v1_practice_sessions__session_id__questions__question_id__tutor_post"];
@@ -2120,6 +2157,52 @@ export interface components {
             /** Output Tokens */
             output_tokens?: number | null;
         };
+        /** LearnerMemoryCreate */
+        LearnerMemoryCreate: {
+            /** Content */
+            content: string;
+            memory_type: components["schemas"]["LearnerMemoryType"];
+        };
+        /** LearnerMemoryPatch */
+        LearnerMemoryPatch: {
+            /** Content */
+            content: string;
+            memory_type: components["schemas"]["LearnerMemoryType"];
+        };
+        /** LearnerMemoryResponse */
+        LearnerMemoryResponse: {
+            /** Confidence */
+            confidence: number;
+            /** Content */
+            content: string;
+            /** Course Id */
+            course_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Id */
+            id: string;
+            /**
+             * Last Confirmed At
+             * Format: date-time
+             */
+            last_confirmed_at: string;
+            memory_type: components["schemas"]["LearnerMemoryType"];
+            /** Source Kind */
+            source_kind: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * LearnerMemoryType
+         * @enum {string}
+         */
+        LearnerMemoryType: "preference" | "confirmed_misconception" | "learning_goal";
         /**
          * LearningSourceStatus
          * @enum {string}
@@ -2717,6 +2800,48 @@ export interface components {
          * @enum {string}
          */
         PracticeSessionStatus: "active" | "completed" | "cancelled";
+        /** PracticeTutorConversation */
+        PracticeTutorConversation: {
+            /** Conversation Id */
+            conversation_id?: string | null;
+            /**
+             * Has Earlier Messages
+             * @default false
+             */
+            has_earlier_messages: boolean;
+            /** Messages */
+            messages: components["schemas"]["PracticeTutorMessage"][];
+            /** Question Id */
+            question_id: string;
+            /** Session Id */
+            session_id: string;
+        };
+        /**
+         * PracticeTutorIntent
+         * @enum {string}
+         */
+        PracticeTutorIntent: "hint" | "clarify" | "example" | "answer_check" | "solution" | "reflection" | "source";
+        /** PracticeTutorMessage */
+        PracticeTutorMessage: {
+            /** Content */
+            content: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Evidence Refs */
+            evidence_refs: components["schemas"]["EvidenceReference"][];
+            /** Id */
+            id: string;
+            intent: components["schemas"]["PracticeTutorIntent"];
+            mode?: components["schemas"]["PracticeTutorMode"] | null;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "user" | "assistant";
+        };
         /**
          * PracticeTutorMode
          * @enum {string}
@@ -2724,28 +2849,28 @@ export interface components {
         PracticeTutorMode: "hint" | "review";
         /** PracticeTutorRequest */
         PracticeTutorRequest: {
-            /** History */
-            history?: components["schemas"]["PracticeTutorTurn"][];
             /** Message */
             message: string;
+            /** Turn Id */
+            turn_id: string;
         };
         /** PracticeTutorResponse */
         PracticeTutorResponse: {
             /** Answer Markdown */
             answer_markdown: string;
+            /** Conversation Id */
+            conversation_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
             /** Evidence Refs */
             evidence_refs: components["schemas"]["EvidenceReference"][];
+            intent: components["schemas"]["PracticeTutorIntent"];
+            /** Message Id */
+            message_id: string;
             mode: components["schemas"]["PracticeTutorMode"];
-        };
-        /** PracticeTutorTurn */
-        PracticeTutorTurn: {
-            /** Content */
-            content: string;
-            /**
-             * Role
-             * @enum {string}
-             */
-            role: "user" | "assistant";
         };
         /**
          * ProblemDetails
@@ -2823,8 +2948,16 @@ export interface components {
             failure_code: string | null;
             /** Id */
             id: string;
+            /** Query Intent */
+            query_intent: string | null;
             /** Question */
             question: string;
+            /** Retrieval Diagnostic */
+            retrieval_diagnostic: string | null;
+            /** Retrieval Rounds */
+            retrieval_rounds: components["schemas"]["RetrievalRoundResponse"][];
+            /** Standalone Question */
+            standalone_question: string | null;
             /** Status */
             status: string;
             trace: components["schemas"]["QueryTraceResponse"];
@@ -2879,6 +3012,21 @@ export interface components {
              * Format: password
              */
             password: string;
+        };
+        /** RetrievalRoundResponse */
+        RetrievalRoundResponse: {
+            /** Active Index */
+            active_index: boolean;
+            /** Active Lexical Index Id */
+            active_lexical_index_id: string | null;
+            /** Candidate Count */
+            candidate_count: number;
+            /** Eligible Count */
+            eligible_count: number;
+            /** Query */
+            query: string;
+            /** Retrieval Trace Id */
+            retrieval_trace_id: string | null;
         };
         /** ReviewQueueItem */
         ReviewQueueItem: {
@@ -4016,6 +4164,72 @@ export interface operations {
             };
         };
     };
+    list_learner_memories_api_v1_courses__course_id__learner_memories_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                course_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LearnerMemoryResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_learner_memory_api_v1_courses__course_id__learner_memories_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                course_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LearnerMemoryCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LearnerMemoryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_learning_summary_api_v1_courses__course_id__learning_summary_get: {
         parameters: {
             query?: never;
@@ -4605,6 +4819,70 @@ export interface operations {
             };
         };
     };
+    update_learner_memory_api_v1_learner_memories__memory_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                memory_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LearnerMemoryPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LearnerMemoryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_learner_memory_api_v1_learner_memories__memory_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                memory_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_note_batch_api_v1_note_batches__batch_id__get: {
         parameters: {
             query?: never;
@@ -5053,6 +5331,47 @@ export interface operations {
                 };
             };
             /** @description 题目或会话状态冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_practice_tutor_conversation_api_v1_practice_sessions__session_id__questions__question_id__tutor_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+                question_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PracticeTutorConversation"];
+                };
+            };
+            /** @description 题目来源状态冲突 */
             409: {
                 headers: {
                     [name: string]: unknown;

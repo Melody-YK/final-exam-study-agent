@@ -11,6 +11,7 @@ from study_contracts import (
     PracticeBatchSnapshot,
     PracticeSessionRequest,
     PracticeSessionSnapshot,
+    PracticeTutorConversation,
     PracticeTutorRequest,
     PracticeTutorResponse,
     ReviewQueueItem,
@@ -21,6 +22,7 @@ LearningUnitSourceResponse = LearningUnitSource
 PracticeBatchResponse = PracticeBatchSnapshot
 PracticeSessionResponse = PracticeSessionSnapshot
 PracticeAttemptResponse = PracticeAttemptResult
+PracticeTutorConversationResponse = PracticeTutorConversation
 PracticeTutorResponseModel = PracticeTutorResponse
 ReviewQueueItemResponse = ReviewQueueItem
 LearningSummaryResponse = LearningSummary
@@ -36,6 +38,7 @@ __all__ = [
     "PracticeBatchResponse",
     "PracticeSessionRequest",
     "PracticeSessionResponse",
+    "PracticeTutorConversationResponse",
     "PracticeTutorRequest",
     "PracticeTutorResponseModel",
     "ReviewQueueItemResponse",

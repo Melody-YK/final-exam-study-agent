@@ -70,9 +70,11 @@ export type PracticeQuestionView = Schema<'PracticeQuestionView'>
 export type PracticeAttemptRequest = Schema<'PracticeAttemptRequest'>
 export type PracticeAttemptResult = Schema<'PracticeAttemptResult'>
 export type PracticeTutorMode = Schema<'PracticeTutorMode'>
+export type PracticeTutorIntent = Schema<'PracticeTutorIntent'>
+export type PracticeTutorMessage = Schema<'PracticeTutorMessage'>
+export type PracticeTutorConversation = Schema<'PracticeTutorConversation'>
 export type PracticeTutorRequest = Schema<'PracticeTutorRequest'>
 export type PracticeTutorResponse = Schema<'PracticeTutorResponse'>
-export type PracticeTutorTurn = Schema<'PracticeTutorTurn'>
 
 type GeneratedCitation = Schema<'Citation'>
 export type Citation = Omit<GeneratedCitation, 'bounding_boxes'> & {
@@ -99,6 +101,11 @@ export type QueryConceptContext = Schema<'QueryConceptContext'>
 
 export type ConversationRecord = Schema<'ConversationResponse'>
 export type ConversationCreate = Schema<'ConversationCreate'>
+
+export type LearnerMemoryType = Schema<'LearnerMemoryType'>
+export type LearnerMemoryRecord = Schema<'LearnerMemoryResponse'>
+export type LearnerMemoryCreate = Schema<'LearnerMemoryCreate'>
+export type LearnerMemoryPatch = Schema<'LearnerMemoryPatch'>
 
 export interface JobEventData {
   status?: string

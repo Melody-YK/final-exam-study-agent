@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from enum import StrEnum
 from typing import cast
 
 from sqlalchemy import and_, func, or_, select
@@ -24,8 +25,19 @@ from study_agent.infrastructure.db.models import (
 from study_agent.infrastructure.db.models.core import new_id
 from study_agent.infrastructure.db.session import Database
 from study_agent.modules.answering.events import append_query_event
+from study_agent.modules.answering.evidence_gate import (
+    EvidenceGate,
+    EvidenceGateCode,
+    EvidenceGateDecision,
+)
+from study_agent.modules.answering.memory import (
+    LearnerMemoryRepository,
+    upsert_explicit_memories,
+)
+from study_agent.modules.answering.planning import CourseQueryPlanner, QueryPlan
 from study_agent.modules.answering.retrieval import QueryEvidence, RetrievedEvidence
 from study_agent.modules.answering.service import TrustedAnswerService
+from study_agent.modules.answering.telemetry import log_conversation_event
 from study_agent.modules.answering.types import (
     AnswerExecution,
     AuthorizedEvidence,
@@ -34,7 +46,7 @@ from study_agent.modules.answering.types import (
 from study_agent.observability.trace import get_trace_id, new_trace_id
 from study_agent.providers.errors import ProviderError, ProviderErrorCode
 from study_agent.providers.factory import ProviderRegistry
-from study_agent.providers.protocols import Clock, ConversationContextTurn
+from study_agent.providers.protocols import Clock, ConversationContextTurn, LearnerMemoryContext
 from study_contracts import AnswerStatus, Refusal, StructuredAnswer
 
 
@@ -55,6 +67,10 @@ class QuerySnapshot:
     answer: StructuredAnswer | None
     failure_code: str | None
     usage: dict[str, int]
+    query_intent: str | None
+    standalone_question: str | None
+    retrieval_rounds: tuple[RetrievalRound, ...]
+    retrieval_diagnostic: str | None
     trace: QueryTrace
     created_at: datetime
     completed_at: datetime | None
@@ -72,12 +88,34 @@ class ConversationSnapshot:
     updated_at: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class RetrievalRound:
+    query: str
+    active_index: bool
+    candidate_count: int
+    eligible_count: int
+    retrieval_trace_id: str | None
+    active_lexical_index_id: str | None
+
+
+class RetrievalDiagnostic(StrEnum):
+    INITIAL_SUFFICIENT = "initial_sufficient"
+    REPAIR_SUCCEEDED = "repair_succeeded"
+    INDEX_UNAVAILABLE = "index_unavailable"
+    NO_CANDIDATES = "no_candidates"
+    LOW_RELEVANCE = "low_relevance"
+
+
 DEFAULT_CONVERSATION_TITLE = "新会话"
 AUTO_TITLE_MAX_LENGTH = 60
 CONVERSATION_CONTEXT_TURNS = 4
 CONVERSATION_CONTEXT_MAX_CHARS = 6_000
-CONVERSATION_CONTEXT_QUESTION_MAX_CHARS = 1_000
-CONVERSATION_CONTEXT_ANSWER_MAX_CHARS = 1_500
+CONVERSATION_SUMMARY_MAX_CHARS = 2_000
+CONVERSATION_SUMMARY_MAX_TOPICS = 24
+CONVERSATION_SUMMARY_TOPIC_MAX_CHARS = 180
+MAX_RETRIEVAL_QUERIES = 3
+MAX_FUSED_EVIDENCE = 8
+RRF_RANK_CONSTANT = 60
 
 
 def _question_title(question: str) -> str:
@@ -87,27 +125,6 @@ def _question_title(question: str) -> str:
     return f"{normalized[: AUTO_TITLE_MAX_LENGTH - 1].rstrip()}…"
 
 
-def _bounded_text(value: str, limit: int) -> str:
-    normalized = value.strip()
-    if len(normalized) <= limit:
-        return normalized
-    return normalized[:limit].rstrip()
-
-
-def _contextual_retrieval_query(
-    question: str,
-    context: tuple[ConversationContextTurn, ...],
-) -> str:
-    normalized = question.strip()
-    if not context:
-        return normalized
-    lines = ["[NON_EVIDENCE_CONVERSATION_CONTEXT]"]
-    for turn in context:
-        lines.append(f"User: {turn.question}")
-    lines.extend(("[CURRENT_QUESTION]", normalized))
-    return "\n".join(lines)
-
-
 def _abstained(query_id: str, code: str, message: str) -> StructuredAnswer:
     return StructuredAnswer(
         query_id=query_id,
@@ -115,6 +132,95 @@ def _abstained(query_id: str, code: str, message: str) -> StructuredAnswer:
         answer_markdown="",
         refusal=Refusal(code=code, message=message),
     )
+
+
+def _consistent_retrieval_suffix(
+    results: list[RetrievedEvidence],
+) -> tuple[RetrievedEvidence, ...]:
+    if not results or not results[-1].active_index:
+        return ()
+    manifest_id = results[-1].active_lexical_index_id
+    consistent: list[RetrievedEvidence] = []
+    for result in reversed(results):
+        if not result.active_index or result.active_lexical_index_id != manifest_id:
+            break
+        consistent.append(result)
+    consistent.reverse()
+    return tuple(consistent)
+
+
+def _fuse_retrieval_results(
+    results: list[RetrievedEvidence],
+    *,
+    min_score: float,
+) -> RetrievedEvidence:
+    """Fuse only the latest contiguous index snapshot with stable RRF ordering."""
+
+    if not results:
+        raise ValueError("at least one retrieval result is required")
+    latest = results[-1]
+    consistent = _consistent_retrieval_suffix(results)
+    if not consistent:
+        return RetrievedEvidence(
+            active_index=False,
+            candidates=(),
+            retrieval_trace_id=latest.retrieval_trace_id,
+            active_lexical_index_id=latest.active_lexical_index_id,
+        )
+
+    best_by_chunk: dict[tuple[str, str, str], AuthorizedEvidence] = {}
+    reciprocal_rank: dict[tuple[str, str, str], float] = {}
+    first_seen: dict[tuple[str, str, str], int] = {}
+    seen_order = 0
+    for result in consistent:
+        for rank, candidate in enumerate(result.candidates, start=1):
+            key = (
+                candidate.evidence.document_id,
+                candidate.evidence.revision_id,
+                candidate.evidence.chunk_id,
+            )
+            reciprocal_rank[key] = reciprocal_rank.get(key, 0.0) + 1.0 / (RRF_RANK_CONSTANT + rank)
+            if key not in first_seen:
+                first_seen[key] = seen_order
+                seen_order += 1
+            current = best_by_chunk.get(key)
+            if current is None or candidate.score > current.score:
+                best_by_chunk[key] = candidate
+
+    ordered_keys = sorted(
+        best_by_chunk,
+        key=lambda key: (
+            0 if best_by_chunk[key].score >= min_score else 1,
+            -reciprocal_rank[key],
+            -best_by_chunk[key].score,
+            first_seen[key],
+            key,
+        ),
+    )
+    candidates = tuple(best_by_chunk[key] for key in ordered_keys[:MAX_FUSED_EVIDENCE])
+    return RetrievedEvidence(
+        active_index=True,
+        candidates=candidates,
+        retrieval_trace_id=latest.retrieval_trace_id,
+        active_lexical_index_id=latest.active_lexical_index_id,
+    )
+
+
+def _retrieval_diagnostic(
+    initial: EvidenceGateDecision,
+    final: EvidenceGateDecision,
+    *,
+    round_count: int,
+) -> RetrievalDiagnostic:
+    if initial.sufficient:
+        return RetrievalDiagnostic.INITIAL_SUFFICIENT
+    if final.sufficient and round_count > 1:
+        return RetrievalDiagnostic.REPAIR_SUCCEEDED
+    if final.code is EvidenceGateCode.INDEX_UNAVAILABLE:
+        return RetrievalDiagnostic.INDEX_UNAVAILABLE
+    if final.code is EvidenceGateCode.NO_CANDIDATES:
+        return RetrievalDiagnostic.NO_CANDIDATES
+    return RetrievalDiagnostic.LOW_RELEVANCE
 
 
 class QueryRepository:
@@ -201,6 +307,14 @@ class QueryRepository:
                 conversation.auto_title_pending = False
             conversation.updated_at = now
             await session.flush()
+            await upsert_explicit_memories(
+                session,
+                user_id=query.user_id,
+                course_id=query.course_id,
+                message=normalized,
+                now=now,
+                source_query_id=query.id,
+            )
             append_query_event(
                 session,
                 query,
@@ -274,15 +388,53 @@ class QueryRepository:
                 retention=self._event_retention,
             )
 
+    async def save_plan(
+        self,
+        principal: Principal,
+        query_id: str,
+        plan: QueryPlan,
+    ) -> None:
+        async with self._database.session(principal) as session:
+            query = await self._locked(session, principal, query_id)
+            query.query_intent = plan.intent.value
+            query.standalone_question = plan.standalone_question
+            append_query_event(
+                session,
+                query,
+                "retrieval.planned",
+                {
+                    "intent": plan.intent.value,
+                    "query_count": len(plan.search_queries),
+                    "provider_planned": plan.provider_planned,
+                },
+                now=self._clock.now(),
+                retention=self._event_retention,
+            )
+
     async def save_retrieval(
         self,
         principal: Principal,
         query_id: str,
         retrieved: RetrievedEvidence,
+        *,
+        rounds: tuple[RetrievalRound, ...],
+        diagnostic: RetrievalDiagnostic,
     ) -> str:
         snapshot_id = new_id()
         async with self._database.session(principal) as session:
             query = await self._locked(session, principal, query_id)
+            query.retrieval_rounds = [
+                {
+                    "query": round_.query,
+                    "active_index": round_.active_index,
+                    "candidate_count": round_.candidate_count,
+                    "eligible_count": round_.eligible_count,
+                    "retrieval_trace_id": round_.retrieval_trace_id,
+                    "active_lexical_index_id": round_.active_lexical_index_id,
+                }
+                for round_ in rounds
+            ]
+            query.retrieval_diagnostic = diagnostic.value
             session.add(
                 RetrievalSnapshotModel(
                     id=snapshot_id,
@@ -311,6 +463,8 @@ class QueryRepository:
                 {
                     "active_index": retrieved.active_index,
                     "candidate_count": len(retrieved.candidates),
+                    "round_count": len(rounds),
+                    "diagnostic": diagnostic.value,
                     "retrieval_snapshot_id": snapshot_id,
                     "retrieval_trace_id": retrieved.retrieval_trace_id,
                 },
@@ -439,6 +593,20 @@ class QueryRepository:
                     retention=self._event_retention,
                 )
             await session.flush()
+            await self._refresh_course_summary(session, query)
+            await session.flush()
+            duration_ms = max(0, int((now - query.created_at).total_seconds() * 1_000))
+            log_conversation_event(
+                "course_query_completed",
+                course_id=query.course_id,
+                conversation_id=query.conversation_id,
+                conversation_type="course_qa",
+                status=query.status,
+                intent=query.query_intent,
+                diagnostic=query.retrieval_diagnostic,
+                retrieval_round_count=len(query.retrieval_rounds),
+                duration_ms=duration_ms,
+            )
             return await self._snapshot(session, query)
 
     async def get(self, principal: Principal, query_id: str) -> QuerySnapshot | None:
@@ -519,6 +687,7 @@ class QueryRepository:
                 id=new_id(),
                 user_id=course.user_id,
                 course_id=course.id,
+                conversation_type="course_qa",
                 title=normalized_title,
                 auto_title_pending=title is None,
                 created_at=now,
@@ -547,6 +716,7 @@ class QueryRepository:
                     .where(
                         ConversationModel.user_id == course.user_id,
                         ConversationModel.course_id == course.id,
+                        ConversationModel.conversation_type == "course_qa",
                     )
                     .order_by(
                         ConversationModel.updated_at.desc(),
@@ -724,15 +894,11 @@ class QueryRepository:
         remaining = max_chars
         turns: list[ConversationContextTurn] = []
         for query in queries:
-            question = _bounded_text(
-                query.question,
-                min(CONVERSATION_CONTEXT_QUESTION_MAX_CHARS, remaining),
-            )
+            question = query.question.strip()
             if not question:
                 continue
-            remaining -= len(question)
             answer: str | None = None
-            if query.status == "answered" and remaining > 0:
+            if query.status == "answered":
                 query_dependencies = dependencies_by_query.get(query.id, [])
                 expected_citations = len(query.citations)
                 sources_current = bool(query_dependencies) and (
@@ -747,15 +913,11 @@ class QueryRepository:
                     )
                 )
                 if sources_current:
-                    answer = (
-                        _bounded_text(
-                            query.answer_markdown,
-                            min(CONVERSATION_CONTEXT_ANSWER_MAX_CHARS, remaining),
-                        )
-                        or None
-                    )
-                    if answer is not None:
-                        remaining -= len(answer)
+                    answer = query.answer_markdown.strip() or None
+            turn_chars = len(question) + len(answer or "")
+            if turn_chars > remaining:
+                break
+            remaining -= turn_chars
             turns.append(
                 ConversationContextTurn(
                     question=question,
@@ -766,6 +928,89 @@ class QueryRepository:
                 break
         turns.reverse()
         return tuple(turns)
+
+    async def conversation_summary(
+        self,
+        principal: Principal,
+        query_id: str,
+    ) -> str | None:
+        async with self._database.session(principal) as session:
+            query = await self._scoped(session, principal, query_id)
+            if query is None:
+                raise LookupError("query is unavailable")
+            return cast(
+                str | None,
+                await session.scalar(
+                    select(ConversationModel.summary_text).where(
+                        ConversationModel.id == query.conversation_id,
+                        ConversationModel.user_id == query.user_id,
+                        ConversationModel.course_id == query.course_id,
+                        ConversationModel.conversation_type == "course_qa",
+                    )
+                ),
+            )
+
+    async def _refresh_course_summary(
+        self,
+        session: AsyncSession,
+        query: QueryRunModel,
+    ) -> None:
+        conversation = await session.scalar(
+            select(ConversationModel)
+            .where(
+                ConversationModel.id == query.conversation_id,
+                ConversationModel.user_id == query.user_id,
+                ConversationModel.course_id == query.course_id,
+                ConversationModel.conversation_type == "course_qa",
+            )
+            .with_for_update(of=ConversationModel)
+        )
+        if conversation is None:
+            return
+        terminal_statuses = ("answered", "abstained", "failed", "invalidated")
+        total = int(
+            await session.scalar(
+                select(func.count(QueryRunModel.id)).where(
+                    QueryRunModel.conversation_id == conversation.id,
+                    QueryRunModel.user_id == conversation.user_id,
+                    QueryRunModel.course_id == conversation.course_id,
+                    QueryRunModel.status.in_(terminal_statuses),
+                )
+            )
+            or 0
+        )
+        older_count = max(0, total - CONVERSATION_CONTEXT_TURNS)
+        if older_count == 0:
+            conversation.summary_text = None
+            conversation.summary_version = None
+            conversation.summary_turn_count = 0
+            return
+        rows = list(
+            await session.scalars(
+                select(QueryRunModel.question)
+                .where(
+                    QueryRunModel.conversation_id == conversation.id,
+                    QueryRunModel.user_id == conversation.user_id,
+                    QueryRunModel.course_id == conversation.course_id,
+                    QueryRunModel.status.in_(terminal_statuses),
+                )
+                .order_by(QueryRunModel.created_at.desc(), QueryRunModel.id.desc())
+                .offset(CONVERSATION_CONTEXT_TURNS)
+                .limit(CONVERSATION_SUMMARY_MAX_TOPICS)
+            )
+        )
+        rows.reverse()
+        lines = [
+            f"- {' '.join(question.split())[:CONVERSATION_SUMMARY_TOPIC_MAX_CHARS]}"
+            for question in rows
+            if question.strip()
+        ]
+        prefix = f"较早的 {older_count} 轮对话主题:"
+        while lines and len("\n".join((prefix, *lines))) > CONVERSATION_SUMMARY_MAX_CHARS:
+            lines.pop(0)
+        conversation.summary_text = "\n".join((prefix, *lines))
+        conversation.summary_version = "topic-summary-1.0"
+        conversation.summary_turn_count = older_count
 
     @staticmethod
     def _context_dependency_is_current(
@@ -795,6 +1040,7 @@ class QueryRepository:
         statement = select(ConversationModel).where(
             ConversationModel.user_id == course.user_id,
             ConversationModel.course_id == course.id,
+            ConversationModel.conversation_type == "course_qa",
         )
         if conversation_id is not None:
             statement = statement.where(ConversationModel.id == conversation_id)
@@ -816,6 +1062,7 @@ class QueryRepository:
             id=new_id(),
             user_id=course.user_id,
             course_id=course.id,
+            conversation_type="course_qa",
             title=DEFAULT_CONVERSATION_TITLE,
             auto_title_pending=True,
             created_at=now,
@@ -861,6 +1108,7 @@ class QueryRepository:
                 .join(UserModel, UserModel.id == ConversationModel.user_id)
                 .where(
                     ConversationModel.id == conversation_id,
+                    ConversationModel.conversation_type == "course_qa",
                     CourseModel.deleted_at.is_(None),
                     UserModel.subject == principal.subject,
                     UserModel.authentication_method == principal.authentication_method.value,
@@ -967,6 +1215,28 @@ class QueryRepository:
             answer=answer,
             failure_code=query.failure_code,
             usage=dict(query.usage),
+            query_intent=query.query_intent,
+            standalone_question=query.standalone_question,
+            retrieval_rounds=tuple(
+                RetrievalRound(
+                    query=str(round_["query"]),
+                    active_index=bool(round_["active_index"]),
+                    candidate_count=int(round_["candidate_count"]),
+                    eligible_count=int(round_["eligible_count"]),
+                    retrieval_trace_id=(
+                        None
+                        if round_.get("retrieval_trace_id") is None
+                        else str(round_["retrieval_trace_id"])
+                    ),
+                    active_lexical_index_id=(
+                        None
+                        if round_.get("active_lexical_index_id") is None
+                        else str(round_["active_lexical_index_id"])
+                    ),
+                )
+                for round_ in query.retrieval_rounds
+            ),
+            retrieval_diagnostic=query.retrieval_diagnostic,
             trace=QueryTrace(
                 trace_id=query.trace_id,
                 retrieval_snapshot_id=retrieval.id if retrieval else None,
@@ -1050,13 +1320,21 @@ class QueryService:
         repository: QueryRepository,
         evidence: QueryEvidence,
         registry: ProviderRegistry,
+        memory_repository: LearnerMemoryRepository,
         *,
         timeout_seconds: float,
     ) -> None:
         self._repository = repository
         self._evidence = evidence
+        self._memory_repository = memory_repository
+        self._evidence_gate = EvidenceGate()
+        self._planner = CourseQueryPlanner(
+            registry.chat,
+            timeout_seconds=min(timeout_seconds, 8.0),
+        )
         self._answering = TrustedAnswerService(
             registry.chat,
+            evidence_gate=self._evidence_gate,
             timeout_seconds=timeout_seconds,
         )
 
@@ -1080,40 +1358,109 @@ class QueryService:
         )
         await self._repository.start_retrieval(principal, query_id)
         conversation_context = await self._repository.recent_context(principal, query_id)
-        retrieval_question = _contextual_retrieval_query(question, conversation_context)
-        try:
-            retrieved = await self._evidence.retrieve(
-                principal,
-                course_id,
-                retrieval_question,
-                document_ids=document_ids,
-                concept_context=concept_context,
+        conversation_summary = await self._repository.conversation_summary(principal, query_id)
+        memory_snapshots = await self._memory_repository.relevant(
+            principal,
+            course_id,
+            question,
+        )
+        learner_memories = tuple(
+            LearnerMemoryContext(
+                memory_type=memory.memory_type.value,
+                content=memory.content,
             )
-        except ProviderError as exc:
-            return await self._repository.finalize(
-                principal,
-                query_id,
-                None,
-                None,
-                AnswerExecution(
-                    answer=None,
-                    failure_code=exc.code.value,
-                    provider=exc.provider,
-                ),
+            for memory in memory_snapshots
+        )
+        plan = await self._planner.plan(
+            question,
+            conversation_context,
+            conversation_summary=conversation_summary,
+        )
+        await self._repository.save_plan(principal, query_id, plan)
+
+        results: list[RetrievedEvidence] = []
+        rounds: list[RetrievalRound] = []
+        initial_decision: EvidenceGateDecision | None = None
+        decision: EvidenceGateDecision | None = None
+        for retrieval_question in plan.search_queries[:MAX_RETRIEVAL_QUERIES]:
+            try:
+                result = await self._evidence.retrieve(
+                    principal,
+                    course_id,
+                    retrieval_question,
+                    document_ids=document_ids,
+                    concept_context=concept_context,
+                )
+            except ProviderError as exc:
+                return await self._repository.finalize(
+                    principal,
+                    query_id,
+                    None,
+                    None,
+                    AnswerExecution(
+                        answer=None,
+                        failure_code=exc.code.value,
+                        provider=exc.provider,
+                    ),
+                )
+            except LookupError:
+                return await self._repository.finalize(
+                    principal,
+                    query_id,
+                    None,
+                    None,
+                    AnswerExecution(
+                        answer=None,
+                        failure_code=ProviderErrorCode.UNAVAILABLE.value,
+                    ),
+                )
+
+            results.append(result)
+            retrieved = _fuse_retrieval_results(
+                results,
+                min_score=self._evidence_gate.min_score,
             )
-        except LookupError:
-            return await self._repository.finalize(
-                principal,
-                query_id,
-                None,
-                None,
-                AnswerExecution(
-                    answer=None,
-                    failure_code=ProviderErrorCode.UNAVAILABLE.value,
-                ),
+            decision = self._evidence_gate.evaluate(
+                active_index=retrieved.active_index,
+                candidates=retrieved.candidates,
             )
-        snapshot_id = await self._repository.save_retrieval(principal, query_id, retrieved)
-        if retrieved.active_index and retrieved.candidates:
+            rounds.append(
+                RetrievalRound(
+                    query=retrieval_question,
+                    active_index=result.active_index,
+                    candidate_count=len(result.candidates),
+                    eligible_count=sum(
+                        candidate.score >= self._evidence_gate.min_score
+                        for candidate in result.candidates
+                    ),
+                    retrieval_trace_id=result.retrieval_trace_id,
+                    active_lexical_index_id=result.active_lexical_index_id,
+                )
+            )
+            if initial_decision is None:
+                initial_decision = decision
+            if decision.sufficient or not retrieved.active_index:
+                break
+
+        if not results or initial_decision is None or decision is None:
+            raise RuntimeError("query plan produced no retrieval execution")
+        retrieved = _fuse_retrieval_results(
+            results,
+            min_score=self._evidence_gate.min_score,
+        )
+        diagnostic = _retrieval_diagnostic(
+            initial_decision,
+            decision,
+            round_count=len(rounds),
+        )
+        snapshot_id = await self._repository.save_retrieval(
+            principal,
+            query_id,
+            retrieved,
+            rounds=tuple(rounds),
+            diagnostic=diagnostic,
+        )
+        if decision.sufficient:
             await self._repository.start_generation(principal, query_id)
         execution = await self._answering.answer(
             query_id=query_id,
@@ -1127,6 +1474,9 @@ class QueryService:
                 retrieved.candidates,
             ),
             conversation_context=conversation_context,
+            conversation_summary=conversation_summary,
+            learner_memories=learner_memories,
+            standalone_question=plan.standalone_question,
         )
         return await self._repository.finalize(
             principal,

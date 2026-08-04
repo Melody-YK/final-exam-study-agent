@@ -35,8 +35,8 @@ def test_empty_or_low_scoring_evidence_is_insufficient() -> None:
     empty = gate.evaluate(active_index=True, candidates=())
     low_score = gate.evaluate(active_index=True, candidates=(_candidate(score=0.39),))
 
-    assert empty.code is EvidenceGateCode.INSUFFICIENT_EVIDENCE
-    assert low_score.code is EvidenceGateCode.INSUFFICIENT_EVIDENCE
+    assert empty.code is EvidenceGateCode.NO_CANDIDATES
+    assert low_score.code is EvidenceGateCode.LOW_RELEVANCE
 
 
 def test_default_gate_rejects_negligible_retrieval_score() -> None:
@@ -45,7 +45,7 @@ def test_default_gate_rejects_negligible_retrieval_score() -> None:
         candidates=(_candidate(score=0.019),),
     )
 
-    assert decision.code is EvidenceGateCode.INSUFFICIENT_EVIDENCE
+    assert decision.code is EvidenceGateCode.LOW_RELEVANCE
 
 
 def test_gate_returns_only_the_bounded_authorized_candidate_set() -> None:

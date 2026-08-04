@@ -29,6 +29,9 @@ import type {
   LoginRequest,
   LearningSummary,
   LearningUnit,
+  LearnerMemoryCreate,
+  LearnerMemoryPatch,
+  LearnerMemoryRecord,
   MergedNoteBatchRequest,
   NoteBatchSnapshot,
   NoteCreate,
@@ -44,6 +47,7 @@ import type {
   PracticeBatchSnapshot,
   PracticeSessionRequest,
   PracticeSessionSnapshot,
+  PracticeTutorConversation,
   PracticeTutorRequest,
   PracticeTutorResponse,
   QueryCreate,
@@ -80,6 +84,7 @@ const EVENT_TYPES = [
   'query.created',
   'query.failed',
   'retrieval.completed',
+  'retrieval.planned',
   'retrieval.started',
   'note.batch.created',
   'note.batch.running',
@@ -383,6 +388,30 @@ export class StudyApiClient {
     return this.request(`/conversations/${conversationId}/queries?limit=${limit}`)
   }
 
+  listLearnerMemories(courseId: string): Promise<LearnerMemoryRecord[]> {
+    return this.request(`/courses/${encodeURIComponent(courseId)}/learner-memories`)
+  }
+
+  createLearnerMemory(courseId: string, input: LearnerMemoryCreate): Promise<LearnerMemoryRecord> {
+    return this.request(`/courses/${encodeURIComponent(courseId)}/learner-memories`, {
+      method: 'POST',
+      body: jsonBody(input),
+    })
+  }
+
+  updateLearnerMemory(memoryId: string, input: LearnerMemoryPatch): Promise<LearnerMemoryRecord> {
+    return this.request(`/learner-memories/${encodeURIComponent(memoryId)}`, {
+      method: 'PUT',
+      body: jsonBody(input),
+    })
+  }
+
+  deleteLearnerMemory(memoryId: string): Promise<void> {
+    return this.request(`/learner-memories/${encodeURIComponent(memoryId)}`, {
+      method: 'DELETE',
+    })
+  }
+
   createQuery(
     courseId: string,
     question: string,
@@ -518,7 +547,9 @@ export class StudyApiClient {
   ): Promise<PracticeBatchSnapshot> {
     return this.request(`/courses/${encodeURIComponent(courseId)}/practice-batches`, {
       method: 'POST',
-      headers: { 'Idempotency-Key': commandKey ?? idempotencyKey('practice-batch-create') },
+      headers: {
+        'Idempotency-Key': commandKey ?? idempotencyKey('practice-batch-create'),
+      },
       body: jsonBody(input),
     })
   }
@@ -541,6 +572,15 @@ export class StudyApiClient {
     return this.request(`/practice-sessions/${encodeURIComponent(sessionId)}`)
   }
 
+  getPracticeTutorConversation(
+    sessionId: string,
+    questionId: string,
+  ): Promise<PracticeTutorConversation> {
+    return this.request(
+      `/practice-sessions/${encodeURIComponent(sessionId)}/questions/${encodeURIComponent(questionId)}/tutor`,
+    )
+  }
+
   submitPracticeAttempt(
     sessionId: string,
     input: PracticeAttemptRequest,
@@ -548,7 +588,9 @@ export class StudyApiClient {
   ): Promise<PracticeAttemptResult> {
     return this.request(`/practice-sessions/${encodeURIComponent(sessionId)}/attempts`, {
       method: 'POST',
-      headers: { 'Idempotency-Key': commandKey ?? idempotencyKey('practice-attempt') },
+      headers: {
+        'Idempotency-Key': commandKey ?? idempotencyKey('practice-attempt'),
+      },
       body: jsonBody(input),
     })
   }

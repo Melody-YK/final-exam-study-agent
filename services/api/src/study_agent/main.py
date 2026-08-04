@@ -25,6 +25,7 @@ from study_agent.api.routers.auth import router as auth_router
 from study_agent.api.routers.courses import router as courses_router
 from study_agent.api.routers.job_events import router as job_events_router
 from study_agent.api.routers.knowledge_graph import router as knowledge_graph_router
+from study_agent.api.routers.learner_memories import router as learner_memories_router
 from study_agent.api.routers.learning_loop import router as learning_loop_router
 from study_agent.api.routers.note_batches import router as note_batches_router
 from study_agent.api.routers.notes import router as notes_router
@@ -365,6 +366,7 @@ def create_app(
     application.include_router(job_events_router)
     application.include_router(knowledge_graph_router)
     application.include_router(learning_loop_router)
+    application.include_router(learner_memories_router)
     application.include_router(note_batches_router)
     application.include_router(notes_router)
     application.include_router(queries_router)

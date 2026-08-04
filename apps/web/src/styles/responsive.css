@@ -390,7 +390,26 @@
   }
 
   .qa-conversations__new {
+    margin-left: 4px;
+  }
+
+  .qa-conversations__memory {
     margin-left: auto;
+  }
+
+  .learner-memory-create,
+  .learner-memory-row,
+  .learner-memory-row__fields {
+    grid-template-columns: 1fr;
+  }
+
+  .learner-memory-create .button,
+  .learner-memory-row__actions {
+    justify-self: stretch;
+  }
+
+  .learner-memory-create .button {
+    justify-content: center;
   }
 
   .citation-button span {

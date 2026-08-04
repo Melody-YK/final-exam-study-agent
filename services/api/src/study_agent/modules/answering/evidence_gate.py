@@ -10,13 +10,17 @@ from study_agent.modules.answering.types import AuthorizedEvidence
 
 class EvidenceGateCode(StrEnum):
     INDEX_UNAVAILABLE = "INDEX_UNAVAILABLE"
-    INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
+    NO_CANDIDATES = "NO_CANDIDATES"
+    LOW_RELEVANCE = "LOW_RELEVANCE"
     SUFFICIENT = "SUFFICIENT"
 
 
 _MESSAGES = {
-    EvidenceGateCode.INDEX_UNAVAILABLE: "当前课程还没有可用的活动索引。",
-    EvidenceGateCode.INSUFFICIENT_EVIDENCE: "当前课件中没有足够依据回答该问题。",
+    EvidenceGateCode.INDEX_UNAVAILABLE: "当前课程资料还未完成索引, 请等待处理完成后重试。",
+    EvidenceGateCode.NO_CANDIDATES: "没有检索到相关课程内容, 请换个问法或补充对应章节资料。",
+    EvidenceGateCode.LOW_RELEVANCE: (
+        "检索到的课程内容与问题关联不足, 请补充包含该概念或例题的资料。"
+    ),
     EvidenceGateCode.SUFFICIENT: "证据充分。",
 }
 
@@ -38,6 +42,10 @@ class EvidenceGate:
         self._min_score = min_score
         self._max_evidence = max_evidence
 
+    @property
+    def min_score(self) -> float:
+        return self._min_score
+
     def evaluate(
         self,
         *,
@@ -48,9 +56,13 @@ class EvidenceGate:
             code = EvidenceGateCode.INDEX_UNAVAILABLE
             return EvidenceGateDecision(False, code, _MESSAGES[code])
 
+        if not candidates:
+            code = EvidenceGateCode.NO_CANDIDATES
+            return EvidenceGateDecision(False, code, _MESSAGES[code])
+
         eligible = tuple(item for item in candidates if item.score >= self._min_score)
         if not eligible:
-            code = EvidenceGateCode.INSUFFICIENT_EVIDENCE
+            code = EvidenceGateCode.LOW_RELEVANCE
             return EvidenceGateDecision(False, code, _MESSAGES[code])
 
         code = EvidenceGateCode.SUFFICIENT

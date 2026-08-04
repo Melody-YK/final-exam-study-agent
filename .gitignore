@@ -30,6 +30,7 @@ data/
 操作系统/
 evals/private/
 evals/reports/generated/
+output/
 
 # Secrets are injected at runtime only.
 *.pem

@@ -3,49 +3,61 @@ import { type FormEvent, useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 
 import { studyApi } from '../../api/client'
-import type {
-  EvidenceReference,
-  PracticeQuestionView,
-  PracticeTutorMode,
-} from '../../api/types'
+import type { PracticeQuestionView, PracticeTutorMessage } from '../../api/types'
 import { ErrorNotice } from '../../components/ui/ErrorNotice'
 import { Modal } from '../../components/ui/Modal'
 
-export interface TutorChatMessage {
-  content: string
-  evidence: EvidenceReference[]
-  mode?: PracticeTutorMode
-  role: 'user' | 'assistant'
-}
-
 interface PracticeTutorModalProps {
-  messages: TutorChatMessage[]
   onClose: () => void
   onHintUsed: () => void
-  onMessagesChange: (messages: TutorChatMessage[]) => void
   open: boolean
   question: PracticeQuestionView
   sessionId: string
 }
 
-function sourceLabel(evidence: EvidenceReference): string {
+function sourceLabel(evidence: PracticeTutorMessage['evidence_refs'][number]): string {
   const location = evidence.locator.kind === 'section' ? '节' : '页'
   return `${evidence.document_name ?? '课程资料'} · 第 ${evidence.locator.ordinal} ${location}`
 }
 
 export function PracticeTutorModal({
-  messages,
   onClose,
   onHintUsed,
-  onMessagesChange,
   open,
   question,
   sessionId,
 }: PracticeTutorModalProps) {
+  const [messages, setMessages] = useState<PracticeTutorMessage[]>([])
   const [draft, setDraft] = useState('')
   const [error, setError] = useState<unknown>(null)
+  const [loadingHistory, setLoadingHistory] = useState(false)
+  const [retryTurn, setRetryTurn] = useState<{
+    id: string
+    message: string
+  } | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const transcriptRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    let active = true
+    void Promise.resolve().then(async () => {
+      if (!active) return
+      setLoadingHistory(true)
+      setError(null)
+      try {
+        const conversation = await studyApi.getPracticeTutorConversation(sessionId, question.id)
+        if (active) setMessages(conversation.messages)
+      } catch (caught) {
+        if (active) setError(caught)
+      } finally {
+        if (active) setLoadingHistory(false)
+      }
+    })
+    return () => {
+      active = false
+    }
+  }, [open, question.id, sessionId])
 
   useEffect(() => {
     if (!open) return
@@ -54,40 +66,46 @@ export function PracticeTutorModal({
       if (transcript) transcript.scrollTop = transcript.scrollHeight
     })
     return () => window.cancelAnimationFrame(frame)
-  }, [messages, open])
+  }, [loadingHistory, messages, open, submitting])
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
     const message = draft.trim()
     if (!message || submitting) return
+    const turnId = retryTurn?.message === message ? retryTurn.id : crypto.randomUUID()
 
-    const userMessage: TutorChatMessage = {
-      content: message,
-      evidence: [],
-      role: 'user',
-    }
-    const pendingMessages = [...messages, userMessage]
-    onMessagesChange(pendingMessages)
     setDraft('')
     setError(null)
     setSubmitting(true)
     try {
       const response = await studyApi.askPracticeTutor(sessionId, question.id, {
-        history: messages.slice(-8).map(({ content, role }) => ({ content, role })),
         message,
+        turn_id: turnId,
       })
-      onMessagesChange([
-        ...pendingMessages,
-        {
-          content: response.answer_markdown,
-          evidence: response.evidence_refs,
-          mode: response.mode,
-          role: 'assistant',
-        },
-      ])
+      const userMessage: PracticeTutorMessage = {
+        id: `local-${response.message_id}`,
+        role: 'user',
+        content: message,
+        intent: response.intent,
+        evidence_refs: [],
+        created_at: response.created_at,
+      }
+      const assistantMessage: PracticeTutorMessage = {
+        id: response.message_id,
+        role: 'assistant',
+        content: response.answer_markdown,
+        intent: response.intent,
+        mode: response.mode,
+        evidence_refs: response.evidence_refs,
+        created_at: response.created_at,
+      }
+      setMessages((current) => [...current, userMessage, assistantMessage])
+      setRetryTurn(null)
       if (response.mode === 'hint') onHintUsed()
     } catch (caught) {
       setError(caught)
+      setDraft(message)
+      setRetryTurn({ id: turnId, message })
     } finally {
       setSubmitting(false)
     }
@@ -100,33 +118,28 @@ export function PracticeTutorModal({
   }
 
   return (
-    <Modal
-      description={currentMode}
-      onClose={close}
-      open={open}
-      size="wide"
-      title="问 AI"
-    >
+    <Modal description={currentMode} onClose={close} open={open} size="wide" title="问 AI">
       <div className="learning-tutor">
         <div className="learning-tutor__question">
           <span>当前题目</span>
           <strong>{question.prompt}</strong>
         </div>
-        <div
-          aria-live="polite"
-          className="learning-tutor__transcript"
-          ref={transcriptRef}
-        >
-          {messages.length === 0 ? (
+        <div aria-live="polite" className="learning-tutor__transcript" ref={transcriptRef}>
+          {loadingHistory ? (
+            <div className="learning-tutor__empty" role="status">
+              <LoaderCircle aria-hidden="true" className="spin" size={24} />
+              正在恢复对话
+            </div>
+          ) : messages.length === 0 ? (
             <div className="learning-tutor__empty">
               <Bot aria-hidden="true" size={24} />
               <p>还没有对话。</p>
             </div>
           ) : (
-            messages.map((message, index) => (
+            messages.map((message) => (
               <article
                 className={`learning-tutor-message learning-tutor-message--${message.role}`}
-                key={`${message.role}-${index}`}
+                key={message.id}
               >
                 <span>{message.role === 'assistant' ? 'AI' : '你'}</span>
                 <div className="learning-tutor-message__content">
@@ -136,12 +149,10 @@ export function PracticeTutorModal({
                     <p>{message.content}</p>
                   )}
                 </div>
-                {message.evidence.length > 0 ? (
+                {message.evidence_refs.length > 0 ? (
                   <footer>
-                    {message.evidence.map((item) => (
-                      <span key={`${item.revision_id}-${item.chunk_id}`}>
-                        {sourceLabel(item)}
-                      </span>
+                    {message.evidence_refs.map((item) => (
+                      <span key={`${item.revision_id}-${item.chunk_id}`}>{sourceLabel(item)}</span>
                     ))}
                   </footer>
                 ) : null}
@@ -164,7 +175,10 @@ export function PracticeTutorModal({
             autoFocus
             id={`practice-tutor-${question.id}`}
             maxLength={1_000}
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={(event) => {
+              setDraft(event.target.value)
+              setRetryTurn(null)
+            }}
             placeholder="输入你的问题"
             rows={3}
             value={draft}

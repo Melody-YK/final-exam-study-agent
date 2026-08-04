@@ -35,8 +35,43 @@ class ConversationModel(Base):
             name="fk_conversations_course_user",
             ondelete="CASCADE",
         ),
+        ForeignKeyConstraint(
+            ["practice_session_id", "course_id", "user_id"],
+            ["practice_sessions.id", "practice_sessions.course_id", "practice_sessions.user_id"],
+            name="fk_conversations_practice_session_scope",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["practice_question_id", "course_id", "user_id"],
+            ["practice_questions.id", "practice_questions.course_id", "practice_questions.user_id"],
+            name="fk_conversations_practice_question_scope",
+            ondelete="CASCADE",
+        ),
         UniqueConstraint("id", "course_id", "user_id", name="uq_conversations_id_scope"),
+        UniqueConstraint(
+            "user_id",
+            "course_id",
+            "conversation_type",
+            "practice_session_id",
+            "practice_question_id",
+            name="uq_conversations_practice_scope",
+        ),
         CheckConstraint("btrim(title) <> ''", name="ck_conversations_title_nonblank"),
+        CheckConstraint(
+            "summary_turn_count >= 0",
+            name="ck_conversations_summary_turn_count",
+        ),
+        CheckConstraint(
+            "conversation_type IN ('course_qa', 'practice_tutor')",
+            name="ck_conversations_type",
+        ),
+        CheckConstraint(
+            "(conversation_type = 'course_qa' AND practice_session_id IS NULL "
+            "AND practice_question_id IS NULL) OR "
+            "(conversation_type = 'practice_tutor' AND practice_session_id IS NOT NULL "
+            "AND practice_question_id IS NOT NULL)",
+            name="ck_conversations_subject_scope",
+        ),
         Index(
             "ix_conversations_scope_updated",
             "user_id",
@@ -48,13 +83,73 @@ class ConversationModel(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     user_id: Mapped[str] = mapped_column(String(36), nullable=False)
     course_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    conversation_type: Mapped[str] = mapped_column(String(32), nullable=False, default="course_qa")
+    practice_session_id: Mapped[str | None] = mapped_column(String(36))
+    practice_question_id: Mapped[str | None] = mapped_column(String(36))
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     auto_title_pending: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    summary_text: Mapped[str | None] = mapped_column(Text)
+    summary_version: Mapped[str | None] = mapped_column(String(32))
+    summary_turn_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class ConversationMessageModel(Base):
+    __tablename__ = "conversation_messages"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["conversation_id", "course_id", "user_id"],
+            ["conversations.id", "conversations.course_id", "conversations.user_id"],
+            name="fk_conversation_messages_conversation_scope",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("conversation_id", "sequence", name="uq_conversation_messages_sequence"),
+        UniqueConstraint(
+            "conversation_id",
+            "turn_id",
+            "role",
+            name="uq_conversation_messages_turn_role",
+        ),
+        CheckConstraint("sequence >= 1", name="ck_conversation_messages_sequence"),
+        CheckConstraint("btrim(turn_id) <> ''", name="ck_conversation_messages_turn_nonblank"),
+        CheckConstraint("role IN ('user', 'assistant')", name="ck_conversation_messages_role"),
+        CheckConstraint(
+            "intent IS NULL OR intent IN "
+            "('hint', 'clarify', 'example', 'answer_check', 'solution', 'reflection', 'source')",
+            name="ck_conversation_messages_intent",
+        ),
+        CheckConstraint(
+            "mode IS NULL OR mode IN ('hint', 'review')",
+            name="ck_conversation_messages_mode",
+        ),
+        CheckConstraint("btrim(content) <> ''", name="ck_conversation_messages_content_nonblank"),
+        Index(
+            "ix_conversation_messages_scope_sequence",
+            "user_id",
+            "course_id",
+            "conversation_id",
+            "sequence",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    course_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    conversation_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    turn_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    intent: Mapped[str | None] = mapped_column(String(32))
+    mode: Mapped[str | None] = mapped_column(String(16))
+    evidence_refs: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
 
@@ -84,6 +179,17 @@ class QueryRunModel(Base):
             "cost_microusd IS NULL OR cost_microusd >= 0",
             name="ck_query_runs_cost_nonnegative",
         ),
+        CheckConstraint(
+            "query_intent IS NULL OR query_intent IN "
+            "('new_question', 'follow_up', 'comparison', 'summary', 'clarification')",
+            name="ck_query_runs_intent",
+        ),
+        CheckConstraint(
+            "retrieval_diagnostic IS NULL OR retrieval_diagnostic IN "
+            "('initial_sufficient', 'repair_succeeded', 'index_unavailable', "
+            "'no_candidates', 'low_relevance')",
+            name="ck_query_runs_retrieval_diagnostic",
+        ),
         Index("ix_query_runs_scope_created", "user_id", "course_id", "created_at"),
         Index("ix_query_runs_scope_status", "user_id", "course_id", "status"),
         Index(
@@ -101,7 +207,13 @@ class QueryRunModel(Base):
     conversation_id: Mapped[str] = mapped_column(String(36), nullable=False)
     question: Mapped[str] = mapped_column(Text, nullable=False)
     question_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    query_intent: Mapped[str | None] = mapped_column(String(32))
+    standalone_question: Mapped[str | None] = mapped_column(Text)
     requested_document_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    retrieval_rounds: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, default=list
+    )
+    retrieval_diagnostic: Mapped[str | None] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     answer_schema_version: Mapped[str] = mapped_column(String(32), nullable=False, default="1.0")
     answer_markdown: Mapped[str] = mapped_column(Text, nullable=False, default="")
@@ -124,6 +236,70 @@ class QueryRunModel(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class LearnerMemoryModel(Base):
+    __tablename__ = "learner_memories"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["course_id", "user_id"],
+            ["courses.id", "courses.user_id"],
+            name="fk_learner_memories_course_user",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "user_id",
+            "course_id",
+            "memory_type",
+            "content_sha256",
+            name="uq_learner_memories_content",
+        ),
+        CheckConstraint(
+            "memory_type IN ('preference', 'confirmed_misconception', 'learning_goal')",
+            name="ck_learner_memories_type",
+        ),
+        CheckConstraint(
+            "source_kind IN ('explicit_user', 'manual')",
+            name="ck_learner_memories_source_kind",
+        ),
+        CheckConstraint("btrim(content) <> ''", name="ck_learner_memories_content_nonblank"),
+        CheckConstraint(
+            "confidence >= 0 AND confidence <= 1",
+            name="ck_learner_memories_confidence",
+        ),
+        CheckConstraint(
+            "source_message_id IS NULL OR source_query_id IS NULL",
+            name="ck_learner_memories_single_source",
+        ),
+        Index(
+            "ix_learner_memories_scope_updated",
+            "user_id",
+            "course_id",
+            "updated_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    course_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    memory_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    confidence: Mapped[float] = mapped_column(nullable=False, default=1.0)
+    source_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_message_id: Mapped[str | None] = mapped_column(
+        ForeignKey("conversation_messages.id", ondelete="SET NULL")
+    )
+    source_query_id: Mapped[str | None] = mapped_column(
+        ForeignKey("query_runs.id", ondelete="SET NULL")
+    )
+    last_confirmed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
 
 
 class QueryEventModel(Base):

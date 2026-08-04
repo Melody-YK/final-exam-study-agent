@@ -14,6 +14,7 @@ from study_agent.api.schemas.learning_loop import (
     PracticeBatchResponse,
     PracticeSessionRequest,
     PracticeSessionResponse,
+    PracticeTutorConversationResponse,
     PracticeTutorRequest,
     PracticeTutorResponseModel,
     ReviewQueueItemResponse,
@@ -30,6 +31,7 @@ from study_contracts import (
     LearningSummary,
     LearningUnit,
     PracticeAttemptResult,
+    PracticeTutorConversation,
     PracticeTutorResponse,
 )
 
@@ -156,6 +158,28 @@ async def list_learning_units(
 ) -> list[LearningUnit]:
     try:
         return await _service(request).list_learning_units(await _principal(request), course_id)
+    except LearningServiceError as exc:
+        raise _problem(exc) from exc
+
+
+@router.get(
+    "/practice-sessions/{session_id}/questions/{question_id}/tutor",
+    response_model=PracticeTutorConversationResponse,
+    responses={
+        409: {"model": ProblemDetails, "description": "题目来源状态冲突"},
+    },
+)
+async def get_practice_tutor_conversation(
+    session_id: str,
+    question_id: str,
+    request: Request,
+) -> PracticeTutorConversation:
+    try:
+        return await _service(request).get_tutor_conversation(
+            await _principal(request),
+            session_id,
+            question_id,
+        )
     except LearningServiceError as exc:
         raise _problem(exc) from exc
 

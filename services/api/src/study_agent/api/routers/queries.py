@@ -16,6 +16,7 @@ from study_agent.identity.principal import Principal
 from study_agent.identity.session import get_request_principal
 from study_agent.infrastructure.db.session import Database
 from study_agent.modules.answering.events import QueryEventReader
+from study_agent.modules.answering.memory import LearnerMemoryRepository
 from study_agent.modules.answering.queries import (
     ConversationSnapshot,
     QueryRepository,
@@ -81,6 +82,15 @@ class QueryTraceResponse(BaseModel):
     retrieval_trace_id: str | None
 
 
+class RetrievalRoundResponse(BaseModel):
+    query: str
+    active_index: bool
+    candidate_count: int
+    eligible_count: int
+    retrieval_trace_id: str | None
+    active_lexical_index_id: str | None
+
+
 class QueryResponse(BaseModel):
     id: str
     course_id: str
@@ -90,6 +100,10 @@ class QueryResponse(BaseModel):
     answer: StructuredAnswer | None
     failure_code: str | None
     usage: dict[str, int]
+    query_intent: str | None
+    standalone_question: str | None
+    retrieval_rounds: list[RetrievalRoundResponse]
+    retrieval_diagnostic: str | None
     trace: QueryTraceResponse
     created_at: datetime
     completed_at: datetime | None
@@ -114,6 +128,10 @@ def _service(request: Request) -> QueryService:
         _repository(request),
         cast(QueryEvidence, request.app.state.query_evidence),
         cast(ProviderRegistry, request.app.state.provider_registry),
+        LearnerMemoryRepository(
+            cast(Database, request.app.state.database),
+            cast(Clock, request.app.state.clock),
+        ),
         timeout_seconds=settings.provider_timeout_seconds,
     )
 
@@ -129,6 +147,20 @@ def _response(snapshot: QuerySnapshot) -> QueryResponse:
         answer=snapshot.answer,
         failure_code=snapshot.failure_code,
         usage=snapshot.usage,
+        query_intent=snapshot.query_intent,
+        standalone_question=snapshot.standalone_question,
+        retrieval_rounds=[
+            RetrievalRoundResponse(
+                query=round_.query,
+                active_index=round_.active_index,
+                candidate_count=round_.candidate_count,
+                eligible_count=round_.eligible_count,
+                retrieval_trace_id=round_.retrieval_trace_id,
+                active_lexical_index_id=round_.active_lexical_index_id,
+            )
+            for round_ in snapshot.retrieval_rounds
+        ],
+        retrieval_diagnostic=snapshot.retrieval_diagnostic,
         trace=QueryTraceResponse(
             trace_id=trace.trace_id,
             retrieval_snapshot_id=trace.retrieval_snapshot_id,

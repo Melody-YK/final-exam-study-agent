@@ -79,6 +79,16 @@ class PracticeTutorMode(StrEnum):
     REVIEW = "review"
 
 
+class PracticeTutorIntent(StrEnum):
+    HINT = "hint"
+    CLARIFY = "clarify"
+    EXAMPLE = "example"
+    ANSWER_CHECK = "answer_check"
+    SOLUTION = "solution"
+    REFLECTION = "reflection"
+    SOURCE = "source"
+
+
 class MasteryLevel(StrEnum):
     NEW = "new"
     LEARNING = "learning"
@@ -333,18 +343,48 @@ class PracticeAttemptRequest(ContractModel):
 
 class PracticeTutorTurn(ContractModel):
     role: Literal["user", "assistant"]
-    content: NonEmptyString = Field(max_length=2_000)
+    content: NonEmptyString = Field(max_length=4_000)
 
 
 class PracticeTutorRequest(ContractModel):
     message: NonEmptyString = Field(max_length=1_000)
-    history: list[PracticeTutorTurn] = Field(default_factory=list, max_length=8)
+    turn_id: NonEmptyString = Field(max_length=64)
+
+
+class PracticeTutorMessage(ContractModel):
+    id: NonEmptyString
+    role: Literal["user", "assistant"]
+    content: NonEmptyString = Field(max_length=4_000)
+    intent: PracticeTutorIntent
+    mode: PracticeTutorMode | None = None
+    evidence_refs: list[EvidenceReference] = Field(max_length=8)
+    created_at: datetime
+
+    @model_validator(mode="after")
+    def fields_must_match_role(self) -> Self:
+        if self.role == "user" and (self.mode is not None or self.evidence_refs):
+            raise ValueError("user tutor messages cannot contain mode or evidence")
+        if self.role == "assistant" and (self.mode is None or not self.evidence_refs):
+            raise ValueError("assistant tutor messages require mode and evidence")
+        return self
+
+
+class PracticeTutorConversation(ContractModel):
+    conversation_id: NonEmptyString | None = None
+    session_id: NonEmptyString
+    question_id: NonEmptyString
+    messages: list[PracticeTutorMessage] = Field(max_length=200)
+    has_earlier_messages: bool = False
 
 
 class PracticeTutorResponse(ContractModel):
+    conversation_id: NonEmptyString
+    message_id: NonEmptyString
+    intent: PracticeTutorIntent
     mode: PracticeTutorMode
     answer_markdown: NonEmptyString = Field(max_length=4_000)
     evidence_refs: list[EvidenceReference] = Field(min_length=1, max_length=8)
+    created_at: datetime
 
 
 class MasteryUpdate(ContractModel):

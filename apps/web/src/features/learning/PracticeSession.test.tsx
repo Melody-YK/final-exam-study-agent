@@ -102,28 +102,21 @@ describe('PracticeSession', () => {
       explanation: '390 = 3 × 128 + 6，因此页号为 3，页内偏移为 6 字节。',
     }
     const first = renderInWorkspace(
-      <PracticeSession
-        onComplete={vi.fn()}
-        onExit={vi.fn()}
-        session={calculationSession}
-      />,
+      <PracticeSession onComplete={vi.fn()} onExit={vi.fn()} session={calculationSession} />,
     )
 
     await first.user.type(screen.getByLabelText('你的解答'), '390 = 3 × 128 + 6')
     expect(screen.queryByRole('radio')).not.toBeInTheDocument()
-    expect(JSON.parse(localStorage.getItem('study-agent.learning:practice-progress:session-1') ?? '{}'))
-      .toMatchObject({ answers: { 'question-calculation': '390 = 3 × 128 + 6' } })
+    expect(
+      JSON.parse(localStorage.getItem('study-agent.learning:practice-progress:session-1') ?? '{}'),
+    ).toMatchObject({
+      answers: { 'question-calculation': '390 = 3 × 128 + 6' },
+    })
     first.unmount()
 
-    const submit = vi
-      .spyOn(studyApi, 'submitPracticeAttempt')
-      .mockResolvedValue(calculationAttempt)
+    const submit = vi.spyOn(studyApi, 'submitPracticeAttempt').mockResolvedValue(calculationAttempt)
     const restored = renderInWorkspace(
-      <PracticeSession
-        onComplete={vi.fn()}
-        onExit={vi.fn()}
-        session={calculationSession}
-      />,
+      <PracticeSession onComplete={vi.fn()} onExit={vi.fn()} session={calculationSession} />,
     )
     expect(screen.getByLabelText('你的解答')).toHaveValue('390 = 3 × 128 + 6')
     await restored.user.click(screen.getByRole('button', { name: '提交并判分' }))
@@ -159,8 +152,9 @@ describe('PracticeSession', () => {
     await user.click(screen.getByRole('button', { name: '下一题' }))
 
     expect(screen.getByRole('heading', { name: '调度是什么？' })).toBeInTheDocument()
-    expect(JSON.parse(localStorage.getItem('study-agent.learning:practice-progress:session-1') ?? '{}'))
-      .toMatchObject({ questionIndex: 1, answers: {} })
+    expect(
+      JSON.parse(localStorage.getItem('study-agent.learning:practice-progress:session-1') ?? '{}'),
+    ).toMatchObject({ questionIndex: 1, answers: {} })
   })
 
   it('keeps drafts for multiple questions and supports returning to the previous question', async () => {
@@ -186,9 +180,7 @@ describe('PracticeSession', () => {
     expect(screen.getByRole('heading', { name: '进程是什么？' })).toBeInTheDocument()
     expect(screen.getByRole('radio', { name: '调度的基本单位' })).toBeChecked()
     expect(
-      JSON.parse(
-        localStorage.getItem('study-agent.learning:practice-progress:session-1') ?? '{}',
-      ),
+      JSON.parse(localStorage.getItem('study-agent.learning:practice-progress:session-1') ?? '{}'),
     ).toMatchObject({
       answers: { 'question-1': 'b', 'question-2': 'a' },
       questionIndex: 0,
@@ -229,9 +221,20 @@ describe('PracticeSession', () => {
   })
 
   it('marks a successful pre-submit AI conversation as a viewed hint', async () => {
+    vi.spyOn(studyApi, 'getPracticeTutorConversation').mockResolvedValue({
+      conversation_id: null,
+      has_earlier_messages: false,
+      messages: [],
+      question_id: 'question-1',
+      session_id: 'session-1',
+    })
     vi.spyOn(studyApi, 'askPracticeTutor').mockResolvedValue({
       answer_markdown: '先比较资源归属和执行调度的区别。',
+      conversation_id: 'conversation-1',
+      created_at: '2026-08-02T08:02:00Z',
       evidence_refs: [source],
+      intent: 'hint',
+      message_id: 'message-1',
       mode: 'hint',
     })
     const submit = vi.spyOn(studyApi, 'submitPracticeAttempt').mockResolvedValue(attempt)
@@ -252,6 +255,43 @@ describe('PracticeSession', () => {
       expect.objectContaining({ viewed_hint: true }),
       expect.any(String),
     )
+  })
+
+  it('restores the server-side tutor transcript when the modal opens', async () => {
+    const getConversation = vi.spyOn(studyApi, 'getPracticeTutorConversation').mockResolvedValue({
+      conversation_id: 'conversation-1',
+      has_earlier_messages: false,
+      messages: [
+        {
+          content: '你能给个例子吗?',
+          created_at: '2026-08-02T08:02:00Z',
+          evidence_refs: [],
+          id: 'message-user-1',
+          intent: 'example',
+          role: 'user',
+        },
+        {
+          content: '可以类比公司分配预算和员工执行任务。',
+          created_at: '2026-08-02T08:02:01Z',
+          evidence_refs: [source],
+          id: 'message-assistant-1',
+          intent: 'example',
+          mode: 'hint',
+          role: 'assistant',
+        },
+      ],
+      question_id: 'question-1',
+      session_id: 'session-1',
+    })
+    const { user } = renderInWorkspace(
+      <PracticeSession onComplete={vi.fn()} onExit={vi.fn()} session={session} />,
+    )
+
+    await user.click(screen.getByRole('button', { name: '问 AI' }))
+
+    expect(await screen.findByText('你能给个例子吗?')).toBeInTheDocument()
+    expect(screen.getByText('可以类比公司分配预算和员工执行任务。')).toBeInTheDocument()
+    expect(getConversation).toHaveBeenCalledWith('session-1', 'question-1')
   })
 
   it('submits once, shows explanation, and opens evidence before completing', async () => {
@@ -280,7 +320,10 @@ describe('PracticeSession', () => {
   it('fails closed for a stale question and does not submit an answer', async () => {
     const staleSession = {
       ...session,
-      questions: session.questions.map((question) => ({ ...question, status: 'stale' as const })),
+      questions: session.questions.map((question) => ({
+        ...question,
+        status: 'stale' as const,
+      })),
     }
     const submit = vi.spyOn(studyApi, 'submitPracticeAttempt')
     const onComplete = vi.fn()

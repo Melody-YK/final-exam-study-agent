@@ -12,6 +12,8 @@ from study_agent.config import AppMode, Settings
 from study_agent.identity.principal import LocalPrincipalProvider, Principal
 from study_agent.infrastructure.db.migrations import upgrade_database
 from study_agent.infrastructure.db.models import (
+    ConversationMessageModel,
+    ConversationModel,
     CourseModel,
     DocumentModel,
     DocumentRevisionModel,
@@ -55,8 +57,8 @@ async def _table_names(connection: object) -> set[str]:
     result = await connection.execute(  # type: ignore[attr-defined]
         text(
             "SELECT table_name FROM information_schema.tables "
-            "WHERE table_schema = 'public' AND table_name LIKE 'learning_%' "
-            "OR table_schema = 'public' AND table_name LIKE 'practice_%'"
+            "WHERE table_schema = 'public' AND (table_name LIKE 'learning_%' "
+            "OR table_name LIKE 'practice_%' OR table_name = 'conversation_messages')"
         )
     )
     return {str(row[0]) for row in result}
@@ -277,14 +279,19 @@ async def _seed_practice_fixture(
 
 class _GeneratedQuestionProvider:
     async def complete_json(self, request: JsonCompletionPrompt) -> StructuredJsonDraft:
-        if request.response_schema_version == "practice-tutor-1.0":
+        if request.response_schema_version == "practice-tutor-1.1":
             mode = request.payload["mode"]
+            intent = request.payload["current_intent"]
             return StructuredJsonDraft(
                 payload={
                     "answer_markdown": (
-                        "先比较题干强调的是资源归属还是执行调度。"
-                        if mode == "hint"
-                        else "进程负责资源分配, 这与课程定义一致。"
+                        "可以类比公司分配预算和员工执行任务。"
+                        if intent == "example"
+                        else (
+                            "先比较题干强调的是资源归属还是执行调度。"
+                            if mode == "hint"
+                            else "进程负责资源分配, 这与课程定义一致。"
+                        )
                     ),
                     "evidence_ids": ["E1"],
                 },
@@ -373,6 +380,7 @@ class _RetryOnceQuestionProvider:
 async def test_learning_migration_creates_scoped_tables_and_constraints(
     test_database_url: str,
 ) -> None:
+    await upgrade_database(test_database_url)
     from sqlalchemy.ext.asyncio import create_async_engine
 
     engine = create_async_engine(test_database_url)
@@ -392,6 +400,7 @@ async def test_learning_migration_creates_scoped_tables_and_constraints(
                 "practice_sessions",
                 "practice_session_questions",
                 "practice_attempts",
+                "conversation_messages",
             } <= tables
             unit_constraints = await _constraint_names(connection, "learning_units")
             assert {
@@ -506,7 +515,7 @@ async def test_learning_batch_flushes_generated_question_before_item_reference(
 @pytest.mark.integration
 @pytest.mark.parametrize(
     ("failure_mode", "expected_review_calls"),
-    (("semantic", 4), ("provider_bad_response", 3)),
+    (("semantic", 6), ("provider_bad_response", 5)),
 )
 async def test_learning_batch_retries_invalid_model_output_until_all_items_succeed(
     test_database_url: str,
@@ -1019,12 +1028,28 @@ async def test_learning_attempt_idempotency_and_stale_session_evidence(
     ) as client:
         hint = await client.post(
             f"/api/v1/practice-sessions/{session_id}/questions/{question_id}/tutor",
-            json={"message": "给我一点提示", "history": []},
+            json={"message": "以后请先解释概念, 给我一点提示", "turn_id": "turn-hint"},
         )
+        example = await client.post(
+            f"/api/v1/practice-sessions/{session_id}/questions/{question_id}/tutor",
+            json={"message": "你能给个例子吗?", "turn_id": "turn-example"},
+        )
+        example_replay = await client.post(
+            f"/api/v1/practice-sessions/{session_id}/questions/{question_id}/tutor",
+            json={"message": "你能给个例子吗?", "turn_id": "turn-example"},
+        )
+        example_conflict = await client.post(
+            f"/api/v1/practice-sessions/{session_id}/questions/{question_id}/tutor",
+            json={"message": "换一个问题", "turn_id": "turn-example"},
+        )
+        restored_hint_conversation = await client.get(
+            f"/api/v1/practice-sessions/{session_id}/questions/{question_id}/tutor"
+        )
+        tutor_memories = await client.get(f"/api/v1/courses/{course.id}/learner-memories")
         first = await client.post(
             f"/api/v1/practice-sessions/{session_id}/attempts",
             headers={"Idempotency-Key": "attempt-1"},
-            json={"question_id": question_id, "answer": "a", "viewed_hint": True},
+            json={"question_id": question_id, "answer": "a", "viewed_hint": False},
         )
         replay = await client.post(
             f"/api/v1/practice-sessions/{session_id}/attempts",
@@ -1034,7 +1059,10 @@ async def test_learning_attempt_idempotency_and_stale_session_evidence(
         session = await client.get(f"/api/v1/practice-sessions/{session_id}")
         review = await client.post(
             f"/api/v1/practice-sessions/{session_id}/questions/{question_id}/tutor",
-            json={"message": "为什么这个答案正确?", "history": []},
+            json={"message": "为什么这个答案正确?", "turn_id": "turn-review"},
+        )
+        restored_review_conversation = await client.get(
+            f"/api/v1/practice-sessions/{session_id}/questions/{question_id}/tutor"
         )
         async with database.session(principal) as db_session:
             question = await db_session.scalar(
@@ -1062,6 +1090,26 @@ async def test_learning_attempt_idempotency_and_stale_session_evidence(
     assert hint.status_code == 200
     assert hint.json()["mode"] == "hint"
     assert hint.json()["evidence_refs"][0]["document_name"] == "learning.pdf"
+    assert hint.json()["intent"] == "hint"
+    assert example.status_code == 200
+    assert example.json()["intent"] == "example"
+    assert "公司分配预算" in example.json()["answer_markdown"]
+    assert example_replay.status_code == 200
+    assert example_replay.json()["message_id"] == example.json()["message_id"]
+    assert example_conflict.status_code == 409
+    assert example_conflict.json()["code"] == "IDEMPOTENCY_CONFLICT"
+    assert restored_hint_conversation.status_code == 200
+    assert [message["role"] for message in restored_hint_conversation.json()["messages"]] == [
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+    ]
+    assert restored_hint_conversation.json()["messages"][-1]["intent"] == "example"
+    assert tutor_memories.status_code == 200
+    assert [memory["content"] for memory in tutor_memories.json()] == [
+        "以后请先解释概念, 给我一点提示"
+    ]
     assert first.status_code == 201
     assert replay.status_code == 409
     assert replay.json()["code"] == "STATE_CONFLICT"
@@ -1073,6 +1121,19 @@ async def test_learning_attempt_idempotency_and_stale_session_evidence(
     assert session.json()["questions"][0]["viewed_hint"] is True
     assert review.status_code == 200
     assert review.json()["mode"] == "review"
+    assert restored_review_conversation.status_code == 200
+    assert len(restored_review_conversation.json()["messages"]) == 6
+    async with database.session(principal) as db_session:
+        conversations = list(
+            await db_session.scalars(
+                select(ConversationModel).where(
+                    ConversationModel.conversation_type == "practice_tutor"
+                )
+            )
+        )
+        messages = list(await db_session.scalars(select(ConversationMessageModel)))
+    assert len(conversations) == 1
+    assert len(messages) == 6
     assert invalid_session.status_code == 200
     assert invalid_session.json()["questions"][0]["status"] == "invalid"
     assert invalid_session.json()["questions"][0]["evidence_refs"] == []

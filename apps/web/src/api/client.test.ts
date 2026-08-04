@@ -199,6 +199,67 @@ describe('StudyApiClient', () => {
     )
   })
 
+  it('uses course-scoped learner memory routes and handles deletion without a body', async () => {
+    const memory = {
+      id: 'memory-1',
+      course_id: 'course-1',
+      memory_type: 'preference',
+      content: '我喜欢先看例子',
+      confidence: 1,
+      source_kind: 'manual',
+      last_confirmed_at: '2026-08-04T10:00:00Z',
+      created_at: '2026-08-04T10:00:00Z',
+      updated_at: '2026-08-04T10:00:00Z',
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify([memory]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(memory), {
+          status: 201,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(memory), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const client = new StudyApiClient('/api/v1')
+
+    await expect(client.listLearnerMemories('course/1')).resolves.toEqual([memory])
+    await client.createLearnerMemory('course/1', {
+      memory_type: 'preference',
+      content: '我喜欢先看例子',
+    })
+    await client.updateLearnerMemory('memory/1', {
+      memory_type: 'preference',
+      content: '我喜欢先看类比',
+    })
+    await expect(client.deleteLearnerMemory('memory/1')).resolves.toBeUndefined()
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      '/api/v1/courses/course%2F1/learner-memories',
+      '/api/v1/courses/course%2F1/learner-memories',
+      '/api/v1/learner-memories/memory%2F1',
+      '/api/v1/learner-memories/memory%2F1',
+    ])
+    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual([
+      undefined,
+      'POST',
+      'PUT',
+      'DELETE',
+    ])
+  })
+
   it('uses the generated note and knowledge-graph source preview routes', async () => {
     const preview = sourcePreview()
     const fetchMock = vi.fn().mockImplementation(

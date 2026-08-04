@@ -135,12 +135,14 @@ async def test_conversation_context_remains_separate_from_current_evidence() -> 
         candidates=(_candidate(),),
         sources_are_current=_current,
         conversation_context=context,
+        standalone_question="进程和线程有什么区别?",
     )
 
     assert result.answer is not None
     assert result.answer.status is AnswerStatus.ANSWERED
     assert len(provider.requests) == 1
     assert provider.requests[0].conversation_context == context
+    assert provider.requests[0].standalone_question == "进程和线程有什么区别?"
     assert [passage.id for passage in provider.requests[0].passages] == ["evidence-1"]
 
 

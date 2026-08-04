@@ -14,7 +14,11 @@ from study_agent.modules.answering.evidence_gate import EvidenceGate
 from study_agent.modules.answering.prompts import build_evidence_prompt
 from study_agent.modules.answering.types import AnswerExecution, AuthorizedEvidence
 from study_agent.providers.errors import ProviderError, ProviderErrorCode
-from study_agent.providers.protocols import ChatProvider, ConversationContextTurn
+from study_agent.providers.protocols import (
+    ChatProvider,
+    ConversationContextTurn,
+    LearnerMemoryContext,
+)
 from study_contracts import AnswerStatus, Refusal, StructuredAnswer
 
 type ProviderFactory = Callable[[], ChatProvider]
@@ -59,6 +63,9 @@ class TrustedAnswerService:
         candidates: tuple[AuthorizedEvidence, ...],
         sources_are_current: SourceStateCheck,
         conversation_context: tuple[ConversationContextTurn, ...] = (),
+        conversation_summary: str | None = None,
+        learner_memories: tuple[LearnerMemoryContext, ...] = (),
+        standalone_question: str | None = None,
     ) -> AnswerExecution:
         decision = self._evidence_gate.evaluate(
             active_index=active_index,
@@ -76,6 +83,9 @@ class TrustedAnswerService:
             question,
             decision.candidates,
             conversation_context=conversation_context,
+            conversation_summary=conversation_summary,
+            learner_memories=learner_memories,
+            standalone_question=standalone_question,
         )
         last_draft_model: str | None = None
         for _attempt in range(self._max_validation_attempts):

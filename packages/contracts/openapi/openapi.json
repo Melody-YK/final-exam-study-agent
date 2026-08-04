@@ -2749,6 +2749,110 @@
         "title": "LabUsageResponse",
         "type": "object"
       },
+      "LearnerMemoryCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Content",
+            "type": "string"
+          },
+          "memory_type": {
+            "$ref": "#/components/schemas/LearnerMemoryType"
+          }
+        },
+        "required": [
+          "memory_type",
+          "content"
+        ],
+        "title": "LearnerMemoryCreate",
+        "type": "object"
+      },
+      "LearnerMemoryPatch": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Content",
+            "type": "string"
+          },
+          "memory_type": {
+            "$ref": "#/components/schemas/LearnerMemoryType"
+          }
+        },
+        "required": [
+          "memory_type",
+          "content"
+        ],
+        "title": "LearnerMemoryPatch",
+        "type": "object"
+      },
+      "LearnerMemoryResponse": {
+        "properties": {
+          "confidence": {
+            "title": "Confidence",
+            "type": "number"
+          },
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "course_id": {
+            "title": "Course Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "last_confirmed_at": {
+            "format": "date-time",
+            "title": "Last Confirmed At",
+            "type": "string"
+          },
+          "memory_type": {
+            "$ref": "#/components/schemas/LearnerMemoryType"
+          },
+          "source_kind": {
+            "title": "Source Kind",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "course_id",
+          "memory_type",
+          "content",
+          "confidence",
+          "source_kind",
+          "last_confirmed_at",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "LearnerMemoryResponse",
+        "type": "object"
+      },
+      "LearnerMemoryType": {
+        "enum": [
+          "preference",
+          "confirmed_misconception",
+          "learning_goal"
+        ],
+        "title": "LearnerMemoryType",
+        "type": "string"
+      },
       "LearningSourceStatus": {
         "enum": [
           "valid",
@@ -4573,6 +4677,126 @@
         "title": "PracticeSessionStatus",
         "type": "string"
       },
+      "PracticeTutorConversation": {
+        "additionalProperties": false,
+        "properties": {
+          "conversation_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Id"
+          },
+          "has_earlier_messages": {
+            "default": false,
+            "title": "Has Earlier Messages",
+            "type": "boolean"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/PracticeTutorMessage"
+            },
+            "maxItems": 200,
+            "title": "Messages",
+            "type": "array"
+          },
+          "question_id": {
+            "minLength": 1,
+            "title": "Question Id",
+            "type": "string"
+          },
+          "session_id": {
+            "minLength": 1,
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "question_id",
+          "messages"
+        ],
+        "title": "PracticeTutorConversation",
+        "type": "object"
+      },
+      "PracticeTutorIntent": {
+        "enum": [
+          "hint",
+          "clarify",
+          "example",
+          "answer_check",
+          "solution",
+          "reflection",
+          "source"
+        ],
+        "title": "PracticeTutorIntent",
+        "type": "string"
+      },
+      "PracticeTutorMessage": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Content",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "evidence_refs": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceReference"
+            },
+            "maxItems": 8,
+            "title": "Evidence Refs",
+            "type": "array"
+          },
+          "id": {
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "intent": {
+            "$ref": "#/components/schemas/PracticeTutorIntent"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PracticeTutorMode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "role": {
+            "enum": [
+              "user",
+              "assistant"
+            ],
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "role",
+          "content",
+          "intent",
+          "evidence_refs",
+          "created_at"
+        ],
+        "title": "PracticeTutorMessage",
+        "type": "object"
+      },
       "PracticeTutorMode": {
         "enum": [
           "hint",
@@ -4584,23 +4808,22 @@
       "PracticeTutorRequest": {
         "additionalProperties": false,
         "properties": {
-          "history": {
-            "items": {
-              "$ref": "#/components/schemas/PracticeTutorTurn"
-            },
-            "maxItems": 8,
-            "title": "History",
-            "type": "array"
-          },
           "message": {
             "maxLength": 1000,
             "minLength": 1,
             "title": "Message",
             "type": "string"
+          },
+          "turn_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Turn Id",
+            "type": "string"
           }
         },
         "required": [
-          "message"
+          "message",
+          "turn_id"
         ],
         "title": "PracticeTutorRequest",
         "type": "object"
@@ -4614,6 +4837,16 @@
             "title": "Answer Markdown",
             "type": "string"
           },
+          "conversation_id": {
+            "minLength": 1,
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
           "evidence_refs": {
             "items": {
               "$ref": "#/components/schemas/EvidenceReference"
@@ -4623,41 +4856,28 @@
             "title": "Evidence Refs",
             "type": "array"
           },
+          "intent": {
+            "$ref": "#/components/schemas/PracticeTutorIntent"
+          },
+          "message_id": {
+            "minLength": 1,
+            "title": "Message Id",
+            "type": "string"
+          },
           "mode": {
             "$ref": "#/components/schemas/PracticeTutorMode"
           }
         },
         "required": [
+          "conversation_id",
+          "message_id",
+          "intent",
           "mode",
           "answer_markdown",
-          "evidence_refs"
+          "evidence_refs",
+          "created_at"
         ],
         "title": "PracticeTutorResponse",
-        "type": "object"
-      },
-      "PracticeTutorTurn": {
-        "additionalProperties": false,
-        "properties": {
-          "content": {
-            "maxLength": 2000,
-            "minLength": 1,
-            "title": "Content",
-            "type": "string"
-          },
-          "role": {
-            "enum": [
-              "user",
-              "assistant"
-            ],
-            "title": "Role",
-            "type": "string"
-          }
-        },
-        "required": [
-          "role",
-          "content"
-        ],
-        "title": "PracticeTutorTurn",
         "type": "object"
       },
       "ProblemDetails": {
@@ -4909,9 +5129,49 @@
             "title": "Id",
             "type": "string"
           },
+          "query_intent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Query Intent"
+          },
           "question": {
             "title": "Question",
             "type": "string"
+          },
+          "retrieval_diagnostic": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retrieval Diagnostic"
+          },
+          "retrieval_rounds": {
+            "items": {
+              "$ref": "#/components/schemas/RetrievalRoundResponse"
+            },
+            "title": "Retrieval Rounds",
+            "type": "array"
+          },
+          "standalone_question": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Standalone Question"
           },
           "status": {
             "title": "Status",
@@ -4937,6 +5197,10 @@
           "answer",
           "failure_code",
           "usage",
+          "query_intent",
+          "standalone_question",
+          "retrieval_rounds",
+          "retrieval_diagnostic",
           "trace",
           "created_at",
           "completed_at"
@@ -5089,6 +5353,58 @@
           "display_name"
         ],
         "title": "RegisterRequest",
+        "type": "object"
+      },
+      "RetrievalRoundResponse": {
+        "properties": {
+          "active_index": {
+            "title": "Active Index",
+            "type": "boolean"
+          },
+          "active_lexical_index_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Lexical Index Id"
+          },
+          "candidate_count": {
+            "title": "Candidate Count",
+            "type": "integer"
+          },
+          "eligible_count": {
+            "title": "Eligible Count",
+            "type": "integer"
+          },
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "retrieval_trace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retrieval Trace Id"
+          }
+        },
+        "required": [
+          "query",
+          "active_index",
+          "candidate_count",
+          "eligible_count",
+          "retrieval_trace_id",
+          "active_lexical_index_id"
+        ],
+        "title": "RetrievalRoundResponse",
         "type": "object"
       },
       "ReviewQueueItem": {
@@ -7011,6 +7327,102 @@
         ]
       }
     },
+    "/api/v1/courses/{course_id}/learner-memories": {
+      "get": {
+        "operationId": "list_learner_memories_api_v1_courses__course_id__learner_memories_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "course_id",
+            "required": true,
+            "schema": {
+              "title": "Course Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LearnerMemoryResponse"
+                  },
+                  "title": "Response List Learner Memories Api V1 Courses  Course Id  Learner Memories Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Learner Memories",
+        "tags": [
+          "learner-memories"
+        ]
+      },
+      "post": {
+        "operationId": "create_learner_memory_api_v1_courses__course_id__learner_memories_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "course_id",
+            "required": true,
+            "schema": {
+              "title": "Course Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LearnerMemoryCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LearnerMemoryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Learner Memory",
+        "tags": [
+          "learner-memories"
+        ]
+      }
+    },
     "/api/v1/courses/{course_id}/learning-summary": {
       "get": {
         "operationId": "get_learning_summary_api_v1_courses__course_id__learning_summary_get",
@@ -7906,6 +8318,91 @@
         ]
       }
     },
+    "/api/v1/learner-memories/{memory_id}": {
+      "delete": {
+        "operationId": "delete_learner_memory_api_v1_learner_memories__memory_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "memory_id",
+            "required": true,
+            "schema": {
+              "title": "Memory Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Learner Memory",
+        "tags": [
+          "learner-memories"
+        ]
+      },
+      "put": {
+        "operationId": "update_learner_memory_api_v1_learner_memories__memory_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "memory_id",
+            "required": true,
+            "schema": {
+              "title": "Memory Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LearnerMemoryPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LearnerMemoryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Learner Memory",
+        "tags": [
+          "learner-memories"
+        ]
+      }
+    },
     "/api/v1/note-batches/{batch_id}": {
       "get": {
         "operationId": "get_note_batch_api_v1_note_batches__batch_id__get",
@@ -8647,6 +9144,65 @@
       }
     },
     "/api/v1/practice-sessions/{session_id}/questions/{question_id}/tutor": {
+      "get": {
+        "operationId": "get_practice_tutor_conversation_api_v1_practice_sessions__session_id__questions__question_id__tutor_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "question_id",
+            "required": true,
+            "schema": {
+              "title": "Question Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PracticeTutorConversation"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "题目来源状态冲突"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Practice Tutor Conversation",
+        "tags": [
+          "learning-loop"
+        ]
+      },
       "post": {
         "operationId": "ask_practice_tutor_api_v1_practice_sessions__session_id__questions__question_id__tutor_post",
         "parameters": [

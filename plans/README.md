@@ -19,6 +19,7 @@ stage plan or a production roadmap.
 | [007](007-source-preview-across-learning-surfaces.md) | Reuse original-page preview for notes and concept occurrences | P1 | L | 005, 006 | TODO after dependencies |
 | [008](008-invitation-account-capacity.md) | Enforce an explicit invitation account capacity | P1 | M | None | TODO after P0 |
 | [009](009-learning-loop.md) | 将可信课程资料闭环为主动回忆与复习队列 | P0 | L | 004, 005, 006 | DONE: baseline verified on 2026-08-02; title cleanup, draft restore, and learning-unit regeneration verified on 2026-08-03 |
+| [010](010-conversation-core.md) | 将课程问答与单题问 AI 建成共享对话与教学内核 | P0 | XL | 009 | DONE: phases A-D and desktop/mobile acceptance verified on 2026-08-04 |
 
 Status values: TODO | IN PROGRESS | REVISE (with reason) | DONE | BLOCKED (with reason) |
 REJECTED (with rationale)

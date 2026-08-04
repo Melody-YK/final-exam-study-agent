@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ReactNode } from 'react'
 import { MemoryRouter, useLocation } from 'react-router'
@@ -8,17 +8,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, studyApi } from '../../api/client'
 import type {
   ConversationRecord,
+  LearnerMemoryRecord,
   QuerySnapshot,
   RuntimeCapabilities,
   StructuredAnswer,
 } from '../../api/types'
 import { WorkspaceContext } from '../../app/WorkspaceContext'
 import { answeredSnapshot, citationSource, problem } from '../../test/fixtures'
-import {
-  availableCapabilities,
-  createTestQueryClient,
-  renderInWorkspace,
-} from '../../test/render'
+import { availableCapabilities, createTestQueryClient, renderInWorkspace } from '../../test/render'
 import { QAPage } from './QAPage'
 import { queryRefetchInterval } from './queryPolling'
 
@@ -109,7 +106,11 @@ function renderWithRouteState(state: unknown) {
           <WorkspaceContext.Provider
             value={{
               courseId: 'course-1',
-              course: { id: 'course-1', title: '操作系统', lifecycle: 'active' },
+              course: {
+                id: 'course-1',
+                title: '操作系统',
+                lifecycle: 'active',
+              },
               capabilities: availableCapabilities,
               capabilitiesLoading: false,
               capabilitiesError: false,
@@ -231,10 +232,7 @@ describe('QAPage', () => {
     ['array state', [{ suggestedQuestion: '不应采用', startNewConversation: true }]],
     ['missing new-conversation flag', { suggestedQuestion: '不应采用' }],
     ['blank suggestion', { suggestedQuestion: '   ', startNewConversation: true }],
-    [
-      'oversized suggestion',
-      { suggestedQuestion: '问'.repeat(2001), startNewConversation: true },
-    ],
+    ['oversized suggestion', { suggestedQuestion: '问'.repeat(2001), startNewConversation: true }],
   ])('ignores malformed concept draft route state: %s', async (_label, state) => {
     const createQuery = vi.spyOn(studyApi, 'createQuery').mockResolvedValue(answeredSnapshot())
 
@@ -313,7 +311,12 @@ describe('QAPage', () => {
     const image = screen.getByRole('img', { name: /chapter-1\.png 第 3 页/ })
     fireEvent.load(image)
     const highlight = container.querySelector('.bbox-highlight')
-    expect(highlight).toHaveStyle({ left: '10%', top: '20%', width: '40%', height: '8%' })
+    expect(highlight).toHaveStyle({
+      left: '10%',
+      top: '20%',
+      width: '40%',
+      height: '8%',
+    })
     expect(studyApi.getCitation).toHaveBeenCalledWith('query-1', 'citation-1')
   })
 
@@ -337,7 +340,9 @@ describe('QAPage', () => {
 
     await submitQuestion()
 
-    const citationButton = await screen.findByRole('button', { name: /outline\.md/ })
+    const citationButton = await screen.findByRole('button', {
+      name: /outline\.md/,
+    })
     expect(citationButton).toHaveTextContent('章节 2')
     expect(citationButton).not.toHaveTextContent('页 2')
   })
@@ -370,10 +375,7 @@ describe('QAPage', () => {
 
     expect(await screen.findByText('旧回答')).toBeInTheDocument()
     expect(screen.getByText('最新回答')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /历史问答/ })).toHaveAttribute(
-      'aria-current',
-      'true',
-    )
+    expect(screen.getByRole('button', { name: /历史问答/ })).toHaveAttribute('aria-current', 'true')
     const questions = firstRender.container.querySelectorAll('.question-entry p')
     expect(questions[0]).toHaveTextContent('旧问题')
     expect(questions[1]).toHaveTextContent('最新问题')
@@ -423,7 +425,13 @@ describe('QAPage', () => {
     )
     expect(
       queryClient.getQueryData<QuerySnapshot[]>(['conversation-queries', migrated.id]),
-    ).toEqual([expect.objectContaining({ id: cachedAnswer.id, status: 'invalidated', answer: null })])
+    ).toEqual([
+      expect.objectContaining({
+        id: cachedAnswer.id,
+        status: 'invalidated',
+        answer: null,
+      }),
+    ])
   })
 
   it('switches between conversations and loads each available thread', async () => {
@@ -449,10 +457,7 @@ describe('QAPage', () => {
       '进程是程序的一次执行。',
       '2026-07-19T04:00:00Z',
     )
-    vi.mocked(studyApi.listConversations).mockResolvedValue([
-      olderConversation,
-      latestConversation,
-    ])
+    vi.mocked(studyApi.listConversations).mockResolvedValue([olderConversation, latestConversation])
     vi.mocked(studyApi.listConversationQueries).mockImplementation(async (id) =>
       id === olderConversation.id ? [older] : [latest],
     )
@@ -470,7 +475,9 @@ describe('QAPage', () => {
   })
 
   it('waits for selected conversation history before enabling submission', async () => {
-    const existing = conversation('conversation-existing', '已有会话', { turn_count: 1 })
+    const existing = conversation('conversation-existing', '已有会话', {
+      turn_count: 1,
+    })
     const history = deferred<QuerySnapshot[]>()
     const created = answeredSnapshot({
       conversation_id: existing.id,
@@ -510,7 +517,9 @@ describe('QAPage', () => {
     const createQuery = vi.spyOn(studyApi, 'createQuery').mockReturnValue(pendingQuery.promise)
     const { user } = renderInWorkspace(<QAPage />)
 
-    const latestButton = await screen.findByRole('button', { name: /进程复习/ })
+    const latestButton = await screen.findByRole('button', {
+      name: /进程复习/,
+    })
     const olderButton = screen.getByRole('button', { name: /同步机制复习/ })
     const newConversation = screen.getByRole('button', { name: '新建会话' })
     await user.type(screen.getByLabelText('课程问题'), '继续解释')
@@ -526,9 +535,7 @@ describe('QAPage', () => {
     expect(createQuery).toHaveBeenCalledWith('course-1', '继续解释', latest.id)
 
     await act(async () =>
-      pendingQuery.resolve(
-        answeredSnapshot({ conversation_id: latest.id, question: '继续解释' }),
-      ),
+      pendingQuery.resolve(answeredSnapshot({ conversation_id: latest.id, question: '继续解释' })),
     )
     await waitFor(() => expect(newConversation).toBeEnabled())
     expect(latestButton).toBeEnabled()
@@ -573,7 +580,9 @@ describe('QAPage', () => {
   })
 
   it('lets the query API create the first conversation atomically and caches the returned thread', async () => {
-    const snapshot = answeredSnapshot({ conversation_id: 'conversation-from-query' })
+    const snapshot = answeredSnapshot({
+      conversation_id: 'conversation-from-query',
+    })
     vi.spyOn(studyApi, 'createQuery').mockResolvedValue(snapshot)
     const { queryClient } = renderInWorkspace(<QAPage />)
 
@@ -598,6 +607,76 @@ describe('QAPage', () => {
     ])
   })
 
+  it('lets the learner inspect, add, correct, and delete course memories', async () => {
+    const memory: LearnerMemoryRecord = {
+      id: 'memory-1',
+      course_id: 'course-1',
+      memory_type: 'preference',
+      content: '我喜欢先看例子',
+      confidence: 1,
+      source_kind: 'explicit_user',
+      last_confirmed_at: '2026-08-04T10:00:00Z',
+      created_at: '2026-08-04T10:00:00Z',
+      updated_at: '2026-08-04T10:00:00Z',
+    }
+    const created: LearnerMemoryRecord = {
+      ...memory,
+      id: 'memory-2',
+      memory_type: 'learning_goal',
+      content: '我的目标是掌握进程调度',
+      source_kind: 'manual',
+      updated_at: '2026-08-04T10:01:00Z',
+    }
+    vi.spyOn(studyApi, 'listLearnerMemories').mockResolvedValue([memory])
+    const createMemory = vi.spyOn(studyApi, 'createLearnerMemory').mockResolvedValue(created)
+    const updateMemory = vi.spyOn(studyApi, 'updateLearnerMemory').mockResolvedValue({
+      ...memory,
+      content: '我更喜欢先看类比',
+      source_kind: 'manual',
+      updated_at: '2026-08-04T10:02:00Z',
+    })
+    const deleteMemory = vi.spyOn(studyApi, 'deleteLearnerMemory').mockResolvedValue()
+    const { user } = renderInWorkspace(<QAPage />)
+
+    await user.click(await screen.findByRole('button', { name: '学习记忆' }))
+    const dialog = await screen.findByRole('dialog', { name: '学习记忆' })
+    expect(within(dialog).getByDisplayValue('我喜欢先看例子')).toBeVisible()
+
+    const createType = within(dialog).getAllByLabelText('类型')[0]!
+    const createContent = within(dialog).getAllByLabelText('内容')[0]!
+    await user.selectOptions(createType, 'learning_goal')
+    await user.type(createContent, '我的目标是掌握进程调度')
+    await user.click(within(dialog).getByRole('button', { name: '添加' }))
+    await waitFor(() =>
+      expect(createMemory).toHaveBeenCalledWith('course-1', {
+        memory_type: 'learning_goal',
+        content: '我的目标是掌握进程调度',
+      }),
+    )
+    expect(await within(dialog).findByDisplayValue('我的目标是掌握进程调度')).toBeVisible()
+
+    const existingContent = within(dialog).getByDisplayValue('我喜欢先看例子')
+    const existingRow = existingContent.closest('article')
+    expect(existingRow).not.toBeNull()
+    await user.clear(existingContent)
+    await user.type(existingContent, '我更喜欢先看类比')
+    await user.click(within(existingRow!).getByRole('button', { name: '保存记忆' }))
+    await waitFor(() =>
+      expect(updateMemory).toHaveBeenCalledWith('memory-1', {
+        memory_type: 'preference',
+        content: '我更喜欢先看类比',
+      }),
+    )
+
+    const updatedContent = await within(dialog).findByDisplayValue('我更喜欢先看类比')
+    const updatedRow = updatedContent.closest('article')
+    expect(updatedRow).not.toBeNull()
+    await user.click(within(updatedRow!).getByRole('button', { name: '删除记忆' }))
+    await user.click(within(updatedRow!).getByRole('button', { name: '确认删除' }))
+    await waitFor(() => expect(deleteMemory).toHaveBeenCalledWith('memory-1'))
+    expect(within(dialog).queryByDisplayValue('我更喜欢先看类比')).not.toBeInTheDocument()
+  })
+
   it('disables question submission when conversation state failed to load', async () => {
     vi.mocked(studyApi.listConversations).mockRejectedValue(
       new ApiError(problem({ status: 503, code: 'UNAVAILABLE', title: '会话加载失败' })),
@@ -620,7 +699,10 @@ describe('QAPage', () => {
       answer_markdown: '',
       claims: [],
       citations: [],
-      refusal: { code: 'INSUFFICIENT_EVIDENCE', message: '课程资料未覆盖该问题。' },
+      refusal: {
+        code: 'INSUFFICIENT_EVIDENCE',
+        message: '课程资料未覆盖该问题。',
+      },
     }
     vi.spyOn(studyApi, 'createQuery').mockResolvedValue(
       answeredSnapshot({ status: 'abstained', answer }),

@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 from study_agent.modules.answering.types import AuthorizedEvidence
-from study_agent.providers.protocols import ConversationContextTurn, EvidencePrompt, Passage
+from study_agent.providers.protocols import (
+    ConversationContextTurn,
+    EvidencePrompt,
+    LearnerMemoryContext,
+    Passage,
+)
 
 
 def build_evidence_prompt(
@@ -11,6 +16,9 @@ def build_evidence_prompt(
     candidates: tuple[AuthorizedEvidence, ...],
     *,
     conversation_context: tuple[ConversationContextTurn, ...] = (),
+    conversation_summary: str | None = None,
+    learner_memories: tuple[LearnerMemoryContext, ...] = (),
+    standalone_question: str | None = None,
 ) -> EvidencePrompt:
     normalized_question = question.strip()
     if not normalized_question:
@@ -43,4 +51,12 @@ def build_evidence_prompt(
         query=normalized_question,
         passages=passages,
         conversation_context=conversation_context,
+        conversation_summary=conversation_summary,
+        learner_memories=learner_memories,
+        standalone_question=(
+            standalone_question.strip()
+            if standalone_question is not None
+            and standalone_question.strip() != normalized_question
+            else None
+        ),
     )

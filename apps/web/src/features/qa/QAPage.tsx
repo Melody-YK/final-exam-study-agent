@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertCircle,
   ArrowUp,
+  Brain,
   Check,
   Circle,
   ExternalLink,
@@ -28,11 +29,8 @@ import { PageHeader } from '../../components/ui/PageHeader'
 import { StatusBadge } from '../../components/ui/StatusBadge'
 import { SourceViewer } from '../source-viewer/SourceViewer'
 import { formatSourceLocator } from '../source-viewer/sourceLocator'
-import {
-  isTerminal,
-  queryRefetchInterval,
-  type QueryStreamConnection,
-} from './queryPolling'
+import { LearnerMemoryModal } from './LearnerMemoryModal'
+import { isTerminal, queryRefetchInterval, type QueryStreamConnection } from './queryPolling'
 
 const stages = [
   { key: 'retrieval', label: '检索课程资料' },
@@ -126,6 +124,13 @@ function questionTitle(question: string): string {
   return normalized.length <= 60 ? normalized : `${normalized.slice(0, 59).trimEnd()}…`
 }
 
+function refusalLabel(code: string | undefined): string {
+  if (code === 'INDEX_UNAVAILABLE') return '索引未就绪'
+  if (code === 'NO_CANDIDATES') return '未找到相关内容'
+  if (code === 'LOW_RELEVANCE') return '相关度不足'
+  return '依据不足'
+}
+
 function upsertConversation(
   conversations: ConversationRecord[] | undefined,
   conversation: ConversationRecord,
@@ -144,9 +149,8 @@ function QueryTurn({
   onOpenCitation: (queryId: string, citationId: string) => void
 }) {
   const queryClient = useQueryClient()
-  const [streamConnection, setStreamConnection] = useState<
-    Exclude<QueryStreamConnection, 'connecting'>
-  >('reconnecting')
+  const [streamConnection, setStreamConnection] =
+    useState<Exclude<QueryStreamConnection, 'connecting'>>('reconnecting')
   const query = useQuery({
     queryKey: ['query', initialSnapshot.id],
     queryFn: () => studyApi.getQuery(initialSnapshot.id),
@@ -154,8 +158,7 @@ function QueryTurn({
     initialData: initialSnapshot,
     refetchInterval: (current) => queryRefetchInterval(current.state.data, streamConnection),
   })
-  const snapshot =
-    initialSnapshot.status === 'invalidated' ? initialSnapshot : query.data
+  const snapshot = initialSnapshot.status === 'invalidated' ? initialSnapshot : query.data
   const streamActive = !isTerminal(snapshot)
 
   useEffect(() => {
@@ -202,7 +205,7 @@ function QueryTurn({
   const answer = snapshot.answer
   const stageIndex = activeStageIndex(snapshot)
   const snapshotFailure =
-    snapshot.status === 'failed' ? snapshot.failure_code ?? 'QUERY_FAILED' : null
+    snapshot.status === 'failed' ? (snapshot.failure_code ?? 'QUERY_FAILED') : null
   const snapshotProviderError = snapshotFailure?.startsWith('PROVIDER_') === true
 
   return (
@@ -262,7 +265,7 @@ function QueryTurn({
         <article className="abstained-entry">
           <ShieldCheck aria-hidden="true" size={20} />
           <div>
-            <StatusBadge tone="warning">依据不足</StatusBadge>
+            <StatusBadge tone="warning">{refusalLabel(answer.refusal?.code)}</StatusBadge>
             <p>
               {answer.refusal?.message === 'evidence is insufficient'
                 ? '当前课程资料没有足够依据回答该问题。'
@@ -304,9 +307,10 @@ export function QAPage() {
   const [conceptContext, setConceptContext] = useState<QueryConceptContext | undefined>(
     () => routeDraft?.conceptContext,
   )
-  const [requestedConversationId, setRequestedConversationId] = useState<
-    string | null | undefined
-  >(() => (routeDraft === null ? undefined : null))
+  const [requestedConversationId, setRequestedConversationId] = useState<string | null | undefined>(
+    () => (routeDraft === null ? undefined : null),
+  )
+  const [memoryOpen, setMemoryOpen] = useState(false)
   const [source, setSource] = useState<{
     courseId: string
     queryId: string
@@ -359,8 +363,7 @@ export function QAPage() {
     enabled: conversationId !== null,
     staleTime: 5_000,
   })
-  const conversationHistoryReady =
-    conversationId === null || conversationQueries.isSuccess
+  const conversationHistoryReady = conversationId === null || conversationQueries.isSuccess
   const turns = useMemo(
     () =>
       (conversationQueries.data ?? [])
@@ -372,9 +375,8 @@ export function QAPage() {
   const createConversation = useMutation({
     mutationFn: () => studyApi.createConversation(courseId),
     onSuccess: (conversation) => {
-      queryClient.setQueryData<ConversationRecord[]>(
-        ['conversations', courseId],
-        (current) => upsertConversation(current, conversation),
+      queryClient.setQueryData<ConversationRecord[]>(['conversations', courseId], (current) =>
+        upsertConversation(current, conversation),
       )
       queryClient.setQueryData(['conversation-queries', conversation.id], [])
       setRequestedConversationId(conversation.id)
@@ -383,13 +385,7 @@ export function QAPage() {
   })
 
   const createQuery = useMutation({
-    mutationFn: async ({
-      prompt,
-      context,
-    }: {
-      prompt: string
-      context?: QueryConceptContext
-    }) => {
+    mutationFn: async ({ prompt, context }: { prompt: string; context?: QueryConceptContext }) => {
       const targetConversation = selectedConversation
       const snapshot = context
         ? await studyApi.createQuery(courseId, prompt, targetConversation?.id, context)
@@ -420,9 +416,8 @@ export function QAPage() {
         latest_question: snapshot.question,
         updated_at: snapshot.created_at,
       }
-      queryClient.setQueryData<ConversationRecord[]>(
-        ['conversations', courseId],
-        (current) => upsertConversation(current, updatedConversation),
+      queryClient.setQueryData<ConversationRecord[]>(['conversations', courseId], (current) =>
+        upsertConversation(current, updatedConversation),
       )
       queryClient.setQueryData(['query', snapshot.id], snapshot)
       queryClient.setQueryData<QuerySnapshot[]>(
@@ -439,10 +434,20 @@ export function QAPage() {
   })
 
   const citationMutation = useMutation({
-    mutationFn: ({ queryId, citationId }: { courseId: string; queryId: string; citationId: string }) =>
-      studyApi.getCitation(queryId, citationId),
+    mutationFn: ({
+      queryId,
+      citationId,
+    }: {
+      courseId: string
+      queryId: string
+      citationId: string
+    }) => studyApi.getCitation(queryId, citationId),
     onSuccess: (value, variables) =>
-      setSource({ courseId: variables.courseId, queryId: variables.queryId, value }),
+      setSource({
+        courseId: variables.courseId,
+        queryId: variables.queryId,
+        value,
+      }),
   })
 
   const latestTurnId = turns.at(-1)?.id
@@ -494,6 +499,14 @@ export function QAPage() {
           <History aria-hidden="true" size={16} />
           <h2 id="qa-conversations-title">会话</h2>
           {conversations.isFetching ? <span>正在同步</span> : null}
+          <button
+            className="button button--small qa-conversations__memory"
+            onClick={() => setMemoryOpen(true)}
+            type="button"
+          >
+            <Brain aria-hidden="true" size={15} />
+            学习记忆
+          </button>
           <button
             className="button button--small qa-conversations__new"
             disabled={
@@ -639,6 +652,11 @@ export function QAPage() {
       <SourceViewer
         onClose={() => setSource(null)}
         source={source?.courseId === courseId ? source.value : null}
+      />
+      <LearnerMemoryModal
+        courseId={courseId}
+        onClose={() => setMemoryOpen(false)}
+        open={memoryOpen}
       />
     </div>
   )

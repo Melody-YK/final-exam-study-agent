@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import time
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import cast
 
 from sqlalchemy import and_, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from study_agent.config import Settings
 from study_agent.identity.principal import AuthenticationMethod, Principal
 from study_agent.infrastructure.db.models import (
+    ConversationMessageModel,
+    ConversationModel,
     CourseModel,
     DocumentModel,
     LearningMasteryModel,
@@ -31,6 +35,11 @@ from study_agent.infrastructure.db.models import (
 )
 from study_agent.infrastructure.db.models.core import new_id
 from study_agent.infrastructure.db.session import Database
+from study_agent.modules.answering.memory import (
+    relevant_memories_in_session,
+    upsert_explicit_memories,
+)
+from study_agent.modules.answering.telemetry import log_conversation_event
 from study_agent.modules.learning.concepts import (
     ChunkCandidate,
     build_learning_unit_candidates,
@@ -68,7 +77,7 @@ from study_agent.modules.learning.tutor import (
 )
 from study_agent.providers.errors import ProviderError, ProviderErrorCode
 from study_agent.providers.factory import ProviderRegistry
-from study_agent.providers.protocols import Clock
+from study_agent.providers.protocols import Clock, LearnerMemoryContext
 from study_contracts import (
     AttemptOutcome,
     EvidenceReference,
@@ -93,9 +102,13 @@ from study_contracts import (
     PracticeSessionRequest,
     PracticeSessionSnapshot,
     PracticeSessionStatus,
+    PracticeTutorConversation,
+    PracticeTutorIntent,
+    PracticeTutorMessage,
     PracticeTutorMode,
     PracticeTutorRequest,
     PracticeTutorResponse,
+    PracticeTutorTurn,
     QuestionOption,
     QuestionStatus,
     QuestionType,
@@ -219,6 +232,129 @@ def _generation_target_schedule(
             if position < len(indices):
                 schedule.append((group_index, indices[position]))
     return tuple(schedule)
+
+
+_TUTOR_HISTORY_MAX_ESTIMATED_TOKENS = 3_000
+_TUTOR_HISTORY_MAX_TURNS = 12
+_TUTOR_TRANSCRIPT_MAX_MESSAGES = 200
+_TUTOR_SUMMARY_MAX_CHARS = 2_000
+_TUTOR_SUMMARY_MAX_TOPICS = 24
+
+
+def _estimated_tokens(value: str) -> int:
+    return max(1, (len(value) + 3) // 4)
+
+
+def _tutor_history(messages: list[ConversationMessageModel]) -> list[PracticeTutorTurn]:
+    """Keep recent complete turns within a deterministic provider budget."""
+
+    completed: list[tuple[ConversationMessageModel, ConversationMessageModel]] = []
+    index = 0
+    while index + 1 < len(messages):
+        user_message = messages[index]
+        assistant_message = messages[index + 1]
+        if user_message.role == "user" and assistant_message.role == "assistant":
+            completed.append((user_message, assistant_message))
+            index += 2
+            continue
+        index += 1
+
+    selected: list[tuple[ConversationMessageModel, ConversationMessageModel]] = []
+    used_tokens = 0
+    for pair in reversed(completed[-_TUTOR_HISTORY_MAX_TURNS:]):
+        pair_tokens = sum(_estimated_tokens(message.content) for message in pair)
+        if used_tokens + pair_tokens > _TUTOR_HISTORY_MAX_ESTIMATED_TOKENS:
+            break
+        selected.append(pair)
+        used_tokens += pair_tokens
+
+    history: list[PracticeTutorTurn] = []
+    for user_message, assistant_message in reversed(selected):
+        history.extend(
+            (
+                PracticeTutorTurn(role="user", content=user_message.content),
+                PracticeTutorTurn(role="assistant", content=assistant_message.content),
+            )
+        )
+    return history
+
+
+def _tutor_conversation_snapshot(
+    session_model: PracticeSessionModel,
+    question_id: str,
+    conversation: ConversationModel | None,
+    messages: list[ConversationMessageModel],
+) -> PracticeTutorConversation:
+    visible_messages = messages[-_TUTOR_TRANSCRIPT_MAX_MESSAGES:]
+    return PracticeTutorConversation(
+        conversation_id=None if conversation is None else conversation.id,
+        session_id=session_model.id,
+        question_id=question_id,
+        messages=[
+            PracticeTutorMessage(
+                id=message.id,
+                role="user" if message.role == "user" else "assistant",
+                content=message.content,
+                intent=PracticeTutorIntent(message.intent or PracticeTutorIntent.HINT.value),
+                mode=None if message.mode is None else PracticeTutorMode(message.mode),
+                evidence_refs=[
+                    EvidenceReference.model_validate(reference)
+                    for reference in message.evidence_refs
+                ],
+                created_at=message.created_at,
+            )
+            for message in visible_messages
+        ],
+        has_earlier_messages=len(messages) > len(visible_messages),
+    )
+
+
+async def _refresh_tutor_summary(
+    session: AsyncSession,
+    conversation: ConversationModel,
+) -> None:
+    total = int(
+        await session.scalar(
+            select(func.count(ConversationMessageModel.id)).where(
+                ConversationMessageModel.conversation_id == conversation.id,
+                ConversationMessageModel.user_id == conversation.user_id,
+                ConversationMessageModel.course_id == conversation.course_id,
+                ConversationMessageModel.role == "user",
+            )
+        )
+        or 0
+    )
+    older_count = max(0, total - _TUTOR_HISTORY_MAX_TURNS)
+    if older_count == 0:
+        conversation.summary_text = None
+        conversation.summary_version = None
+        conversation.summary_turn_count = 0
+        return
+    rows = list(
+        await session.scalars(
+            select(ConversationMessageModel)
+            .where(
+                ConversationMessageModel.conversation_id == conversation.id,
+                ConversationMessageModel.user_id == conversation.user_id,
+                ConversationMessageModel.course_id == conversation.course_id,
+                ConversationMessageModel.role == "user",
+            )
+            .order_by(ConversationMessageModel.sequence.desc())
+            .offset(_TUTOR_HISTORY_MAX_TURNS)
+            .limit(_TUTOR_SUMMARY_MAX_TOPICS)
+        )
+    )
+    rows.reverse()
+    lines = [
+        f"- {message.intent or 'hint'}: {' '.join(message.content.split())[:180]}"
+        for message in rows
+    ]
+    prefix = f"较早的 {older_count} 轮单题辅导主题:"
+    while lines and len("\n".join((prefix, *lines))) > _TUTOR_SUMMARY_MAX_CHARS:
+        lines.pop(0)
+    conversation.summary_text = "\n".join((prefix, *lines))
+    conversation.summary_version = "tutor-topic-summary-1.0"
+    conversation.summary_turn_count = older_count
 
 
 class LearningLoopService(LearningBatchProcessor):
@@ -581,28 +717,15 @@ class LearningLoopService(LearningBatchProcessor):
         question_id: str,
         request: PracticeTutorRequest,
     ) -> PracticeTutorResponse:
+        """Answer from server-owned history and persist one complete tutoring turn."""
+
+        started_at = time.perf_counter()
+
         async with self._database.session(principal) as session:
             session_model = await self._session_for_principal(session, principal, session_id)
             if session_model is None:
                 raise LearningServiceError(LearningServiceErrorCode.NOT_FOUND, "练习会话不存在。")
-            question = await session.scalar(
-                select(PracticeQuestionModel)
-                .join(
-                    PracticeSessionQuestionModel,
-                    and_(
-                        PracticeSessionQuestionModel.question_id == PracticeQuestionModel.id,
-                        PracticeSessionQuestionModel.course_id == PracticeQuestionModel.course_id,
-                        PracticeSessionQuestionModel.user_id == PracticeQuestionModel.user_id,
-                    ),
-                )
-                .where(
-                    PracticeSessionQuestionModel.session_id == session_model.id,
-                    PracticeSessionQuestionModel.course_id == session_model.course_id,
-                    PracticeSessionQuestionModel.user_id == session_model.user_id,
-                    PracticeQuestionModel.id == question_id,
-                    PracticeQuestionModel.status == "ready",
-                )
-            )
+            question = await self._tutor_question(session, session_model, question_id)
             if question is None:
                 raise LearningServiceError(
                     LearningServiceErrorCode.STALE_QUESTION,
@@ -625,6 +748,40 @@ class LearningLoopService(LearningBatchProcessor):
                 )
             )
             mode = PracticeTutorMode.REVIEW if attempt is not None else PracticeTutorMode.HINT
+            conversation = await self._tutor_conversation(
+                session,
+                session_model,
+                question_id,
+                create=False,
+            )
+            if conversation is not None:
+                replay = await self._tutor_replay(
+                    session,
+                    conversation,
+                    session_model,
+                    request,
+                )
+                if replay is not None:
+                    return replay
+            history_models = await self._tutor_messages(
+                session,
+                None if conversation is None else conversation.id,
+                session_model,
+            )
+            conversation_summary = None if conversation is None else conversation.summary_text
+            memory_snapshots = await relevant_memories_in_session(
+                session,
+                user_id=session_model.user_id,
+                course_id=session_model.course_id,
+                question=f"{question.prompt} {request.message}",
+            )
+            learner_memories = tuple(
+                LearnerMemoryContext(
+                    memory_type=memory.memory_type.value,
+                    content=memory.content,
+                )
+                for memory in memory_snapshots
+            )
             options = [QuestionOption.model_validate(option) for option in question.options]
             tutor_evidence = tuple(
                 TutorEvidence(reference=reference, text=chunk.text)
@@ -641,7 +798,7 @@ class LearningLoopService(LearningBatchProcessor):
             submitted_answer = None if attempt is None else attempt.answer
 
         try:
-            return await self._tutor.answer(
+            tutor_reply = await self._tutor.answer(
                 mode=mode,
                 question_type=question_type,
                 prompt=prompt,
@@ -650,8 +807,10 @@ class LearningLoopService(LearningBatchProcessor):
                 explanation=explanation,
                 submitted_answer=submitted_answer,
                 message=request.message,
-                history=request.history,
+                history=_tutor_history(history_models),
                 evidence=tutor_evidence,
+                conversation_summary=conversation_summary,
+                learner_memories=learner_memories,
             )
         except ProviderError as exc:
             if exc.code is ProviderErrorCode.NOT_CONFIGURED:
@@ -676,6 +835,324 @@ class LearningLoopService(LearningBatchProcessor):
                 else "AI 学习助手未能生成符合要求的回答。"
             )
             raise LearningServiceError(code, detail) from exc
+
+        async with self._database.session(principal) as session:
+            session_model = await self._session_for_principal(
+                session, principal, session_id, lock=True
+            )
+            if session_model is None:
+                raise LearningServiceError(LearningServiceErrorCode.NOT_FOUND, "练习会话不存在。")
+            question = await self._tutor_question(session, session_model, question_id)
+            if question is None:
+                raise LearningServiceError(
+                    LearningServiceErrorCode.STALE_QUESTION,
+                    "题目不属于当前会话或来源已失效。",
+                )
+            current_evidence, _current_material = await self._question_evidence_material(
+                session, question
+            )
+            if not current_evidence:
+                raise LearningServiceError(
+                    LearningServiceErrorCode.STALE_QUESTION,
+                    "题目来源已失效。",
+                )
+            conversation = await self._tutor_conversation(
+                session,
+                session_model,
+                question_id,
+                create=True,
+            )
+            if conversation is None:
+                raise LearningServiceError(
+                    LearningServiceErrorCode.NOT_FOUND,
+                    "单题对话不存在。",
+                )
+            replay = await self._tutor_replay(
+                session,
+                conversation,
+                session_model,
+                request,
+            )
+            if replay is not None:
+                return replay
+            last_sequence = await session.scalar(
+                select(func.max(ConversationMessageModel.sequence)).where(
+                    ConversationMessageModel.conversation_id == conversation.id,
+                    ConversationMessageModel.course_id == session_model.course_id,
+                    ConversationMessageModel.user_id == session_model.user_id,
+                )
+            )
+            first_sequence = int(last_sequence or 0) + 1
+            user_message = ConversationMessageModel(
+                id=new_id(),
+                user_id=session_model.user_id,
+                course_id=session_model.course_id,
+                conversation_id=conversation.id,
+                sequence=first_sequence,
+                turn_id=request.turn_id,
+                role="user",
+                content=request.message,
+                intent=tutor_reply.intent.value,
+                evidence_refs=[],
+            )
+            assistant_message = ConversationMessageModel(
+                id=new_id(),
+                user_id=session_model.user_id,
+                course_id=session_model.course_id,
+                conversation_id=conversation.id,
+                sequence=first_sequence + 1,
+                turn_id=request.turn_id,
+                role="assistant",
+                content=tutor_reply.answer_markdown,
+                intent=tutor_reply.intent.value,
+                mode=tutor_reply.mode.value,
+                evidence_refs=[
+                    reference.model_dump(mode="json") for reference in tutor_reply.evidence_refs
+                ],
+            )
+            session.add_all((user_message, assistant_message))
+            now = _now(self._clock)
+            conversation.updated_at = now
+            await session.flush()
+            await upsert_explicit_memories(
+                session,
+                user_id=session_model.user_id,
+                course_id=session_model.course_id,
+                message=request.message,
+                now=now,
+                source_message_id=user_message.id,
+            )
+            await _refresh_tutor_summary(session, conversation)
+            await session.flush()
+            log_conversation_event(
+                "practice_tutor_completed",
+                course_id=session_model.course_id,
+                conversation_id=conversation.id,
+                conversation_type="practice_tutor",
+                status="answered",
+                intent=tutor_reply.intent.value,
+                context_turn_count=len(history_models) // 2,
+                memory_count=len(learner_memories),
+                message_count=first_sequence + 1,
+                duration_ms=max(0, int((time.perf_counter() - started_at) * 1_000)),
+            )
+            return PracticeTutorResponse(
+                conversation_id=conversation.id,
+                message_id=assistant_message.id,
+                intent=tutor_reply.intent,
+                mode=tutor_reply.mode,
+                answer_markdown=tutor_reply.answer_markdown,
+                evidence_refs=tutor_reply.evidence_refs,
+                created_at=assistant_message.created_at,
+            )
+
+    async def get_tutor_conversation(
+        self,
+        principal: Principal,
+        session_id: str,
+        question_id: str,
+    ) -> PracticeTutorConversation:
+        async with self._database.session(principal) as session:
+            session_model = await self._session_for_principal(session, principal, session_id)
+            if session_model is None:
+                raise LearningServiceError(LearningServiceErrorCode.NOT_FOUND, "练习会话不存在。")
+            question = await self._tutor_question(session, session_model, question_id)
+            if question is None:
+                raise LearningServiceError(
+                    LearningServiceErrorCode.STALE_QUESTION,
+                    "题目不属于当前会话或来源已失效。",
+                )
+            evidence_refs, _evidence_material = await self._question_evidence_material(
+                session, question
+            )
+            if not evidence_refs:
+                raise LearningServiceError(
+                    LearningServiceErrorCode.STALE_QUESTION,
+                    "题目来源已失效。",
+                )
+            conversation = await self._tutor_conversation(
+                session,
+                session_model,
+                question_id,
+                create=False,
+            )
+            messages = await self._tutor_messages(
+                session,
+                None if conversation is None else conversation.id,
+                session_model,
+            )
+            if conversation is not None:
+                log_conversation_event(
+                    "practice_tutor_recovered",
+                    course_id=session_model.course_id,
+                    conversation_id=conversation.id,
+                    conversation_type="practice_tutor",
+                    status="recovered",
+                    message_count=len(messages),
+                )
+            return _tutor_conversation_snapshot(
+                session_model,
+                question_id,
+                conversation,
+                messages,
+            )
+
+    async def _tutor_question(
+        self,
+        session: AsyncSession,
+        session_model: PracticeSessionModel,
+        question_id: str,
+    ) -> PracticeQuestionModel | None:
+        return cast(
+            PracticeQuestionModel | None,
+            await session.scalar(
+                select(PracticeQuestionModel)
+                .join(
+                    PracticeSessionQuestionModel,
+                    and_(
+                        PracticeSessionQuestionModel.question_id == PracticeQuestionModel.id,
+                        PracticeSessionQuestionModel.course_id == PracticeQuestionModel.course_id,
+                        PracticeSessionQuestionModel.user_id == PracticeQuestionModel.user_id,
+                    ),
+                )
+                .where(
+                    PracticeSessionQuestionModel.session_id == session_model.id,
+                    PracticeSessionQuestionModel.course_id == session_model.course_id,
+                    PracticeSessionQuestionModel.user_id == session_model.user_id,
+                    PracticeQuestionModel.id == question_id,
+                    PracticeQuestionModel.status == "ready",
+                )
+            ),
+        )
+
+    async def _tutor_conversation(
+        self,
+        session: AsyncSession,
+        session_model: PracticeSessionModel,
+        question_id: str,
+        *,
+        create: bool,
+    ) -> ConversationModel | None:
+        conversation = await session.scalar(
+            select(ConversationModel).where(
+                ConversationModel.user_id == session_model.user_id,
+                ConversationModel.course_id == session_model.course_id,
+                ConversationModel.conversation_type == "practice_tutor",
+                ConversationModel.practice_session_id == session_model.id,
+                ConversationModel.practice_question_id == question_id,
+            )
+        )
+        if conversation is not None or not create:
+            return conversation
+        conversation = ConversationModel(
+            id=new_id(),
+            user_id=session_model.user_id,
+            course_id=session_model.course_id,
+            conversation_type="practice_tutor",
+            practice_session_id=session_model.id,
+            practice_question_id=question_id,
+            title="单题辅导",
+            auto_title_pending=False,
+        )
+        session.add(conversation)
+        await session.flush()
+        return conversation
+
+    async def _tutor_messages(
+        self,
+        session: AsyncSession,
+        conversation_id: str | None,
+        session_model: PracticeSessionModel,
+    ) -> list[ConversationMessageModel]:
+        if conversation_id is None:
+            return []
+        rows = await session.scalars(
+            select(ConversationMessageModel)
+            .where(
+                ConversationMessageModel.conversation_id == conversation_id,
+                ConversationMessageModel.course_id == session_model.course_id,
+                ConversationMessageModel.user_id == session_model.user_id,
+            )
+            .order_by(ConversationMessageModel.sequence)
+        )
+        return list(rows)
+
+    async def _tutor_replay(
+        self,
+        session: AsyncSession,
+        conversation: ConversationModel,
+        session_model: PracticeSessionModel,
+        request: PracticeTutorRequest,
+    ) -> PracticeTutorResponse | None:
+        rows = list(
+            await session.scalars(
+                select(ConversationMessageModel)
+                .where(
+                    ConversationMessageModel.conversation_id == conversation.id,
+                    ConversationMessageModel.course_id == session_model.course_id,
+                    ConversationMessageModel.user_id == session_model.user_id,
+                    ConversationMessageModel.turn_id == request.turn_id,
+                )
+                .order_by(ConversationMessageModel.sequence)
+            )
+        )
+        if not rows:
+            return None
+        user_message = next((message for message in rows if message.role == "user"), None)
+        assistant_message = next((message for message in rows if message.role == "assistant"), None)
+        if user_message is None or assistant_message is None:
+            raise LearningServiceError(
+                LearningServiceErrorCode.IDEMPOTENCY_CONFLICT,
+                "该轮单题对话尚未形成完整记录, 请使用新的请求重试。",
+            )
+        if user_message.content != request.message:
+            raise LearningServiceError(
+                LearningServiceErrorCode.IDEMPOTENCY_CONFLICT,
+                "同一个对话轮次标识已用于不同问题。",
+            )
+        if assistant_message.intent is None or assistant_message.mode is None:
+            raise LearningServiceError(
+                LearningServiceErrorCode.IDEMPOTENCY_CONFLICT,
+                "该轮单题对话记录不完整。",
+            )
+        evidence_refs = [
+            EvidenceReference.model_validate(reference)
+            for reference in assistant_message.evidence_refs
+        ]
+        return PracticeTutorResponse(
+            conversation_id=conversation.id,
+            message_id=assistant_message.id,
+            intent=PracticeTutorIntent(assistant_message.intent),
+            mode=PracticeTutorMode(assistant_message.mode),
+            answer_markdown=assistant_message.content,
+            evidence_refs=evidence_refs,
+            created_at=assistant_message.created_at,
+        )
+
+    async def _tutor_hint_used(
+        self,
+        session: AsyncSession,
+        session_model: PracticeSessionModel,
+        question_id: str,
+    ) -> bool:
+        conversation = await self._tutor_conversation(
+            session,
+            session_model,
+            question_id,
+            create=False,
+        )
+        if conversation is None:
+            return False
+        count = await session.scalar(
+            select(func.count(ConversationMessageModel.id)).where(
+                ConversationMessageModel.conversation_id == conversation.id,
+                ConversationMessageModel.course_id == session_model.course_id,
+                ConversationMessageModel.user_id == session_model.user_id,
+                ConversationMessageModel.role == "assistant",
+                ConversationMessageModel.mode == PracticeTutorMode.HINT.value,
+            )
+        )
+        return bool(count)
 
     async def submit_attempt(
         self,
@@ -708,6 +1185,11 @@ class LearningLoopService(LearningBatchProcessor):
             )
             if session_model is None:
                 raise LearningServiceError(LearningServiceErrorCode.NOT_FOUND, "练习会话不存在。")
+            viewed_hint = request.viewed_hint or await self._tutor_hint_used(
+                session,
+                session_model,
+                question_id,
+            )
             existing_by_key = await session.scalar(
                 select(PracticeAttemptModel).where(
                     PracticeAttemptModel.session_id == session_id,
@@ -730,7 +1212,7 @@ class LearningLoopService(LearningBatchProcessor):
                     )
                 if (
                     existing_question.id != request.question_id
-                    or existing_by_key.viewed_hint != request.viewed_hint
+                    or existing_by_key.viewed_hint != viewed_hint
                     or existing_by_key.elapsed_ms != request.elapsed_ms
                 ):
                     raise LearningServiceError(
@@ -864,9 +1346,7 @@ class LearningLoopService(LearningBatchProcessor):
                 correct_count=0 if mastery is None else mastery.correct_count,
                 last_score=0 if mastery is None else mastery.last_score,
             )
-            mastery_result = update_mastery(
-                old_state, correct=correct, viewed_hint=request.viewed_hint
-            )
+            mastery_result = update_mastery(old_state, correct=correct, viewed_hint=viewed_hint)
             now = _now(self._clock)
             review_at = next_review_at(mastery_result.level, correct=correct, now=now)
             if mastery is None:
@@ -893,7 +1373,7 @@ class LearningLoopService(LearningBatchProcessor):
                 answer=submitted_answer,
                 score=score,
                 correct=correct,
-                viewed_hint=request.viewed_hint,
+                viewed_hint=viewed_hint,
                 elapsed_ms=request.elapsed_ms,
                 previous_mastery_level=mastery_result.previous_level.value,
                 mastery_level=mastery_result.level.value,

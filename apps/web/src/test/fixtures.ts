@@ -84,6 +84,10 @@ export function answeredSnapshot(overrides: Partial<QuerySnapshot> = {}): QueryS
     answer,
     failure_code: null,
     usage: { input_tokens: 18, output_tokens: 12 },
+    query_intent: 'new_question',
+    standalone_question: '什么是进程？',
+    retrieval_rounds: [],
+    retrieval_diagnostic: 'initial_sufficient',
     trace: {
       trace_id: 'query-trace-1',
       retrieval_snapshot_id: 'snapshot-1',
