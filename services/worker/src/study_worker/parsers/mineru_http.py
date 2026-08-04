@@ -138,6 +138,7 @@ class MineruHttpParser:
                 timeout=timeout_seconds,
                 follow_redirects=False,
                 transport=self._transport,
+                trust_env=False,
             )
             async with (
                 client,

@@ -7,6 +7,7 @@ from study_contracts import (
     EvidenceReference,
     LearningSummary,
     LearningUnit,
+    LearningUnitPracticeMode,
     LearningUnitPracticeStatus,
     LearningUnitSource,
     PracticeBatchRequest,
@@ -55,6 +56,10 @@ def test_learning_unit_requires_valid_source_when_available() -> None:
     )
 
     assert unit.sources[0].locator.kind == "page"
+    assert unit.practice_mode is LearningUnitPracticeMode.KNOWLEDGE_RECALL
+
+    variant = unit.model_copy(update={"practice_mode": LearningUnitPracticeMode.EXERCISE_VARIANT})
+    assert variant.practice_mode is LearningUnitPracticeMode.EXERCISE_VARIANT
 
     ready_data = unit.model_dump()
     ready_data.update(
@@ -105,6 +110,25 @@ def test_question_contract_restricts_v1_types_and_answers() -> None:
         content_sha256="b" * 64,
     )
     assert question.correct_answer == "a"
+
+    calculation = Question(
+        **question.model_dump(
+            exclude={"id", "question_type", "options", "correct_answer", "explanation"}
+        ),
+        id="question-calculation",
+        question_type=QuestionType.CALCULATION,
+        options=[],
+        correct_answer="页号为3, 页内偏移为6字节。",
+        explanation="390 = 3 * 128 + 6。",
+    )
+    assert calculation.question_type.is_constructed_response
+    assert calculation.options == []
+
+    with pytest.raises(ValidationError):
+        Question(
+            **calculation.model_dump(exclude={"options"}),
+            options=[QuestionOption(id="a", label="页号为3")],
+        )
 
     with pytest.raises(ValidationError):
         Question(
@@ -167,6 +191,7 @@ def test_stale_question_view_allows_empty_evidence_but_ready_question_does_not()
         evidence_refs=[],
     )
     assert stale.evidence_refs == []
+    assert stale.practice_mode is LearningUnitPracticeMode.KNOWLEDGE_RECALL
 
     with pytest.raises(ValidationError):
         PracticeQuestionView(

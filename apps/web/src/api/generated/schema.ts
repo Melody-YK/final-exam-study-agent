@@ -2171,8 +2171,11 @@ export interface components {
             next_review_at?: string | null;
             /** Parent Id */
             parent_id?: string | null;
+            /** @default knowledge_recall */
+            practice_mode: components["schemas"]["LearningUnitPracticeMode"];
             /** @default insufficient_evidence */
             practice_status: components["schemas"]["LearningUnitPracticeStatus"];
+            prototype_question_type?: components["schemas"]["QuestionType"] | null;
             /** Sources */
             sources?: components["schemas"]["LearningUnitSource"][];
             status: components["schemas"]["LearningUnitStatus"];
@@ -2182,6 +2185,12 @@ export interface components {
          * @enum {string}
          */
         LearningUnitKind: "section" | "concept";
+        /**
+         * LearningUnitPracticeMode
+         * @description Generation strategy implied by the selected learning-unit material.
+         * @enum {string}
+         */
+        LearningUnitPracticeMode: "knowledge_recall" | "exercise_variant";
         /**
          * LearningUnitPracticeStatus
          * @enum {string}
@@ -2568,6 +2577,8 @@ export interface components {
             evidence_refs: components["schemas"]["EvidenceReference"][];
             /** Explanation */
             explanation: string;
+            /** Grading Feedback */
+            grading_feedback?: string | null;
             /** Id */
             id: string;
             mastery: components["schemas"]["MasteryUpdate"];
@@ -2655,6 +2666,8 @@ export interface components {
             evidence_refs: components["schemas"]["EvidenceReference"][];
             /** Explanation */
             explanation?: string | null;
+            /** Grading Feedback */
+            grading_feedback?: string | null;
             /** Id */
             id: string;
             /** Learning Unit Id */
@@ -2664,6 +2677,8 @@ export interface components {
             /** Options */
             options: components["schemas"]["QuestionOption"][];
             outcome?: components["schemas"]["AttemptOutcome"] | null;
+            /** @default knowledge_recall */
+            practice_mode: components["schemas"]["LearningUnitPracticeMode"];
             /** Prompt */
             prompt: string;
             question_type: components["schemas"]["QuestionType"];
@@ -2843,7 +2858,7 @@ export interface components {
          * QuestionType
          * @enum {string}
          */
-        QuestionType: "single_choice" | "true_false";
+        QuestionType: "single_choice" | "true_false" | "short_answer" | "calculation";
         /** Refusal */
         Refusal: {
             /** Code */

@@ -2464,6 +2464,47 @@
   padding: 0;
 }
 
+.learning-constructed-answer {
+  display: grid;
+  gap: 8px;
+  margin-top: 24px;
+}
+
+.learning-constructed-answer label {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.learning-constructed-answer textarea {
+  background: var(--surface-subtle);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  line-height: 1.65;
+  min-height: 210px;
+  padding: 12px;
+  resize: vertical;
+  width: 100%;
+}
+
+.learning-constructed-answer textarea:focus {
+  border-color: var(--accent);
+  outline: 2px solid color-mix(in srgb, var(--accent) 20%, transparent);
+  outline-offset: 1px;
+}
+
+.learning-constructed-answer textarea:disabled {
+  color: var(--text);
+  opacity: 0.82;
+}
+
+.learning-constructed-answer > span {
+  color: var(--text-muted);
+  font-size: 11px;
+  justify-self: end;
+}
+
 .learning-option {
   align-items: center;
   background: var(--surface-subtle);
@@ -2559,11 +2600,23 @@
   text-align: right;
 }
 
-.learning-feedback > p {
+.learning-feedback__detail {
+  border-top: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  margin-top: 10px;
+  padding-top: 10px;
+}
+
+.learning-feedback__detail > strong {
+  display: block;
+  font-size: 12px;
+}
+
+.learning-feedback__detail > p {
   color: var(--text);
   font-size: 13px;
   line-height: 1.6;
-  margin-top: 8px;
+  margin-top: 5px;
+  white-space: pre-wrap;
 }
 
 .learning-evidence-toggle {
@@ -2902,6 +2955,10 @@
 
   .learning-question__header {
     align-items: flex-start;
+  }
+
+  .learning-constructed-answer textarea {
+    min-height: 180px;
   }
 
   .learning-practice__footer {

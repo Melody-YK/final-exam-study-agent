@@ -11,6 +11,7 @@ from unicodedata import normalize
 from study_contracts import (
     LearningSourceStatus,
     LearningUnitKind,
+    LearningUnitPracticeMode,
     LearningUnitSource,
     LearningUnitStatus,
     SourceLocator,
@@ -25,11 +26,52 @@ _DOCUMENT_CHAPTER = re.compile(
     r"第\s*(?P<number>\d+)\s*章\s*(?P<title>.*?)(?:\.[^.]+)?$",
     re.IGNORECASE,
 )
+_QUESTION_ANSWER_HEADING = re.compile(
+    r"^\s*(?:第\s*)?(?P<number>\d+|[〇零一二两三四五六七八九十百]+)\s*"
+    r"(?:题\s*)?[.)\u3001\u3002:]?\s*(?:\(\s*\d+\s*分\s*\)\s*)?"
+    r"(?:参考答案|答案)(?:\s*:)?\s*$",
+    re.IGNORECASE,
+)
+_EXERCISE_UNIT_LABEL = re.compile(
+    r"^第\s*(?P<number>\d+|[〇零一二两三四五六七八九十百]+)\s*题$",
+    re.IGNORECASE,
+)
+_PAGE_NUMBER_HEADING = re.compile(
+    r"^(?:第\s*\d+\s*页\s*(?:[,\uff0c\u3001/]\s*共?\s*\d+\s*页)?|共\s*\d+\s*页|\d+\s*[/\uff0f]\s*\d+)$",
+    re.IGNORECASE,
+)
 _CHAPTER_PREFIX = re.compile(
     r"^第\s*(?:\d+|[〇零一二三四五六七八九十百]+)\s*章\s*",
     re.IGNORECASE,
 )
 _SENTENCE_PUNCTUATION = re.compile(r"[。\uff01\uff1f\uff1b;]")
+_KNOWN_DOCUMENT_EXTENSIONS = (
+    ".markdown",
+    ".jpeg",
+    ".pptx",
+    ".docx",
+    ".pdf",
+    ".md",
+    ".jpg",
+    ".png",
+    ".ppt",
+    ".doc",
+)
+_CHINESE_DIGITS = {
+    "\u3007": 0,
+    "零": 0,
+    "一": 1,
+    "二": 2,
+    "两": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+}
+_CHINESE_UNITS = {"十": 10, "百": 100}
 MIN_PRACTICE_EVIDENCE_CHARS = 80
 MIN_PRACTICE_MULTI_CHUNK_CHARS = 80
 MAX_DERIVED_GOALS_PER_TOPIC = 24
@@ -42,6 +84,9 @@ _NOISE_HEADING_MARKERS = (
     "教学大纲",
     "课程小结",
     "动手练习",
+    "试卷用纸",
+    "试题用纸",
+    "答题纸",
 )
 _CONTINUATION_HEADING_MARKERS = (
     "例",
@@ -184,6 +229,7 @@ class ChunkCandidate:
     ordinal: int = 1
     source_status: LearningSourceStatus = LearningSourceStatus.VALID
     document_topic: str | None = None
+    document_title: str | None = None
 
     def source(self) -> LearningUnitSource:
         kind = self.locator_kind if self.locator_kind in {"page", "slide", "section"} else "page"
@@ -291,6 +337,22 @@ def document_topic_from_filename(filename: str) -> str | None:
     return f"第{number}章 {title}" if title else f"第{number}章"
 
 
+def document_title_from_filename(filename: str) -> str:
+    """Return a readable deterministic fallback when no chapter title is available."""
+
+    normalized = _WHITESPACE.sub(" ", normalize("NFKC", filename).strip())
+    leaf = re.split(r"[/\\]", normalized)[-1].strip()
+    lowered = leaf.casefold()
+    for extension in _KNOWN_DOCUMENT_EXTENSIONS:
+        if lowered.endswith(extension):
+            leaf = leaf[: -len(extension)].strip()
+            break
+    leaf = leaf.strip(" .-_")
+    if not leaf or is_zero_placeholder_label(leaf):
+        return "课程资料"
+    return leaf[:80]
+
+
 def _clean_section_path(section_path: Iterable[str]) -> tuple[str, ...]:
     return tuple(
         label
@@ -298,6 +360,85 @@ def _clean_section_path(section_path: Iterable[str]) -> tuple[str, ...]:
         if (label := _WHITESPACE.sub(" ", raw_label.strip()))
         and not is_zero_placeholder_label(label)
     )
+
+
+def _parse_question_number(value: str) -> int | None:
+    if value.isdigit():
+        number = int(value)
+        return number if number > 0 else None
+    if not value or any(
+        char not in _CHINESE_DIGITS and char not in _CHINESE_UNITS for char in value
+    ):
+        return None
+    if not any(char in _CHINESE_UNITS for char in value):
+        digits = "".join(str(_CHINESE_DIGITS[char]) for char in value)
+        number = int(digits)
+        return number if number > 0 else None
+    total = 0
+    current = 0
+    for char in value:
+        if char in _CHINESE_DIGITS:
+            current = _CHINESE_DIGITS[char]
+            continue
+        unit = _CHINESE_UNITS[char]
+        total += (current or 1) * unit
+        current = 0
+    number = total + current
+    return number if number > 0 else None
+
+
+def _question_range_label(value: str) -> str | None:
+    normalized = _WHITESPACE.sub(" ", normalize("NFKC", value).strip())
+    match = _QUESTION_ANSWER_HEADING.fullmatch(normalized)
+    if match is None:
+        return None
+    number = _parse_question_number(match.group("number"))
+    return None if number is None else f"第{number}题"
+
+
+def is_exercise_prototype_label(value: str) -> bool:
+    """Recognize the stable labels created for answer-key question ranges."""
+
+    normalized = _WHITESPACE.sub(" ", normalize("NFKC", value).strip())
+    return _EXERCISE_UNIT_LABEL.fullmatch(normalized) is not None
+
+
+def exercise_prototype_number(value: str) -> int | None:
+    """Return a sortable question number for an exercise-derived unit label."""
+
+    normalized = _WHITESPACE.sub(" ", normalize("NFKC", value).strip())
+    match = _EXERCISE_UNIT_LABEL.fullmatch(normalized)
+    if match is None:
+        return None
+    return _parse_question_number(match.group("number"))
+
+
+def is_answer_key_text(value: str) -> bool:
+    """Detect answer-key prose without treating it as a trusted classifier."""
+
+    normalized = _WHITESPACE.sub(" ", normalize("NFKC", value).strip())
+    return any(marker in normalized for marker in ("参考答案", "评分:", "答题要点"))
+
+
+def practice_mode_for_unit(
+    kind: LearningUnitKind | str,
+    label: str,
+    *,
+    child_labels: Iterable[str] = (),
+    evidence_texts: Iterable[str] = (),
+) -> LearningUnitPracticeMode:
+    """Choose variant generation for explicit exercise ranges and answer-key scopes."""
+
+    if is_exercise_prototype_label(label):
+        return LearningUnitPracticeMode.EXERCISE_VARIANT
+    if kind == LearningUnitKind.SECTION or kind == LearningUnitKind.SECTION.value:
+        children = tuple(child_labels)
+        if any(is_exercise_prototype_label(child) for child in children):
+            return LearningUnitPracticeMode.EXERCISE_VARIANT
+        answer_key_chunks = sum(is_answer_key_text(text) for text in evidence_texts)
+        if answer_key_chunks >= 2:
+            return LearningUnitPracticeMode.EXERCISE_VARIANT
+    return LearningUnitPracticeMode.KNOWLEDGE_RECALL
 
 
 def _topic_token(value: str) -> str:
@@ -317,9 +458,23 @@ def _goal_subject(value: str) -> str:
     return label[:80]
 
 
+def _is_page_header_noise(value: str) -> bool:
+    normalized = _WHITESPACE.sub(" ", normalize("NFKC", value).strip())
+    if not normalized:
+        return False
+    if _PAGE_NUMBER_HEADING.fullmatch(normalized) is not None:
+        return True
+    return any(
+        marker in normalized and ("页" in normalized or "page" in normalized.casefold())
+        for marker in ("试卷用纸", "试题用纸", "答题纸")
+    )
+
+
 def _is_noise_heading(value: str, document_topic: str) -> bool:
     label = _goal_subject(value)
     if not label or len(label) < 2 or len(label) > 80:
+        return True
+    if _is_page_header_noise(value) or _is_page_header_noise(label):
         return True
     token = _topic_token(label)
     topic_token = _topic_token(document_topic)
@@ -353,6 +508,17 @@ def _looks_like_heading(value: str) -> bool:
     if len(label) > 36 and sum(label.count(mark) for mark in (",", "\uff0c", "、")) > 1:
         return False
     return not label.startswith(("", "", "•", "图", "表", "如果", "由于", "当", "N="))
+
+
+def _has_meaningful_section_structure(chunks: Iterable[ChunkCandidate]) -> bool:
+    for chunk in chunks:
+        for raw_label in _clean_section_path(chunk.section_path):
+            if _question_range_label(raw_label) is not None:
+                continue
+            if _is_noise_heading(raw_label, "") or not _looks_like_heading(raw_label):
+                continue
+            return True
+    return False
 
 
 def _chunk_heading(chunk: ChunkCandidate, document_topic: str) -> tuple[str | None, bool]:
@@ -560,6 +726,89 @@ def _add_document_topic_candidates(
     return root_key
 
 
+def _add_fallback_document_candidates(
+    candidates: dict[str, _CandidateData],
+    chunks: list[ChunkCandidate],
+    title: str,
+) -> str:
+    """Group structurally flat documents under a filename root and usable sub-ranges."""
+
+    root_label = clean_learning_unit_label(title)
+    root_key = canonical_key(LearningUnitKind.SECTION, root_label)
+    root = candidates.setdefault(
+        root_key,
+        {
+            "label": root_label,
+            "kind": LearningUnitKind.SECTION,
+            "parent": None,
+            "sources": {},
+        },
+    )
+    goals: dict[str, _GoalData] = {}
+    active_goal_key: str | None = None
+    for chunk in sorted(chunks, key=lambda item: (item.ordinal, item.chunk_id)):
+        source_key = (chunk.document_id, chunk.revision_id, chunk.chunk_id)
+        if chunk.text.strip():
+            root["sources"][source_key] = chunk.source()
+
+        path = _clean_section_path(chunk.section_path)
+        question_label = next(
+            (
+                label
+                for raw_label in reversed(path)
+                if (label := _question_range_label(raw_label)) is not None
+            ),
+            None,
+        )
+        if question_label is not None:
+            question_key = canonical_key(LearningUnitKind.CONCEPT, question_label, root_key)
+            question = candidates.setdefault(
+                question_key,
+                {
+                    "label": question_label,
+                    "kind": LearningUnitKind.CONCEPT,
+                    "parent": root_key,
+                    "sources": {},
+                },
+            )
+            question["sources"][source_key] = chunk.source()
+            active_goal_key = None
+            continue
+
+        heading, explicit = _chunk_heading(chunk, root_label)
+        if heading is not None:
+            active_goal = goals.get(active_goal_key or "")
+            if active_goal is None or not _same_goal_family(active_goal["label"], heading):
+                goal_label = _goal_label(heading)
+                active_goal_key = canonical_key(LearningUnitKind.CONCEPT, goal_label, root_key)
+                goals.setdefault(
+                    active_goal_key,
+                    {
+                        "label": goal_label,
+                        "first_ordinal": chunk.ordinal,
+                        "explicit": explicit,
+                        "sources": {},
+                        "texts": [],
+                    },
+                )
+        if active_goal_key is None or not _is_substantive_text(chunk.text, root_label):
+            continue
+        goal = goals[active_goal_key]
+        goal["explicit"] = goal["explicit"] or explicit
+        goal["sources"][source_key] = chunk.source()
+        goal["texts"].append(chunk.text)
+
+    for goal_key in _bounded_goal_keys(goals):
+        goal = goals[goal_key]
+        candidates[goal_key] = {
+            "label": goal["label"],
+            "kind": LearningUnitKind.CONCEPT,
+            "parent": root_key,
+            "sources": goal["sources"],
+        }
+    return root_key
+
+
 def build_learning_unit_candidates(
     course_id: str,
     chunks: Iterable[ChunkCandidate],
@@ -581,17 +830,28 @@ def build_learning_unit_candidates(
     )
     scoped_chunks = [chunk for chunk in ordered_chunks if chunk.course_id == course_id]
     topic_groups: dict[tuple[str, str], list[ChunkCandidate]] = {}
+    fallback_groups: dict[tuple[str, str], list[ChunkCandidate]] = {}
     legacy_chunks: list[ChunkCandidate] = []
     root_key_by_chunk: dict[str, str] = {}
     for chunk in scoped_chunks:
         if chunk.document_topic:
             topic_groups.setdefault((chunk.document_id, chunk.document_topic), []).append(chunk)
+        elif chunk.document_title:
+            fallback_groups.setdefault((chunk.document_id, chunk.document_title), []).append(chunk)
         else:
             legacy_chunks.append(chunk)
     for (_document_id, topic), topic_chunks in sorted(topic_groups.items()):
         topic_root_key = _add_document_topic_candidates(candidates, topic_chunks, topic)
         for chunk in topic_chunks:
             root_key_by_chunk[chunk.chunk_id] = topic_root_key
+
+    for (_document_id, title), fallback_chunks in sorted(fallback_groups.items()):
+        if _has_meaningful_section_structure(fallback_chunks):
+            legacy_chunks.extend(fallback_chunks)
+            continue
+        fallback_root_key = _add_fallback_document_candidates(candidates, fallback_chunks, title)
+        for chunk in fallback_chunks:
+            root_key_by_chunk[chunk.chunk_id] = fallback_root_key
 
     for chunk in legacy_chunks:
         if chunk.course_id != course_id:

@@ -104,6 +104,39 @@ async def test_hint_mode_retries_when_provider_reveals_correct_option() -> None:
 
 
 @pytest.mark.asyncio
+async def test_calculation_hint_has_no_options_and_retries_a_revealed_result() -> None:
+    provider = _TutorProvider(
+        [
+            {"answer_markdown": "因此结果为3。", "evidence_ids": ["E1"]},
+            {
+                "answer_markdown": "先用逻辑地址除以页面大小, 再分别看商和余数。",
+                "evidence_ids": ["E1"],
+            },
+        ]
+    )
+
+    result = await _tutor(provider).answer(
+        mode=PracticeTutorMode.HINT,
+        question_type=QuestionType.CALCULATION,
+        prompt="页面大小为128字节, 逻辑地址为390, 求页号和页内偏移。",
+        options=[],
+        correct_answer="页号为3, 页内偏移为6字节。",
+        explanation="390 = 3 * 128 + 6。",
+        submitted_answer=None,
+        message="给我一个思路",
+        history=[],
+        evidence=(_evidence(),),
+    )
+
+    assert result.answer_markdown.startswith("先用逻辑地址")
+    assert len(provider.requests) == 2
+    question_payload = provider.requests[1].payload["question"]
+    assert isinstance(question_payload, dict)
+    assert "options" not in question_payload
+    assert "correct_answer" not in question_payload
+
+
+@pytest.mark.asyncio
 async def test_tutor_rejects_evidence_outside_the_question() -> None:
     provider = _TutorProvider(
         [

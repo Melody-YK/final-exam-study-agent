@@ -29,6 +29,7 @@ const session: PracticeSessionSnapshot = {
       learning_unit_id: 'unit-1',
       prompt: '进程是什么？',
       question_type: 'single_choice',
+      practice_mode: 'knowledge_recall',
       difficulty: 1,
       options: [
         { id: 'a', label: '资源分配的基本单位' },
@@ -78,6 +79,63 @@ describe('PracticeSession', () => {
     renderInWorkspace(<PracticeSession onComplete={vi.fn()} onExit={vi.fn()} session={session} />)
 
     expect(screen.getByRole('radio', { name: '调度的基本单位' })).toBeChecked()
+  })
+
+  it('keeps a calculation answer as free text, restores it, and shows AI grading feedback', async () => {
+    const calculationSession: PracticeSessionSnapshot = {
+      ...session,
+      questions: [
+        {
+          ...session.questions[0]!,
+          id: 'question-calculation',
+          prompt: '页面大小为 128 字节，逻辑地址为 390，求页号和页内偏移。',
+          question_type: 'calculation',
+          practice_mode: 'exercise_variant',
+          options: [],
+        },
+      ],
+    }
+    const calculationAttempt: PracticeAttemptResult = {
+      ...attempt,
+      question_id: 'question-calculation',
+      grading_feedback: '页号和页内偏移均正确，列式完整。',
+      explanation: '390 = 3 × 128 + 6，因此页号为 3，页内偏移为 6 字节。',
+    }
+    const first = renderInWorkspace(
+      <PracticeSession
+        onComplete={vi.fn()}
+        onExit={vi.fn()}
+        session={calculationSession}
+      />,
+    )
+
+    await first.user.type(screen.getByLabelText('你的解答'), '390 = 3 × 128 + 6')
+    expect(screen.queryByRole('radio')).not.toBeInTheDocument()
+    expect(JSON.parse(localStorage.getItem('study-agent.learning:practice-progress:session-1') ?? '{}'))
+      .toMatchObject({ answers: { 'question-calculation': '390 = 3 × 128 + 6' } })
+    first.unmount()
+
+    const submit = vi
+      .spyOn(studyApi, 'submitPracticeAttempt')
+      .mockResolvedValue(calculationAttempt)
+    const restored = renderInWorkspace(
+      <PracticeSession
+        onComplete={vi.fn()}
+        onExit={vi.fn()}
+        session={calculationSession}
+      />,
+    )
+    expect(screen.getByLabelText('你的解答')).toHaveValue('390 = 3 × 128 + 6')
+    await restored.user.click(screen.getByRole('button', { name: '提交并判分' }))
+
+    expect(await screen.findByText('AI 判分反馈')).toBeInTheDocument()
+    expect(screen.getByText('页号和页内偏移均正确，列式完整。')).toBeInTheDocument()
+    expect(screen.getByText('参考解答')).toBeInTheDocument()
+    expect(submit).toHaveBeenCalledWith(
+      'session-1',
+      expect.objectContaining({ answer: '390 = 3 × 128 + 6' }),
+      expect.any(String),
+    )
   })
 
   it('saves the current question index after moving to the next question', async () => {
@@ -252,5 +310,21 @@ describe('PracticeSession', () => {
 
     expect(screen.getByText('题目未通过质量检查')).toBeInTheDocument()
     expect(screen.getByText('这道题不能继续作答，请跳过并重新生成题目。')).toBeInTheDocument()
+  })
+
+  it('shows when a question was generated as an exercise variant', () => {
+    const variantSession: PracticeSessionSnapshot = {
+      ...session,
+      questions: session.questions.map((question) => ({
+        ...question,
+        practice_mode: 'exercise_variant',
+      })),
+    }
+
+    renderInWorkspace(
+      <PracticeSession onComplete={vi.fn()} onExit={vi.fn()} session={variantSession} />,
+    )
+
+    expect(screen.getByText('同型变式')).toBeInTheDocument()
   })
 })

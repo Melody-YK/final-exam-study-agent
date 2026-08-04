@@ -138,7 +138,8 @@ class PracticeQuestionModel(Base):
         ),
         UniqueConstraint("id", "course_id", "user_id", name="uq_practice_questions_id_scope"),
         CheckConstraint(
-            "question_type IN ('single_choice', 'true_false')", name="ck_practice_questions_type"
+            "question_type IN ('single_choice', 'true_false', 'short_answer', 'calculation')",
+            name="ck_practice_questions_type",
         ),
         CheckConstraint(
             "status IN ('ready', 'stale', 'invalid')", name="ck_practice_questions_status"
@@ -156,7 +157,7 @@ class PracticeQuestionModel(Base):
     question_type: Mapped[str] = mapped_column(String(20), nullable=False)
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
     options: Mapped[list[dict[str, str]]] = mapped_column(JSONB, nullable=False)
-    correct_answer: Mapped[str] = mapped_column(String(32), nullable=False)
+    correct_answer: Mapped[str] = mapped_column(Text, nullable=False)
     explanation: Mapped[str] = mapped_column(Text, nullable=False)
     evidence_refs: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
     difficulty: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
@@ -535,7 +536,7 @@ class PracticeAttemptModel(Base):
     session_id: Mapped[str] = mapped_column(String(36), nullable=False)
     question_id: Mapped[str] = mapped_column(String(36), nullable=False)
     idempotency_key_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    answer: Mapped[str] = mapped_column(String(32), nullable=False)
+    answer: Mapped[str] = mapped_column(Text, nullable=False)
     score: Mapped[int] = mapped_column(Integer, nullable=False)
     correct: Mapped[bool] = mapped_column(Boolean, nullable=False)
     viewed_hint: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -548,6 +549,7 @@ class PracticeAttemptModel(Base):
     )
     next_review_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     feedback: Mapped[str] = mapped_column(Text, nullable=False)
+    grading_feedback: Mapped[str | None] = mapped_column(Text)
     evidence_refs: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
     answered_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

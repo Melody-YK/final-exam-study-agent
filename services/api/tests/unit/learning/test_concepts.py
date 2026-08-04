@@ -3,11 +3,21 @@ from study_agent.modules.learning.concepts import (
     build_learning_unit_candidates,
     canonical_key,
     clean_learning_unit_label,
+    document_title_from_filename,
     document_topic_from_filename,
+    exercise_prototype_number,
+    is_answer_key_text,
+    is_exercise_prototype_label,
     practice_evidence_stats,
+    practice_mode_for_unit,
     source_status,
 )
-from study_contracts import LearningSourceStatus, LearningUnitKind, LearningUnitStatus
+from study_contracts import (
+    LearningSourceStatus,
+    LearningUnitKind,
+    LearningUnitPracticeMode,
+    LearningUnitStatus,
+)
 
 
 def _chunk(**overrides: object) -> ChunkCandidate:
@@ -45,6 +55,44 @@ def test_document_topic_from_filename_extracts_chapter_titles() -> None:
     )
     assert document_topic_from_filename("《操作系统》第6章输入输出系统.pdf") == "第6章 输入输出系统"
     assert document_topic_from_filename("课程资料.pdf") is None
+
+
+def test_document_title_from_filename_provides_a_readable_fallback() -> None:
+    assert document_title_from_filename("23-24A.pdf") == "23-24A"
+    assert document_title_from_filename("/uploads/课程资料.markdown") == "课程资料"
+    assert document_title_from_filename("0000.pdf") == "课程资料"
+
+
+def test_exercise_prototypes_and_answer_keys_select_variant_practice() -> None:
+    assert is_exercise_prototype_label("第 3 题")
+    assert exercise_prototype_number("第十题") == 10
+    assert not is_exercise_prototype_label("第3章")
+    assert is_answer_key_text("六.（10分）参考答案：")  # noqa: RUF001
+
+    assert (
+        practice_mode_for_unit(LearningUnitKind.CONCEPT, "第3题")
+        is LearningUnitPracticeMode.EXERCISE_VARIANT
+    )
+    assert (
+        practice_mode_for_unit(
+            LearningUnitKind.SECTION,
+            "23-24A",
+            child_labels=("第3题", "理解进程状态"),
+        )
+        is LearningUnitPracticeMode.EXERCISE_VARIANT
+    )
+    assert (
+        practice_mode_for_unit(
+            LearningUnitKind.SECTION,
+            "期末答案",
+            evidence_texts=("第一题参考答案", "第二题评分: 10"),
+        )
+        is LearningUnitPracticeMode.EXERCISE_VARIANT
+    )
+    assert (
+        practice_mode_for_unit(LearningUnitKind.CONCEPT, "理解进程状态")
+        is LearningUnitPracticeMode.KNOWLEDGE_RECALL
+    )
 
 
 def test_candidate_builder_uses_clean_labels_without_changing_canonical_keys() -> None:
@@ -189,6 +237,97 @@ def test_document_topic_projection_excludes_noise_from_chapter_practice_scope() 
     assert {source.chunk_id for source in chapter.sources} == {"banker"}
     assert concept.label == "理解银行家算法"
     assert {source.chunk_id for source in concept.sources} == {"banker"}
+
+
+def test_flat_exam_document_uses_filename_root_and_normalized_question_ranges() -> None:
+    answer = (
+        "本题参考答案完整说明了进程状态转换的触发条件、调度过程和判断依据,"
+        "正文长度足以作为一道独立练习题的来源证据。"
+    )
+    units = build_learning_unit_candidates(
+        "course-1",
+        [
+            _chunk(
+                chunk_id="table",
+                ordinal=1,
+                section_path=(),
+                document_title="23-24A",
+                text="<table>" + "调度计算数据" * 20 + "</table>",
+            ),
+            _chunk(
+                chunk_id="question-3",
+                ordinal=2,
+                section_path=("三、\uff0810分\uff09参考答案\uff1a",),
+                document_title="23-24A",
+                text=answer,
+            ),
+            _chunk(
+                chunk_id="question-10-a",
+                ordinal=3,
+                section_path=("十.\uff0810分\uff09参考答案\uff1a",),
+                document_title="23-24A",
+                text=answer,
+            ),
+            _chunk(
+                chunk_id="question-10-b",
+                ordinal=4,
+                section_path=("十. \uff0810分\uff09参考答案\uff1a",),
+                document_title="23-24A",
+                text=answer,
+            ),
+        ],
+    )
+
+    labels = {unit.label for unit in units}
+    assert "未分类" not in labels
+    assert "参考答案" not in " ".join(labels)
+    assert {"23-24A", "第3题", "第10题"} <= labels
+    root = next(unit for unit in units if unit.label == "23-24A")
+    question_10 = next(unit for unit in units if unit.label == "第10题")
+    assert root.parent_canonical_key is None
+    assert {source.chunk_id for source in root.sources} == {
+        "table",
+        "question-3",
+        "question-10-a",
+        "question-10-b",
+    }
+    assert question_10.parent_canonical_key == root.canonical_key
+    assert {source.chunk_id for source in question_10.sources} == {
+        "question-10-a",
+        "question-10-b",
+    }
+
+
+def test_page_headers_do_not_become_document_sections_or_learning_goals() -> None:
+    header = "广东工业大学试卷用纸\uff0c第3页\uff0c共5页"
+    units = build_learning_unit_candidates(
+        "course-1",
+        [
+            _chunk(
+                section_path=(header,),
+                document_title="23-24A",
+                text=header,
+            )
+        ],
+    )
+
+    assert [(unit.label, unit.kind) for unit in units] == [("23-24A", LearningUnitKind.SECTION)]
+    assert {source.chunk_id for source in units[0].sources} == {"chunk-1"}
+
+
+def test_generic_document_keeps_meaningful_parser_sections() -> None:
+    units = build_learning_unit_candidates(
+        "course-1",
+        [
+            _chunk(
+                chunk_id="structured",
+                section_path=("测试章节",),
+                document_title="learning",
+            )
+        ],
+    )
+
+    assert {unit.label for unit in units} == {"测试章节"}
 
 
 def test_practice_evidence_stats_rejects_short_single_heading_and_accepts_context() -> None:

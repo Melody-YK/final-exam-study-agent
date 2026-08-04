@@ -28,9 +28,22 @@ class LearningUnitPracticeStatus(StrEnum):
     STALE = "stale"
 
 
+class LearningUnitPracticeMode(StrEnum):
+    """Generation strategy implied by the selected learning-unit material."""
+
+    KNOWLEDGE_RECALL = "knowledge_recall"
+    EXERCISE_VARIANT = "exercise_variant"
+
+
 class QuestionType(StrEnum):
     SINGLE_CHOICE = "single_choice"
     TRUE_FALSE = "true_false"
+    SHORT_ANSWER = "short_answer"
+    CALCULATION = "calculation"
+
+    @property
+    def is_constructed_response(self) -> bool:
+        return self in {QuestionType.SHORT_ANSWER, QuestionType.CALCULATION}
 
 
 class QuestionStatus(StrEnum):
@@ -118,6 +131,8 @@ class LearningUnit(ContractModel):
     parent_id: NonEmptyString | None = None
     status: LearningUnitStatus
     practice_status: LearningUnitPracticeStatus = LearningUnitPracticeStatus.INSUFFICIENT_EVIDENCE
+    practice_mode: LearningUnitPracticeMode = LearningUnitPracticeMode.KNOWLEDGE_RECALL
+    prototype_question_type: QuestionType | None = None
     evidence_chunk_count: int = Field(default=0, ge=0)
     evidence_char_count: int = Field(default=0, ge=0)
     sources: list[LearningUnitSource] = Field(default_factory=list)
@@ -158,8 +173,8 @@ class Question(ContractModel):
     question_type: QuestionType
     prompt: NonEmptyString = Field(max_length=4_000)
     options: list[QuestionOption] = Field(default_factory=list, max_length=4)
-    correct_answer: NonEmptyString = Field(max_length=32)
-    explanation: NonEmptyString = Field(max_length=4_000)
+    correct_answer: NonEmptyString = Field(max_length=8_000)
+    explanation: NonEmptyString = Field(max_length=8_000)
     evidence_refs: list[EvidenceReference] = Field(min_length=1, max_length=8)
     difficulty: int = Field(ge=1, le=3)
     status: QuestionStatus = QuestionStatus.READY
@@ -177,6 +192,8 @@ class Question(ContractModel):
             set(option_ids) != {"true", "false"} or self.correct_answer not in {"true", "false"}
         ):
             raise ValueError("true false questions require true and false options")
+        elif self.question_type.is_constructed_response and self.options:
+            raise ValueError("constructed response questions must not expose answer options")
         return self
 
 
@@ -258,6 +275,7 @@ class PracticeQuestionView(ContractModel):
     id: NonEmptyString
     learning_unit_id: NonEmptyString
     question_type: QuestionType
+    practice_mode: LearningUnitPracticeMode = LearningUnitPracticeMode.KNOWLEDGE_RECALL
     prompt: NonEmptyString
     options: list[QuestionOption] = Field(max_length=4)
     difficulty: int = Field(ge=1, le=3)
@@ -265,8 +283,9 @@ class PracticeQuestionView(ContractModel):
     evidence_refs: list[EvidenceReference] = Field(max_length=8)
     answered: bool = False
     outcome: AttemptOutcome | None = None
-    submitted_answer: NonEmptyString | None = Field(default=None, max_length=32)
-    explanation: NonEmptyString | None = Field(default=None, max_length=4_000)
+    submitted_answer: NonEmptyString | None = Field(default=None, max_length=8_000)
+    explanation: NonEmptyString | None = Field(default=None, max_length=8_000)
+    grading_feedback: NonEmptyString | None = Field(default=None, max_length=2_000)
     mastery_reason: NonEmptyString | None = Field(default=None, max_length=1_000)
     viewed_hint: bool | None = None
 
@@ -283,6 +302,8 @@ class PracticeQuestionView(ContractModel):
             raise ValueError("answered questions require submitted feedback")
         if not self.answered and any(value is not None for value in submitted_fields):
             raise ValueError("unanswered questions must not expose submitted feedback")
+        if not self.answered and self.grading_feedback is not None:
+            raise ValueError("unanswered questions must not expose grading feedback")
         return self
 
 
@@ -305,7 +326,7 @@ class PracticeSessionSnapshot(ContractModel):
 
 class PracticeAttemptRequest(ContractModel):
     question_id: NonEmptyString
-    answer: NonEmptyString = Field(max_length=32)
+    answer: NonEmptyString = Field(max_length=8_000)
     viewed_hint: bool = False
     elapsed_ms: int | None = Field(default=None, ge=0, le=86_400_000)
 
@@ -347,6 +368,7 @@ class PracticeAttemptResult(ContractModel):
     outcome: AttemptOutcome
     score: int = Field(ge=0, le=1)
     explanation: NonEmptyString
+    grading_feedback: NonEmptyString | None = Field(default=None, max_length=2_000)
     evidence_refs: list[EvidenceReference] = Field(min_length=1, max_length=8)
     mastery: MasteryUpdate
 

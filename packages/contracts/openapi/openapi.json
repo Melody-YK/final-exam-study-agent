@@ -2887,9 +2887,23 @@
             ],
             "title": "Parent Id"
           },
+          "practice_mode": {
+            "$ref": "#/components/schemas/LearningUnitPracticeMode",
+            "default": "knowledge_recall"
+          },
           "practice_status": {
             "$ref": "#/components/schemas/LearningUnitPracticeStatus",
             "default": "insufficient_evidence"
+          },
+          "prototype_question_type": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QuestionType"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "sources": {
             "items": {
@@ -2919,6 +2933,15 @@
           "concept"
         ],
         "title": "LearningUnitKind",
+        "type": "string"
+      },
+      "LearningUnitPracticeMode": {
+        "description": "Generation strategy implied by the selected learning-unit material.",
+        "enum": [
+          "knowledge_recall",
+          "exercise_variant"
+        ],
+        "title": "LearningUnitPracticeMode",
         "type": "string"
       },
       "LearningUnitPracticeStatus": {
@@ -3991,7 +4014,7 @@
         "additionalProperties": false,
         "properties": {
           "answer": {
-            "maxLength": 32,
+            "maxLength": 8000,
             "minLength": 1,
             "title": "Answer",
             "type": "string"
@@ -4043,6 +4066,19 @@
             "minLength": 1,
             "title": "Explanation",
             "type": "string"
+          },
+          "grading_feedback": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grading Feedback"
           },
           "id": {
             "minLength": 1,
@@ -4331,7 +4367,7 @@
           "explanation": {
             "anyOf": [
               {
-                "maxLength": 4000,
+                "maxLength": 8000,
                 "minLength": 1,
                 "type": "string"
               },
@@ -4340,6 +4376,19 @@
               }
             ],
             "title": "Explanation"
+          },
+          "grading_feedback": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grading Feedback"
           },
           "id": {
             "minLength": 1,
@@ -4382,6 +4431,10 @@
               }
             ]
           },
+          "practice_mode": {
+            "$ref": "#/components/schemas/LearningUnitPracticeMode",
+            "default": "knowledge_recall"
+          },
           "prompt": {
             "minLength": 1,
             "title": "Prompt",
@@ -4396,7 +4449,7 @@
           "submitted_answer": {
             "anyOf": [
               {
-                "maxLength": 32,
+                "maxLength": 8000,
                 "minLength": 1,
                 "type": "string"
               },
@@ -4963,7 +5016,9 @@
       "QuestionType": {
         "enum": [
           "single_choice",
-          "true_false"
+          "true_false",
+          "short_answer",
+          "calculation"
         ],
         "title": "QuestionType",
         "type": "string"

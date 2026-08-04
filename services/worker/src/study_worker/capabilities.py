@@ -397,6 +397,7 @@ async def probe_mineru_api(
             timeout=timeout_seconds,
             follow_redirects=False,
             transport=transport,
+            trust_env=False,
         ) as client:
             response = await client.get(f"{base_url.rstrip('/')}/health", headers=headers)
     except (httpx.HTTPError, ValueError):

@@ -30,6 +30,7 @@ const units: LearningUnit[] = [
     kind: "section",
     parent_id: null,
     status: "available",
+    practice_mode: "knowledge_recall",
     practice_status: "ready",
     evidence_chunk_count: 1,
     evidence_char_count: 160,
@@ -96,6 +97,7 @@ const session = {
       learning_unit_id: "unit-1",
       prompt: "进程是什么？",
       question_type: "single_choice" as const,
+      practice_mode: "knowledge_recall",
       difficulty: 1,
       options: [
         { id: "a", label: "资源分配的基本单位" },
@@ -450,6 +452,74 @@ describe("LearningPage", () => {
     expect(createBatch).toHaveBeenCalledWith("course-1", {
       learning_unit_ids: expect.arrayContaining(goals.map((goal) => goal.id)),
       question_count: 5,
+    });
+  });
+
+  it("labels exercise prototypes and defaults an exercise scope to its prototype count", async () => {
+    const chapter: LearningUnit = {
+      ...units[0]!,
+      id: "exercise-chapter",
+      canonical_key: "section:23-24A",
+      label: "23-24A",
+      practice_mode: "exercise_variant",
+    };
+    const prototypes = [10, 3, 6].map(
+      (number): LearningUnit => ({
+        ...units[0]!,
+        id: `prototype-${number}`,
+        canonical_key: `concept:section:23-24A/第${number}题`,
+        kind: "concept",
+        label: `第${number}题`,
+        parent_id: chapter.id,
+        practice_mode: "exercise_variant",
+        prototype_question_type: number === 6 ? "calculation" : "short_answer",
+      }),
+    );
+    const exerciseUnits = [chapter, ...prototypes];
+    const exerciseBatch = {
+      ...batch,
+      learning_unit_ids: [chapter.id],
+      target_question_count: 3,
+      total_items: 3,
+    } satisfies PracticeBatchSnapshot;
+    vi.spyOn(studyApi, "listLearningUnits").mockResolvedValue(exerciseUnits);
+    vi.spyOn(studyApi, "getLearningSummary").mockResolvedValue({
+      ...summary,
+      units: exerciseUnits,
+    });
+    vi.spyOn(studyApi, "getReviewQueue").mockResolvedValue([]);
+    const createBatch = vi
+      .spyOn(studyApi, "createPracticeBatch")
+      .mockResolvedValue(exerciseBatch);
+    vi.spyOn(studyApi, "getPracticeBatch").mockResolvedValue(exerciseBatch);
+
+    const { user } = renderInWorkspace(<LearningPage />);
+
+    const chapterCheckbox = await screen.findByRole("checkbox", {
+      name: /23-24A/,
+    });
+    expect(chapterCheckbox).toHaveAccessibleName(/习题范围 · 同型变式/);
+    expect(chapterCheckbox).toHaveAccessibleName(/3 道原型题/);
+    expect(
+      screen.getByRole("checkbox", { name: /第6题/ }),
+    ).toHaveAccessibleName(/原型题 · 计算题 · 同型变式/);
+
+    const questionCount = screen.getByRole("spinbutton", {
+      name: "题目数量",
+    });
+    await user.click(chapterCheckbox);
+
+    expect(questionCount).toHaveValue(3);
+    expect(
+      screen.getByText("已选 1 个范围 · 覆盖 3 道原型题"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "开始生成变式题" })).toBeEnabled();
+    expect(screen.getByText(/习题资料会生成同知识点变式题/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "开始生成变式题" }));
+    expect(createBatch).toHaveBeenCalledWith("course-1", {
+      learning_unit_ids: [chapter.id],
+      question_count: 3,
     });
   });
 

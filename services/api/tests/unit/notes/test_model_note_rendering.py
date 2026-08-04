@@ -6,6 +6,7 @@ from study_agent.infrastructure.db.models import NoteCoverageUnitModel
 from study_agent.modules.notes.demo_runner import (
     _FrozenInput,
     _Material,
+    _note_prompt,
     _render_model_note,
     _SourceChunk,
 )
@@ -124,6 +125,60 @@ def test_model_note_rebuilds_nonportable_ast_from_valid_claims() -> None:
 
     assert rendered.generated_by_model is True
     assert rendered.content_ast["nodes"][0]["id"] == "model-title"
+
+
+def test_exam_focus_prompt_uses_the_same_bounded_source_selection_as_rendering() -> None:
+    base = _material()
+    chunks = tuple(
+        _SourceChunk(
+            input_id="input-1",
+            document_id="document-1",
+            revision_id="revision-1",
+            deletion_epoch=0,
+            document_name="操作系统.pdf",
+            media_type="application/pdf",
+            chunk_id=f"chunk-{ordinal}",
+            ordinal=ordinal,
+            text=f"第 {ordinal} 页关键定义必须说明调度条件和易错点。",
+            page_ordinal=ordinal,
+            content_sha256=f"{ordinal:064x}",
+        )
+        for ordinal in range(1, 21)
+    )
+    units = tuple(
+        NoteCoverageUnitModel(
+            id=f"unit-{ordinal}",
+            input_id="input-1",
+            batch_id="batch-1",
+            user_id="user-1",
+            course_id="course-1",
+            ordinal=ordinal,
+            unit_type="pdf_page_window",
+            locator=f"page:{ordinal}",
+            content_sha256=f"{ordinal:064x}",
+            is_substantive=True,
+        )
+        for ordinal in range(1, 21)
+    )
+    prompt = _note_prompt(
+        _Material(
+            title=base.title,
+            style=base.style,
+            section_path=base.section_path,
+            inputs=base.inputs,
+            chunks=chunks,
+            units=units,
+        )
+    )
+
+    sources = prompt.payload["sources"]
+    assert isinstance(sources, list)
+    assert len(sources) == 12
+    assert [source["evidence_id"] for source in sources] == [
+        f"chunk-{ordinal}" for ordinal in range(1, 13)
+    ]
+    assert "不要在响应中重复输出" in prompt.system_prompt
+    assert "body_markdown 最多 6000 个中文字符" in prompt.system_prompt
 
 
 def test_model_note_accepts_common_assertion_and_citations_claim_aliases() -> None:

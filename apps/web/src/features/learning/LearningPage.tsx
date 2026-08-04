@@ -72,6 +72,14 @@ const batchFailureLabels: Record<string, string> = {
   QUESTION_REVIEW_INVALID: "题目语义审校结果无效",
   QUESTION_SEMANTIC_INVALID: "选项存在歧义或不止一个正确答案",
   QUESTION_STRUCTURE_INVALID: "题目结构不符合要求",
+  QUESTION_VARIANT_TOO_SIMILAR: "变式题与原习题过于相似",
+  QUESTION_VARIANT_DUPLICATE: "变式题与已有练习重复",
+  QUESTION_VARIANT_NOT_TRANSFORMED: "变式题没有更换输入条件",
+  QUESTION_VARIANT_NOT_SELF_CONTAINED: "变式题缺少独立求解条件",
+  QUESTION_VARIANT_NOT_SAME_METHOD: "变式题偏离了原题的知识点或解法",
+  QUESTION_UNSOLVABLE: "题目条件不足或无法可靠求解",
+  QUESTION_REFERENCE_ANSWER_INCONSISTENT: "参考答案或解题过程与题干不一致",
+  QUESTION_EVIDENCE_UNSUPPORTED: "题目使用了资料无法支持的知识或方法",
   EVIDENCE_QUOTE_MISSING: "引用无法回到原文",
   PROVIDER_BAD_RESPONSE: "模型返回内容不完整，重试后仍未通过校验",
   SOURCE_UNAVAILABLE: "学习资料来源不可用",
@@ -96,6 +104,25 @@ const practiceStatusLabels = {
   insufficient_evidence: "资料不足",
   stale: "来源失效",
 } as const;
+
+function isExerciseVariant(unit: LearningUnit): boolean {
+  return unit.practice_mode === "exercise_variant";
+}
+
+function prototypeQuestionTypeLabel(
+  type: LearningUnit["prototype_question_type"],
+): string | null {
+  if (type === "calculation") return "计算题";
+  if (type === "short_answer") return "简答题";
+  if (type === "single_choice") return "单选题";
+  if (type === "true_false") return "判断题";
+  return null;
+}
+
+function exercisePrototypeNumber(label: string): number | null {
+  const match = /^第\s*(\d+)\s*题$/.exec(label.trim());
+  return match ? Number(match[1]) : null;
+}
 
 function isZeroPlaceholderLabel(value: string): boolean {
   return /^0+$/.test(
@@ -243,6 +270,16 @@ export function LearningPage() {
       concepts.push(unit);
       result.set(parentId, concepts);
     }
+    for (const concepts of result.values()) {
+      concepts.sort((left, right) => {
+        const leftNumber = exercisePrototypeNumber(left.label);
+        const rightNumber = exercisePrototypeNumber(right.label);
+        if (leftNumber !== null && rightNumber !== null) {
+          return leftNumber - rightNumber;
+        }
+        return 0;
+      });
+    }
     return result;
   }, [displayUnits]);
   const knowledgeGoals = useMemo(
@@ -253,25 +290,51 @@ export function LearningPage() {
     () => new Map(displayUnits.map((unit) => [unit.id, unit])),
     [displayUnits],
   );
-  const selectedKnowledgeGoalCount = useMemo(() => {
+  const selectedCoverage = useMemo(() => {
     const selectedGoalIds = new Set<string>();
+    const selectedPrototypeIds = new Set<string>();
     for (const unitId of selectedUnitIds) {
       const unit = unitById.get(unitId);
       if (unit?.kind === "concept") {
-        selectedGoalIds.add(unit.id);
+        if (isExerciseVariant(unit)) selectedPrototypeIds.add(unit.id);
+        else selectedGoalIds.add(unit.id);
         continue;
       }
       if (unit?.kind === "section") {
         for (const concept of conceptsBySection.get(unit.id) ?? []) {
-          selectedGoalIds.add(concept.id);
+          if (isExerciseVariant(concept)) selectedPrototypeIds.add(concept.id);
+          else selectedGoalIds.add(concept.id);
         }
       }
     }
-    return selectedGoalIds.size;
+    return {
+      exercisePrototypes: selectedPrototypeIds.size,
+      knowledgeGoals: selectedGoalIds.size,
+    };
   }, [conceptsBySection, selectedUnitIds, unitById]);
   const hasSelectedSection = selectedUnitIds.some(
     (unitId) => unitById.get(unitId)?.kind === "section",
   );
+  const hasSelectedExercise = selectedUnitIds.some((unitId) => {
+    const unit = unitById.get(unitId);
+    return unit ? isExerciseVariant(unit) : false;
+  });
+  const availableKnowledgeGoalCount = knowledgeGoals.filter(
+    (unit) => !isExerciseVariant(unit),
+  ).length;
+  const availableExercisePrototypeCount = knowledgeGoals.filter((unit) =>
+    isExerciseVariant(unit),
+  ).length;
+  const selectedCoverageLabel = [
+    selectedCoverage.knowledgeGoals > 0
+      ? `${selectedCoverage.knowledgeGoals} 个知识目标`
+      : null,
+    selectedCoverage.exercisePrototypes > 0
+      ? `${selectedCoverage.exercisePrototypes} 道原型题`
+      : null,
+  ]
+    .filter((label): label is string => label !== null)
+    .join(" · ");
   const questionCount = Number(questionCountInput);
   const questionCountIsValid =
     Number.isInteger(questionCount) &&
@@ -367,10 +430,30 @@ export function LearningPage() {
 
   const defaultQuestionCount = (unitIds: string[]): number => {
     if (unitIds.length === 0) return 5;
-    const includesSection = unitIds.some(
-      (unitId) => unitById.get(unitId)?.kind === "section",
+    let includesRecallSection = false;
+    let includesExercise = false;
+    const suggested = unitIds.reduce((total, unitId) => {
+      const unit = unitById.get(unitId);
+      if (!unit) return total;
+      if (unit.kind === "section") {
+        if (isExerciseVariant(unit)) {
+          includesExercise = true;
+          const prototypeCount = (conceptsBySection.get(unit.id) ?? []).filter(
+            (concept) => isExerciseVariant(concept) && isPracticeReady(concept),
+          ).length;
+          return total + Math.max(1, prototypeCount);
+        }
+        includesRecallSection = true;
+        return total;
+      }
+      return total + 1;
+    }, 0);
+    if (includesRecallSection && !includesExercise) return 5;
+    const sectionAllowance = includesRecallSection ? 5 : 0;
+    return Math.min(
+      MAX_QUESTIONS,
+      Math.max(unitIds.length, suggested + sectionAllowance, 1),
     );
-    return includesSection ? 5 : unitIds.length;
   };
 
   const handleUnitSelection = (unit: LearningUnit) => {
@@ -392,12 +475,20 @@ export function LearningPage() {
       (!selected && nextSelection.length > MAX_SELECTED_SCOPES);
     const evidenceCount =
       unit.evidence_chunk_count ?? unit.sources?.length ?? 0;
-    const knowledgeGoalCount =
+    const childCount =
       unit.kind === "section"
-        ? (conceptsBySection.get(unit.id)?.length ?? 0)
+        ? (conceptsBySection.get(unit.id) ?? []).filter((concept) =>
+            isExerciseVariant(unit) ? isExerciseVariant(concept) : true,
+          ).length
         : null;
-    const scopeLabel =
-      unit.kind === "section" ? "章节范围 · 整章练习" : "知识目标 · 精准练习";
+    const prototypeTypeLabel = prototypeQuestionTypeLabel(unit.prototype_question_type);
+    const scopeLabel = isExerciseVariant(unit)
+      ? unit.kind === "section"
+        ? "习题范围 · 同型变式"
+        : `原型题${prototypeTypeLabel ? ` · ${prototypeTypeLabel}` : ""} · 同型变式`
+      : unit.kind === "section"
+        ? "章节范围 · 整章练习"
+        : "知识目标 · 精准练习";
     return (
       <label
         className={`learning-unit learning-unit--${unit.kind}${selected ? " is-selected" : ""}${disabled ? " is-disabled" : ""}`}
@@ -416,9 +507,11 @@ export function LearningPage() {
           <strong>{unit.label}</strong>
           <small>
             {scopeLabel}
-            {knowledgeGoalCount === null
+            {childCount === null
               ? ""
-              : ` · ${knowledgeGoalCount} 个知识目标`}{" "}
+              : isExerciseVariant(unit)
+                ? ` · ${childCount} 道原型题`
+                : ` · ${childCount} 个知识目标`}{" "}
             · {evidenceCount} 个证据片段
           </small>
         </span>
@@ -492,10 +585,11 @@ export function LearningPage() {
   };
 
   const handleStartReview = (item: ReviewQueueItem) => {
+    const suggestedQuestionCount = defaultQuestionCount([item.learning_unit_id]);
     setSelectedUnitIds([item.learning_unit_id]);
-    setQuestionCountInput("5");
+    setQuestionCountInput(String(suggestedQuestionCount));
     setView("overview");
-    startBatch([item.learning_unit_id], 5);
+    startBatch([item.learning_unit_id], suggestedQuestionCount);
   };
 
   if (displayView === "practice") {
@@ -659,12 +753,15 @@ export function LearningPage() {
               <div className="learning-selection-actions">
                 <div className="learning-selection-summary">
                   <span className="learning-count">
-                    课程共 {sections.length} 章 · {knowledgeGoals.length}{" "}
+                    课程共 {sections.length} 章 · {availableKnowledgeGoalCount}{" "}
                     个知识目标
+                    {availableExercisePrototypeCount > 0
+                      ? ` · ${availableExercisePrototypeCount} 道原型题`
+                      : ""}
                   </span>
                   <span className="learning-count">
                     已选 {selectedUnitIds.length} 个范围 · 覆盖{" "}
-                    {selectedKnowledgeGoalCount} 个知识目标
+                    {selectedCoverageLabel || "0 个知识目标"}
                   </span>
                 </div>
                 <button
@@ -801,7 +898,13 @@ export function LearningPage() {
                 ) : (
                   <Sparkles aria-hidden="true" size={17} />
                 )}
-                {createBatch.isPending ? "正在创建批次" : "开始生成题目"}
+                {createBatch.isPending
+                  ? hasSelectedExercise
+                    ? "正在生成变式题"
+                    : "正在创建批次"
+                  : hasSelectedExercise
+                    ? "开始生成变式题"
+                    : "开始生成题目"}
               </button>
             </div>
             <p
@@ -814,9 +917,11 @@ export function LearningPage() {
               role={selectionBoundaryError ? "alert" : undefined}
             >
               {selectionBoundaryError ??
-                (hasSelectedSection
-                  ? "整章练习会在章内抽样，建议生成 5–10 道题。"
-                  : "精准练习默认每个知识目标 1 道题；需要巩固时可手动增加。")}
+                (hasSelectedExercise
+                  ? "习题资料会生成同知识点变式题；默认每道原型题 1 道。只有参考答案时，会生成可独立求解的答案步骤变式。"
+                  : hasSelectedSection
+                    ? "整章练习会在章内抽样，建议生成 5–10 道题。"
+                    : "精准练习默认每个知识目标 1 道题；需要巩固时可手动增加。")}
             </p>
             {capabilitiesLoading ? (
               <p className="learning-inline-status">

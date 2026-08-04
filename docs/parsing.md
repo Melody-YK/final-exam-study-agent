@@ -69,11 +69,15 @@ MinerU 的安装、模型预取和硬件参数应以其对应版本的官方部�
 
 ```bash
 uv venv --python 3.12 .local/mineru/.venv
-uv pip install --python .local/mineru/.venv/bin/python 'mineru[pipeline]==3.4.4'
-.local/mineru/.venv/bin/mineru-models-download
+uv pip install --python .local/mineru/.venv/bin/python \
+  'mineru[pipeline]==3.4.4' 'six>=1.17,<2'
+.local/mineru/.venv/bin/mineru-models-download \
+  --source modelscope --model_type pipeline
 .local/mineru/.venv/bin/mineru-api --host 127.0.0.1 --port 8001
 ```
 
+MinerU 3.4.4 在部分平台的 Pipeline extra 没有声明 `six`，因此示例显式安装它。
+模型下载完成后应确认模型目录中没有 `.incomplete` 文件，再启动 API。
 MinerU 上游首次运行可能自动下载模型，生产环境应先显式预取并在无外网条件下做一次
 解析 smoke。不要把未加鉴权的 MinerU API 直接暴露到公网；跨主机部署时放在内部网络
 或带鉴权的反向代理后。`WORKER_MINERU_TOKEN` 只用于向这种代理发送 Bearer token。

@@ -47,7 +47,17 @@ function firstPendingQuestion(questions: PracticeQuestionView[]): number {
 }
 
 function questionTypeLabel(type: PracticeQuestionView['question_type']): string {
-  return type === 'true_false' ? '判断题' : '单选题'
+  const labels: Record<PracticeQuestionView['question_type'], string> = {
+    calculation: '计算题',
+    short_answer: '简答题',
+    single_choice: '单选题',
+    true_false: '判断题',
+  }
+  return labels[type]
+}
+
+function isConstructedResponse(type: PracticeQuestionView['question_type']): boolean {
+  return type === 'calculation' || type === 'short_answer'
 }
 
 function difficultyLabel(difficulty: PracticeQuestionView['difficulty']): string {
@@ -92,9 +102,14 @@ function readPracticeProgress(session: PracticeSessionSnapshot): PracticeProgres
     const answers: Record<string, string> = {}
     if (typeof draft.answers === 'object' && draft.answers !== null) {
       for (const [questionId, value] of Object.entries(draft.answers)) {
-        if (typeof value !== 'string' || !value || !pendingIds.has(questionId)) continue
+        if (typeof value !== 'string' || !value.trim() || !pendingIds.has(questionId)) continue
         const question = session.questions.find((candidate) => candidate.id === questionId)
-        if (question?.status === 'ready' && question.options.some((option) => option.id === value)) {
+        const answerIsValid = question
+          ? isConstructedResponse(question.question_type)
+            ? value.length <= 8_000
+            : question.options.some((option) => option.id === value)
+          : false
+        if (question?.status === 'ready' && answerIsValid) {
           answers[questionId] = value
         }
       }
@@ -227,6 +242,8 @@ export function PracticeSession({
     ? {
         evidence: currentAttempt?.result.evidence_refs ?? currentQuestion.evidence_refs,
         explanation: currentAttempt?.result.explanation ?? currentQuestion.explanation,
+        gradingFeedback:
+          currentAttempt?.result.grading_feedback ?? currentQuestion.grading_feedback ?? '',
         masteryReason:
           currentAttempt?.result.mastery.reason ?? currentQuestion.mastery_reason ?? '',
         outcome: currentAttempt?.result.outcome ?? currentQuestion.outcome,
@@ -247,7 +264,12 @@ export function PracticeSession({
   }
 
   const submit = async () => {
-    if (!currentQuestion || !selectedAnswer || currentAnswered || currentQuestion.status !== 'ready') {
+    if (
+      !currentQuestion ||
+      !selectedAnswer.trim() ||
+      currentAnswered ||
+      currentQuestion.status !== 'ready'
+    ) {
       return
     }
     setSubmitError(null)
@@ -315,6 +337,8 @@ export function PracticeSession({
     answered: currentAnswered,
   }
   const currentTutorMessages = tutorConversations[currentQuestion.id] ?? []
+  const constructedResponse = isConstructedResponse(currentQuestion.question_type)
+  const answerReady = Boolean(selectedAnswer.trim())
 
   return (
     <section className="learning-practice" aria-label="练习作答">
@@ -355,6 +379,9 @@ export function PracticeSession({
             <span>{questionTypeLabel(currentQuestion.question_type)}</span>
             <span>难度 {difficultyLabel(currentQuestion.difficulty)}</span>
             <span>依据 {currentQuestion.evidence_refs.length} 条</span>
+            {currentQuestion.practice_mode === 'exercise_variant' ? (
+              <span>同型变式</span>
+            ) : null}
             {hintedQuestionIds.has(currentQuestion.id) ? <span>已使用 AI 提示</span> : null}
           </div>
           <button
@@ -369,30 +396,50 @@ export function PracticeSession({
           </button>
         </header>
         <h2>{currentQuestion.prompt}</h2>
-        <fieldset
-          className="learning-options"
-          disabled={currentAnswered || currentQuestion.status !== 'ready'}
-        >
-          <legend className="sr-only">选择答案</legend>
-          {currentQuestion.options.map((option) => (
-            <label
-              className={`learning-option${selectedAnswer === option.id ? ' is-selected' : ''}${currentAnswered ? ' is-locked' : ''}`}
-              key={option.id}
-            >
-              <input
-                checked={selectedAnswer === option.id}
-                name={`question-${currentQuestion.id}`}
-                onChange={() =>
-                  setDraftAnswers((current) => ({ ...current, [currentQuestion.id]: option.id }))
-                }
-                type="radio"
-                value={option.id}
-              />
-              <span className="learning-option__marker" aria-hidden="true" />
-              <span>{option.label}</span>
-            </label>
-          ))}
-        </fieldset>
+        {constructedResponse ? (
+          <div className="learning-constructed-answer">
+            <label htmlFor={`answer-${currentQuestion.id}`}>你的解答</label>
+            <textarea
+              disabled={currentAnswered || currentQuestion.status !== 'ready'}
+              id={`answer-${currentQuestion.id}`}
+              maxLength={8_000}
+              onChange={(event) =>
+                setDraftAnswers((current) => ({
+                  ...current,
+                  [currentQuestion.id]: event.target.value,
+                }))
+              }
+              rows={9}
+              value={selectedAnswer}
+            />
+            <span>{selectedAnswer.length} / 8000</span>
+          </div>
+        ) : (
+          <fieldset
+            className="learning-options"
+            disabled={currentAnswered || currentQuestion.status !== 'ready'}
+          >
+            <legend className="sr-only">选择答案</legend>
+            {currentQuestion.options.map((option) => (
+              <label
+                className={`learning-option${selectedAnswer === option.id ? ' is-selected' : ''}${currentAnswered ? ' is-locked' : ''}`}
+                key={option.id}
+              >
+                <input
+                  checked={selectedAnswer === option.id}
+                  name={`question-${currentQuestion.id}`}
+                  onChange={() =>
+                    setDraftAnswers((current) => ({ ...current, [currentQuestion.id]: option.id }))
+                  }
+                  type="radio"
+                  value={option.id}
+                />
+                <span className="learning-option__marker" aria-hidden="true" />
+                <span>{option.label}</span>
+              </label>
+            ))}
+          </fieldset>
+        )}
 
         {submitError ? <ErrorNotice error={submitError} title="答案未提交" /> : null}
 
@@ -410,7 +457,18 @@ export function PracticeSession({
               <strong>{feedback.outcome === 'correct' ? '回答正确' : '需要再巩固'}</strong>
               {feedback.masteryReason ? <span>{feedback.masteryReason}</span> : null}
             </div>
-            {feedback.explanation ? <p>{feedback.explanation}</p> : null}
+            {feedback.gradingFeedback ? (
+              <div className="learning-feedback__detail">
+                <strong>AI 判分反馈</strong>
+                <p>{feedback.gradingFeedback}</p>
+              </div>
+            ) : null}
+            {feedback.explanation ? (
+              <div className="learning-feedback__detail">
+                <strong>{constructedResponse ? '参考解答' : '题目解析'}</strong>
+                <p>{feedback.explanation}</p>
+              </div>
+            ) : null}
             <button
               className="button button--small learning-evidence-toggle"
               disabled={feedback.evidence.length === 0}
@@ -462,7 +520,7 @@ export function PracticeSession({
           ) : currentQuestion.status === 'ready' ? (
             <button
               className="button button--primary"
-              disabled={!selectedAnswer || submitting}
+              disabled={!answerReady || submitting}
               onClick={() => void submit()}
               type="button"
             >
@@ -471,7 +529,13 @@ export function PracticeSession({
               ) : (
                 <ChevronRight aria-hidden="true" size={16} />
               )}
-              {submitting ? '正在提交' : '提交答案'}
+              {submitting
+                ? constructedResponse
+                  ? 'AI 正在判分'
+                  : '正在提交'
+                : constructedResponse
+                  ? '提交并判分'
+                  : '提交答案'}
             </button>
           ) : (
             <button className="button button--primary" onClick={skipCurrentQuestion} type="button">

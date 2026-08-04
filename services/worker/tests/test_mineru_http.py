@@ -66,7 +66,37 @@ async def test_mineru_health_probe_is_fail_closed_and_preserves_version() -> Non
 
 
 @pytest.mark.asyncio
-async def test_mineru_maps_one_response_to_ordered_raw_pages(tmp_path: Path) -> None:
+async def test_mineru_health_probe_ignores_ambient_proxy_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: list[dict[str, object]] = []
+    real_client = httpx.AsyncClient
+
+    def recording_client(**kwargs: object) -> httpx.AsyncClient:
+        created.append(kwargs)
+        return real_client(**kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", recording_client)
+    status = await probe_mineru_api(
+        base_url="http://mineru.local",
+        token=None,
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(
+                200,
+                json={"status": "healthy", "version": "3.4.4", "protocol_version": 2},
+            )
+        ),
+    )
+
+    assert status.ready is True
+    assert created[0]["trust_env"] is False
+
+
+@pytest.mark.asyncio
+async def test_mineru_maps_one_response_to_ordered_raw_pages(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     sandbox = Sandbox(tmp_path, tmp_path / "input.bin", tmp_path / "output")
     sandbox.output_dir.mkdir()
     digest = _pdf(sandbox.input_path)
@@ -96,6 +126,14 @@ async def test_mineru_maps_one_response_to_ordered_raw_pages(tmp_path: Path) -> 
             json={"results": {"input": {"content_list": json.dumps(content)}}},
         )
 
+    created: list[dict[str, object]] = []
+    real_client = httpx.AsyncClient
+
+    def recording_client(**kwargs: object) -> httpx.AsyncClient:
+        created.append(kwargs)
+        return real_client(**kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", recording_client)
     parser = MineruHttpParser(
         base_url="http://mineru.local",
         token=None,
@@ -119,6 +157,7 @@ async def test_mineru_maps_one_response_to_ordered_raw_pages(tmp_path: Path) -> 
     assert result.pages[1].blocks[0].type is BlockType.TABLE
     assert result.pages[1].blocks[0].text.startswith("| token")
     assert result.pages[0].blocks[0].bbox.x1 == pytest.approx(540)
+    assert created[0]["trust_env"] is False
 
 
 @pytest.mark.asyncio

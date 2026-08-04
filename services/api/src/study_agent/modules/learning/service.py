@@ -35,9 +35,18 @@ from study_agent.modules.learning.concepts import (
     ChunkCandidate,
     build_learning_unit_candidates,
     clean_learning_unit_label,
+    document_title_from_filename,
     document_topic_from_filename,
+    exercise_prototype_number,
+    is_exercise_prototype_label,
     is_zero_placeholder_label,
     practice_evidence_stats,
+    practice_mode_for_unit,
+)
+from study_agent.modules.learning.grading import (
+    ConstructedAnswerGrader,
+    ConstructedGradingError,
+    normalize_constructed_answer,
 )
 from study_agent.modules.learning.mastery import MasteryState, update_mastery
 from study_agent.modules.learning.questions import (
@@ -45,6 +54,7 @@ from study_agent.modules.learning.questions import (
     QuestionGenerator,
     QuestionValidationError,
     balanced_random_answer_position,
+    infer_exercise_question_type,
     position_correct_option,
     select_question_evidence,
 )
@@ -66,6 +76,7 @@ from study_contracts import (
     LearningSummary,
     LearningUnit,
     LearningUnitKind,
+    LearningUnitPracticeMode,
     LearningUnitPracticeStatus,
     LearningUnitSource,
     LearningUnitStatus,
@@ -151,6 +162,65 @@ def _is_legacy_zero_placeholder(unit: LearningUnitModel) -> bool:
     return is_zero_placeholder_label(unit.label) or is_zero_placeholder_label(key_label)
 
 
+def _generation_target_schedule(
+    group_sizes: tuple[int, ...], total_items: int
+) -> tuple[tuple[int, int], ...]:
+    """Allocate every selected scope before spreading work across its prototypes."""
+
+    if total_items < 1 or not group_sizes or any(size < 1 for size in group_sizes):
+        return ()
+
+    counts = [0] * len(group_sizes)
+    for group_index in range(min(total_items, len(group_sizes))):
+        counts[group_index] = 1
+    remaining = total_items - sum(counts)
+
+    while remaining > 0:
+        added_distinct_target = False
+        for group_index, group_size in enumerate(group_sizes):
+            if remaining == 0:
+                break
+            if counts[group_index] >= group_size:
+                continue
+            counts[group_index] += 1
+            remaining -= 1
+            added_distinct_target = True
+        if added_distinct_target:
+            continue
+        for group_index in range(len(group_sizes)):
+            if remaining == 0:
+                break
+            counts[group_index] += 1
+            remaining -= 1
+
+    candidate_indices: list[tuple[int, ...]] = []
+    for group_size, count in zip(group_sizes, counts, strict=True):
+        if count == 0:
+            candidate_indices.append(())
+        elif count == 1:
+            candidate_indices.append((0,))
+        elif count <= group_size:
+            denominator = count - 1
+            candidate_indices.append(
+                tuple(
+                    (position * (group_size - 1) + denominator // 2) // denominator
+                    for position in range(count)
+                )
+            )
+        else:
+            candidate_indices.append(
+                tuple(range(group_size))
+                + tuple(index % group_size for index in range(count - group_size))
+            )
+
+    schedule: list[tuple[int, int]] = []
+    for position in range(max(counts, default=0)):
+        for group_index, indices in enumerate(candidate_indices):
+            if position < len(indices):
+                schedule.append((group_index, indices[position]))
+    return tuple(schedule)
+
+
 class LearningLoopService(LearningBatchProcessor):
     def __init__(
         self,
@@ -164,6 +234,10 @@ class LearningLoopService(LearningBatchProcessor):
         self._clock = clock
         self._provider_registry = provider_registry
         self._generator = QuestionGenerator(
+            provider_registry,
+            timeout_seconds=settings.provider_timeout_seconds,
+        )
+        self._grader = ConstructedAnswerGrader(
             provider_registry,
             timeout_seconds=settings.provider_timeout_seconds,
         )
@@ -664,11 +738,16 @@ class LearningLoopService(LearningBatchProcessor):
                         "幂等键已绑定到另一份作答请求。",
                     )
                 try:
-                    normalized_answer = score_answer(
-                        existing_question.question_type,
-                        existing_question.correct_answer,
-                        request.answer,
-                    ).submitted_answer
+                    existing_question_type = QuestionType(existing_question.question_type)
+                    normalized_answer = (
+                        normalize_constructed_answer(request.answer)
+                        if existing_question_type.is_constructed_response
+                        else score_answer(
+                            existing_question_type,
+                            existing_question.correct_answer,
+                            request.answer,
+                        ).submitted_answer
+                    )
                 except (InvalidAnswerError, ValueError) as exc:
                     raise LearningServiceError(
                         LearningServiceErrorCode.INVALID_REQUEST, "答案格式无效。"
@@ -716,19 +795,60 @@ class LearningLoopService(LearningBatchProcessor):
                     LearningServiceErrorCode.ATTEMPT_CONFLICT,
                     "该题目已经提交过作答。",
                 )
-            evidence = await self._question_evidence(session, question)
+            evidence, evidence_material = await self._question_evidence_material(session, question)
             if not evidence:
                 raise LearningServiceError(
                     LearningServiceErrorCode.STALE_QUESTION, "题目来源已失效。"
                 )
-            try:
-                scored = score_answer(
-                    question.question_type, question.correct_answer, request.answer
-                )
-            except (InvalidAnswerError, ValueError) as exc:
-                raise LearningServiceError(
-                    LearningServiceErrorCode.INVALID_REQUEST, "答案格式无效。"
-                ) from exc
+            question_type = QuestionType(question.question_type)
+            grading_feedback: str | None = None
+            if question_type.is_constructed_response:
+                try:
+                    constructed_grade = await self._grader.grade(
+                        question_type=question_type,
+                        prompt=question.prompt,
+                        reference_answer=question.correct_answer,
+                        solution=question.explanation,
+                        submitted_answer=request.answer,
+                        evidence_texts=tuple(chunk.text for chunk in evidence_material),
+                    )
+                except ProviderError as exc:
+                    if exc.code is ProviderErrorCode.NOT_CONFIGURED:
+                        code = LearningServiceErrorCode.PROVIDER_NOT_CONFIGURED
+                        detail = "AI 大题判分 Provider 未配置。"
+                    elif exc.code is ProviderErrorCode.TIMEOUT:
+                        code = LearningServiceErrorCode.PROVIDER_TIMEOUT
+                        detail = "AI 大题判分响应超时, 请保留答案后重试。"
+                    else:
+                        code = LearningServiceErrorCode.PROVIDER_BAD_RESPONSE
+                        detail = "AI 大题判分暂时无法给出可靠结果, 请稍后重试。"
+                    raise LearningServiceError(code, detail) from exc
+                except ConstructedGradingError as exc:
+                    code = (
+                        LearningServiceErrorCode.PROVIDER_TIMEOUT
+                        if exc.code is ProviderErrorCode.TIMEOUT
+                        else LearningServiceErrorCode.PROVIDER_BAD_RESPONSE
+                    )
+                    detail = (
+                        "AI 大题判分响应超时, 请保留答案后重试。"
+                        if code is LearningServiceErrorCode.PROVIDER_TIMEOUT
+                        else "AI 大题判分暂时无法给出可靠结果, 请稍后重试。"
+                    )
+                    raise LearningServiceError(code, detail) from exc
+                submitted_answer = constructed_grade.submitted_answer
+                correct = constructed_grade.correct
+                score = constructed_grade.score
+                grading_feedback = constructed_grade.feedback
+            else:
+                try:
+                    scored = score_answer(question_type, question.correct_answer, request.answer)
+                except (InvalidAnswerError, ValueError) as exc:
+                    raise LearningServiceError(
+                        LearningServiceErrorCode.INVALID_REQUEST, "答案格式无效。"
+                    ) from exc
+                submitted_answer = scored.submitted_answer
+                correct = scored.correct
+                score = scored.score
             mastery = await session.scalar(
                 select(LearningMasteryModel)
                 .where(
@@ -745,10 +865,10 @@ class LearningLoopService(LearningBatchProcessor):
                 last_score=0 if mastery is None else mastery.last_score,
             )
             mastery_result = update_mastery(
-                old_state, correct=scored.correct, viewed_hint=request.viewed_hint
+                old_state, correct=correct, viewed_hint=request.viewed_hint
             )
             now = _now(self._clock)
-            review_at = next_review_at(mastery_result.level, correct=scored.correct, now=now)
+            review_at = next_review_at(mastery_result.level, correct=correct, now=now)
             if mastery is None:
                 mastery = LearningMasteryModel(
                     id=new_id(),
@@ -770,15 +890,16 @@ class LearningLoopService(LearningBatchProcessor):
                 session_id=session_id,
                 question_id=question_id,
                 idempotency_key_hash=key_hash,
-                answer=scored.submitted_answer,
-                score=scored.score,
-                correct=scored.correct,
+                answer=submitted_answer,
+                score=score,
+                correct=correct,
                 viewed_hint=request.viewed_hint,
                 elapsed_ms=request.elapsed_ms,
                 previous_mastery_level=mastery_result.previous_level.value,
                 mastery_level=mastery_result.level.value,
                 next_review_at=review_at,
                 feedback=mastery_result.reason,
+                grading_feedback=grading_feedback,
                 evidence_refs=[ref.model_dump(mode="json") for ref in evidence],
                 answered_at=now,
             )
@@ -797,9 +918,10 @@ class LearningLoopService(LearningBatchProcessor):
             return PracticeAttemptResult(
                 id=attempt.id,
                 question_id=question_id,
-                outcome=AttemptOutcome.CORRECT if scored.correct else AttemptOutcome.INCORRECT,
-                score=scored.score,
+                outcome=AttemptOutcome.CORRECT if correct else AttemptOutcome.INCORRECT,
+                score=score,
                 explanation=question.explanation,
+                grading_feedback=grading_feedback,
                 evidence_refs=evidence,
                 mastery=MasteryUpdate(
                     learning_unit_id=question.learning_unit_id,
@@ -927,29 +1049,24 @@ class LearningLoopService(LearningBatchProcessor):
         )
         if managed_batch is None:
             return
-        unit_id = managed_batch.learning_unit_ids[
-            (item.ordinal - 1) % len(managed_batch.learning_unit_ids)
-        ]
-        unit = await session.scalar(
-            select(LearningUnitModel).where(
-                LearningUnitModel.id == unit_id,
-                LearningUnitModel.user_id == managed_batch.user_id,
-                LearningUnitModel.course_id == managed_batch.course_id,
-            )
+        unit, practice_mode = await self._generation_unit_for_item(
+            session,
+            managed_batch,
+            item,
         )
+        unit_id = None if unit is None else unit.id
         evidence = await self._current_evidence(
-            session, managed_batch.user_id, managed_batch.course_id, unit_id
+            session, managed_batch.user_id, managed_batch.course_id, unit_id or ""
         )
         started = _now(self._clock)
         provider_name: str | None = None
         model_name: str | None = None
         retry_item_failure = False
+        previous_failure_code = item.failure_code
         try:
             if unit is None or not evidence[0]:
                 raise QuestionValidationError("SOURCE_UNAVAILABLE", "来源已失效。")
-            question_type = (
-                QuestionType.SINGLE_CHOICE if item.ordinal % 2 else QuestionType.TRUE_FALSE
-            )
+            assert unit_id is not None
             chunk_text_by_id = {chunk.id: chunk.text for chunk in evidence[1]}
             authorized_evidence: list[AuthorizedEvidence] = []
             for ref in evidence[0]:
@@ -972,6 +1089,17 @@ class LearningLoopService(LearningBatchProcessor):
             )
             if not question_evidence:
                 raise QuestionValidationError("SOURCE_UNAVAILABLE", "来源片段已失效。")
+            question_type = (
+                infer_exercise_question_type(tuple(item.text for item in question_evidence))
+                if practice_mode is LearningUnitPracticeMode.EXERCISE_VARIANT
+                else (QuestionType.SINGLE_CHOICE if item.ordinal % 2 else QuestionType.TRUE_FALSE)
+            )
+            avoid_prompts = await self._recent_question_prompts(
+                session,
+                user_id=managed_batch.user_id,
+                course_id=managed_batch.course_id,
+                learning_unit_id=unit_id,
+            )
             provider_name = "deepseek"
             question, _response_id, model_name = await self._generator.generate(
                 question_id=new_id(),
@@ -980,16 +1108,21 @@ class LearningLoopService(LearningBatchProcessor):
                 unit_label=unit.label,
                 question_type=question_type,
                 evidence=question_evidence,
+                generation_mode=practice_mode,
+                avoid_prompts=avoid_prompts,
+                attempt_number=item.attempt_count + 1,
+                previous_failure_code=previous_failure_code,
             )
-            question = position_correct_option(
-                question,
-                target_index=balanced_random_answer_position(
-                    batch_id=managed_batch.id,
-                    question_type=question_type,
-                    ordinal=item.ordinal,
-                    option_count=len(question.options),
-                ),
-            )
+            if not question_type.is_constructed_response:
+                question = position_correct_option(
+                    question,
+                    target_index=balanced_random_answer_position(
+                        batch_id=managed_batch.id,
+                        question_type=question_type,
+                        ordinal=item.ordinal,
+                        option_count=len(question.options),
+                    ),
+                )
             provider_name = "deepseek"
             question_model = PracticeQuestionModel(
                 id=question.id,
@@ -1007,6 +1140,7 @@ class LearningLoopService(LearningBatchProcessor):
                 status="ready",
                 content_sha256=question.content_sha256,
             )
+
             session.add(question_model)
             # These composite foreign keys do not have ORM relationships, so
             # SQLAlchemy cannot infer that the question must be inserted
@@ -1091,6 +1225,121 @@ class LearningLoopService(LearningBatchProcessor):
                 )
             )
 
+    async def _generation_unit_for_item(
+        self,
+        session: AsyncSession,
+        batch: PracticeBatchModel,
+        item: PracticeBatchItemModel,
+    ) -> tuple[LearningUnitModel | None, LearningUnitPracticeMode]:
+        """Resolve a section selection to one exercise prototype when possible."""
+
+        selected_ids = list(batch.learning_unit_ids)
+        if not selected_ids:
+            return None, LearningUnitPracticeMode.KNOWLEDGE_RECALL
+        selected_rows = list(
+            await session.scalars(
+                select(LearningUnitModel).where(
+                    LearningUnitModel.id.in_(selected_ids),
+                    LearningUnitModel.user_id == batch.user_id,
+                    LearningUnitModel.course_id == batch.course_id,
+                )
+            )
+        )
+        selected_by_id = {unit.id: unit for unit in selected_rows}
+        if any(unit_id not in selected_by_id for unit_id in selected_ids):
+            return None, LearningUnitPracticeMode.KNOWLEDGE_RECALL
+        selected_units = [selected_by_id[unit_id] for unit_id in selected_ids]
+
+        child_rows = list(
+            await session.scalars(
+                select(LearningUnitModel).where(
+                    LearningUnitModel.parent_id.in_(selected_ids),
+                    LearningUnitModel.user_id == batch.user_id,
+                    LearningUnitModel.course_id == batch.course_id,
+                    LearningUnitModel.kind == LearningUnitKind.CONCEPT.value,
+                    LearningUnitModel.status == LearningUnitStatus.AVAILABLE.value,
+                )
+            )
+        )
+        children_by_parent: dict[str, list[LearningUnitModel]] = {}
+        for child in child_rows:
+            if child.parent_id is not None:
+                children_by_parent.setdefault(child.parent_id, []).append(child)
+
+        target_groups: list[list[tuple[LearningUnitModel, LearningUnitPracticeMode]]] = []
+        for selected in selected_units:
+            children = children_by_parent.get(selected.id, [])
+            children.sort(
+                key=lambda child: (
+                    exercise_prototype_number(child.label) or 1_000_000,
+                    child.canonical_key,
+                )
+            )
+            mode = practice_mode_for_unit(
+                selected.kind,
+                selected.label,
+                child_labels=(child.label for child in children),
+            )
+            prototype_children = [
+                child for child in children if is_exercise_prototype_label(child.label)
+            ]
+            if mode is LearningUnitPracticeMode.EXERCISE_VARIANT and prototype_children:
+                target_groups.append(
+                    [
+                        (child, LearningUnitPracticeMode.EXERCISE_VARIANT)
+                        for child in prototype_children
+                    ]
+                )
+                continue
+            if mode is LearningUnitPracticeMode.KNOWLEDGE_RECALL and (
+                selected.kind == LearningUnitKind.SECTION.value
+            ):
+                _refs, chunks = await self._current_evidence(
+                    session,
+                    batch.user_id,
+                    batch.course_id,
+                    selected.id,
+                )
+                mode = practice_mode_for_unit(
+                    selected.kind,
+                    selected.label,
+                    child_labels=(child.label for child in children),
+                    evidence_texts=(chunk.text for chunk in chunks),
+                )
+            target_groups.append([(selected, mode)])
+
+        schedule = _generation_target_schedule(
+            tuple(len(group) for group in target_groups), batch.total_items
+        )
+        schedule_index = item.ordinal - 1
+        if schedule_index < 0 or schedule_index >= len(schedule):
+            return None, LearningUnitPracticeMode.KNOWLEDGE_RECALL
+        group_index, candidate_index = schedule[schedule_index]
+        return target_groups[group_index][candidate_index]
+
+    async def _recent_question_prompts(
+        self,
+        session: AsyncSession,
+        *,
+        user_id: str,
+        course_id: str,
+        learning_unit_id: str | None,
+    ) -> tuple[str, ...]:
+        if learning_unit_id is None:
+            return ()
+        prompts = await session.scalars(
+            select(PracticeQuestionModel.prompt)
+            .where(
+                PracticeQuestionModel.user_id == user_id,
+                PracticeQuestionModel.course_id == course_id,
+                PracticeQuestionModel.learning_unit_id == learning_unit_id,
+                PracticeQuestionModel.status == QuestionStatus.READY.value,
+            )
+            .order_by(PracticeQuestionModel.created_at.desc())
+            .limit(8)
+        )
+        return tuple(prompts)
+
     async def _course_for_principal(
         self,
         session: AsyncSession,
@@ -1168,6 +1417,7 @@ class LearningLoopService(LearningBatchProcessor):
                 page_ordinal=chunk.page_ordinal,
                 ordinal=chunk.ordinal,
                 document_topic=document_topic_from_filename(document.filename),
+                document_title=document_title_from_filename(document.filename),
             )
             for document, chunk in rows
         ]
@@ -1264,7 +1514,7 @@ class LearningLoopService(LearningBatchProcessor):
         principal: Principal,
         course_id: str,
     ) -> list[LearningUnit]:
-        rows = list(
+        all_rows = list(
             await session.scalars(
                 select(LearningUnitModel)
                 .join(UserModel, UserModel.id == LearningUnitModel.user_id)
@@ -1277,11 +1527,15 @@ class LearningLoopService(LearningBatchProcessor):
             )
         )
         # Legacy placeholder rows can still be referenced by questions, mastery, and sources.
+        visible_rows = [unit for unit in all_rows if not _is_legacy_zero_placeholder(unit)]
+        child_labels_by_parent: dict[str, list[str]] = {}
+        for child in visible_rows:
+            if child.parent_id is not None:
+                child_labels_by_parent.setdefault(child.parent_id, []).append(child.label)
         rows = [
             unit
-            for unit in rows
-            if not _is_legacy_zero_placeholder(unit)
-            and (
+            for unit in visible_rows
+            if (
                 unit.kind == LearningUnitKind.CONCEPT.value
                 or (unit.kind == LearningUnitKind.SECTION.value and unit.parent_id is None)
             )
@@ -1321,6 +1575,12 @@ class LearningLoopService(LearningBatchProcessor):
                 )
             else:
                 practice_status = LearningUnitPracticeStatus.STALE
+            practice_mode = practice_mode_for_unit(
+                unit.kind,
+                unit.label,
+                child_labels=child_labels_by_parent.get(unit.id, ()),
+                evidence_texts=(chunk.text for chunk in evidence[1]),
+            )
             unit_sources = source_by_unit.get(unit.id, [])
             if unit.kind == LearningUnitKind.SECTION.value and evidence[0]:
                 unit_sources = [
@@ -1343,6 +1603,15 @@ class LearningLoopService(LearningBatchProcessor):
                 parent_id=unit.parent_id,
                 status=LearningUnitStatus(unit.status),
                 practice_status=practice_status,
+                practice_mode=practice_mode,
+                prototype_question_type=(
+                    infer_exercise_question_type(tuple(chunk.text for chunk in evidence[1]))
+                    if practice_mode is LearningUnitPracticeMode.EXERCISE_VARIANT
+                    and unit.kind == LearningUnitKind.CONCEPT.value
+                    and is_exercise_prototype_label(unit.label)
+                    and evidence[1]
+                    else None
+                ),
                 evidence_chunk_count=stats.chunk_count,
                 evidence_char_count=stats.char_count,
                 sources=unit_sources,
@@ -1599,6 +1868,31 @@ class LearningLoopService(LearningBatchProcessor):
             )
         )
         attempts_by_question = {attempt.question_id: attempt for attempt in attempts}
+        learning_unit_ids = {question.learning_unit_id for _item, question in rows}
+        unit_rows = list(
+            await session.scalars(
+                select(LearningUnitModel).where(
+                    LearningUnitModel.user_id == session_model.user_id,
+                    LearningUnitModel.course_id == session_model.course_id,
+                    LearningUnitModel.id.in_(learning_unit_ids),
+                )
+            )
+        )
+        unit_by_id = {unit.id: unit for unit in unit_rows}
+        child_labels_by_parent: dict[str, list[str]] = {}
+        if unit_rows:
+            children = list(
+                await session.scalars(
+                    select(LearningUnitModel).where(
+                        LearningUnitModel.user_id == session_model.user_id,
+                        LearningUnitModel.course_id == session_model.course_id,
+                        LearningUnitModel.parent_id.in_(unit_by_id),
+                    )
+                )
+            )
+            for child in children:
+                if child.parent_id is not None:
+                    child_labels_by_parent.setdefault(child.parent_id, []).append(child.label)
         questions: list[PracticeQuestionView] = []
         for _session_question, question in rows:
             attempt = attempts_by_question.get(question.id)
@@ -1613,11 +1907,23 @@ class LearningLoopService(LearningBatchProcessor):
                 if persisted_status is QuestionStatus.READY
                 else persisted_status
             )
+            unit = unit_by_id.get(question.learning_unit_id)
+            practice_mode = (
+                practice_mode_for_unit(
+                    unit.kind,
+                    unit.label,
+                    child_labels=child_labels_by_parent.get(unit.id, ()),
+                    evidence_texts=(ref.quote for ref in evidence),
+                )
+                if unit is not None
+                else LearningUnitPracticeMode.KNOWLEDGE_RECALL
+            )
             questions.append(
                 PracticeQuestionView(
                     id=question.id,
                     learning_unit_id=question.learning_unit_id,
                     question_type=question.question_type,
+                    practice_mode=practice_mode,
                     prompt=question.prompt,
                     options=question.options,
                     difficulty=question.difficulty,
@@ -1633,6 +1939,7 @@ class LearningLoopService(LearningBatchProcessor):
                     ),
                     submitted_answer=None if attempt is None else attempt.answer,
                     explanation=None if attempt is None else question.explanation,
+                    grading_feedback=None if attempt is None else attempt.grading_feedback,
                     mastery_reason=None if attempt is None else attempt.feedback,
                     viewed_hint=None if attempt is None else attempt.viewed_hint,
                 )
@@ -1688,6 +1995,7 @@ class LearningLoopService(LearningBatchProcessor):
             outcome=AttemptOutcome.CORRECT if attempt.correct else AttemptOutcome.INCORRECT,
             score=attempt.score,
             explanation=question.explanation,
+            grading_feedback=attempt.grading_feedback,
             evidence_refs=refs,
             mastery=MasteryUpdate(
                 learning_unit_id=question.learning_unit_id,
