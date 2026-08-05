@@ -790,6 +790,15 @@
   white-space: pre-wrap;
 }
 
+.answer-basis-note {
+  background: #fff8e6;
+  border-left: 3px solid #d49a2a;
+  color: #72551b;
+  line-height: 1.5;
+  margin: 12px 0 0;
+  padding: 8px 10px;
+}
+
 .claim-list {
   display: grid;
   gap: 12px;

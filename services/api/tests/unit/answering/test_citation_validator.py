@@ -108,3 +108,21 @@ def test_validator_rejects_unknown_ids_quote_mismatches_and_missing_provenance()
             payload=_payload(),
             authorized=(_authorized(provenance=()),),
         )
+
+
+def test_evidence_validator_rejects_general_knowledge_bypass() -> None:
+    payload: dict[str, object] = {
+        "schema_version": "1.0",
+        "status": "answered",
+        "answer_basis": "ai_general_knowledge",
+        "answer_markdown": "这是没有课程来源的模型回答。",
+        "claims": [],
+        "citations": [],
+    }
+
+    with pytest.raises(CitationValidationError):
+        CitationValidator().validate(
+            query_id="query-1",
+            payload=payload,
+            authorized=(_authorized(),),
+        )

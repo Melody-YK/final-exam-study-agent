@@ -50,6 +50,8 @@ Choose the response behavior from current_intent:
 - reflection: identify the key misconception or transfer point; before submission keep it as a hint.
 - source: summarize the supplied evidence without turning it into an option selection before
   submission.
+- open_question: answer an open conceptual question about the current topic using the supplied
+  evidence; before submission keep the answer within the same protection rules.
 
 When mode is "hint", never state or quote the correct answer or final calculation result, identify
 an option by letter, number, position, or truth value, or confirm a proposed answer. Every factual
@@ -120,6 +122,26 @@ def infer_tutor_intent(message: str) -> PracticeTutorIntent:
     for intent, keywords in patterns:
         if any(keyword in normalized for keyword in keywords):
             return intent
+    if any(
+        marker in normalized
+        for marker in (
+            "为什么",
+            "怎么",
+            "如何",
+            "什么",
+            "有什么用",
+            "作用",
+            "意义",
+            "关系",
+            "影响",
+            "能否",
+            "可以吗",
+            "是否",
+            "会不会",
+            "?",
+        )
+    ):
+        return PracticeTutorIntent.OPEN_QUESTION
     return PracticeTutorIntent.HINT
 
 

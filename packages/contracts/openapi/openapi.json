@@ -685,6 +685,14 @@
         "title": "AdminUsersResponse",
         "type": "object"
       },
+      "AnswerBasis": {
+        "enum": [
+          "course_materials",
+          "ai_general_knowledge"
+        ],
+        "title": "AnswerBasis",
+        "type": "string"
+      },
       "AnswerStatus": {
         "enum": [
           "answered",
@@ -4732,7 +4740,8 @@
           "answer_check",
           "solution",
           "reflection",
-          "source"
+          "source",
+          "open_question"
         ],
         "title": "PracticeTutorIntent",
         "type": "string"
@@ -5601,6 +5610,16 @@
       "StructuredAnswer": {
         "additionalProperties": false,
         "properties": {
+          "answer_basis": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnswerBasis"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "answer_markdown": {
             "title": "Answer Markdown",
             "type": "string"

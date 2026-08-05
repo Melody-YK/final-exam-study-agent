@@ -87,6 +87,7 @@ class PracticeTutorIntent(StrEnum):
     SOLUTION = "solution"
     REFLECTION = "reflection"
     SOURCE = "source"
+    OPEN_QUESTION = "open_question"
 
 
 class MasteryLevel(StrEnum):

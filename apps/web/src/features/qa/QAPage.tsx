@@ -34,8 +34,8 @@ import { isTerminal, queryRefetchInterval, type QueryStreamConnection } from './
 
 const stages = [
   { key: 'retrieval', label: '检索课程资料' },
-  { key: 'generation', label: '生成有据回答' },
-  { key: 'validation', label: '校验引用' },
+  { key: 'generation', label: '生成回答' },
+  { key: 'validation', label: '校验回答' },
 ] as const
 
 interface SuggestedQueryDraft {
@@ -128,6 +128,9 @@ function refusalLabel(code: string | undefined): string {
   if (code === 'INDEX_UNAVAILABLE') return '索引未就绪'
   if (code === 'NO_CANDIDATES') return '未找到相关内容'
   if (code === 'LOW_RELEVANCE') return '相关度不足'
+  if (code === 'COURSE_SOURCE_REQUIRED') return '需要课程来源'
+  if (code === 'GENERAL_KNOWLEDGE_UNSUITABLE') return '不适合通识回答'
+  if (code === 'GENERAL_PROVIDER_UNAVAILABLE') return '通识回答不可用'
   return '依据不足'
 }
 
@@ -237,8 +240,17 @@ function QueryTurn({
       {answer?.status === 'answered' ? (
         <article className="answer-entry">
           <header>
-            <StatusBadge tone="success">已有来源</StatusBadge>
+            {answer.answer_basis === 'ai_general_knowledge' ? (
+              <StatusBadge tone="warning">AI 通识回答</StatusBadge>
+            ) : (
+              <StatusBadge tone="success">已有课程来源</StatusBadge>
+            )}
           </header>
+          {answer.answer_basis === 'ai_general_knowledge' ? (
+            <p className="answer-basis-note">
+              未找到可验证的课程来源。以下内容由 AI 根据通用知识生成，仅作补充参考。
+            </p>
+          ) : null}
           <div className="answer-markdown">{answer.answer_markdown}</div>
           <div className="claim-list">
             {answer.claims.map((claim) => (

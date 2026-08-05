@@ -1,6 +1,13 @@
 """Stable contracts shared by the API and local worker."""
 
-from study_contracts.answers import AnswerStatus, Citation, Claim, Refusal, StructuredAnswer
+from study_contracts.answers import (
+    AnswerBasis,
+    AnswerStatus,
+    Citation,
+    Claim,
+    Refusal,
+    StructuredAnswer,
+)
 from study_contracts.canonical import canonical_json_bytes, canonical_sha256
 from study_contracts.chunks import Chunk
 from study_contracts.documents import (
@@ -116,6 +123,7 @@ __all__ = [
     "PARSER_RAW_MEDIA_TYPE",
     "PARSE_ATTEMPT_MEDIA_TYPE",
     "PARSE_PAGE_MEDIA_TYPE",
+    "AnswerBasis",
     "AnswerStatus",
     "Asset",
     "AssetType",

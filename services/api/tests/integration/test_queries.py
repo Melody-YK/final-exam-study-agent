@@ -36,7 +36,12 @@ from study_agent.modules.answering.retrieval import RetrievedEvidence
 from study_agent.modules.answering.types import AuthorizedEvidence, ConceptEvidenceContext
 from study_agent.modules.courses.repository import CourseRepository
 from study_agent.providers.factory import ProviderRegistry
-from study_agent.providers.protocols import EvidencePrompt, StructuredAnswerDraft
+from study_agent.providers.protocols import (
+    EvidencePrompt,
+    JsonCompletionPrompt,
+    StructuredAnswerDraft,
+    StructuredJsonDraft,
+)
 from study_agent.storage.local import LocalStorage
 from study_contracts import Evidence, SourceLocator
 
@@ -208,6 +213,8 @@ class StaticPrincipalProvider:
 class RecordingChatProvider:
     def __init__(self) -> None:
         self.requests: list[EvidencePrompt] = []
+        self.general_requests: list[JsonCompletionPrompt] = []
+        self.fallback_requests: list[JsonCompletionPrompt] = []
 
     async def answer(self, request: EvidencePrompt) -> StructuredAnswerDraft:
         self.requests.append(request)
@@ -239,6 +246,19 @@ class RecordingChatProvider:
                         "bounding_boxes": [],
                     }
                 ],
+            },
+        )
+
+    async def complete_json(self, request: JsonCompletionPrompt) -> StructuredJsonDraft:
+        self.general_requests.append(request)
+        if request.response_schema_version == "general-knowledge-fallback-1.0":
+            self.fallback_requests.append(request)
+        return StructuredJsonDraft(
+            model="test-general",
+            payload={
+                "can_answer": True,
+                "answer_markdown": "这是基于通用知识生成的补充解释。",
+                "reason": None,
             },
         )
 
@@ -745,10 +765,12 @@ async def test_follow_up_uses_bounded_non_evidence_context_and_new_conversation_
             },
         )
         assert unsupported.status_code == 202
-        assert unsupported.json()["status"] == "abstained"
-        assert unsupported.json()["answer"]["refusal"]["code"] == "NO_CANDIDATES"
+        assert unsupported.json()["status"] == "answered"
+        assert unsupported.json()["answer"]["answer_basis"] == "ai_general_knowledge"
+        assert unsupported.json()["answer"]["citations"] == []
         assert unsupported.json()["retrieval_diagnostic"] == "no_candidates"
         assert len(provider.requests) == 3
+        assert len(provider.fallback_requests) == 1
 
         repository = QueryRepository(
             database,
@@ -910,8 +932,8 @@ async def test_insufficient_first_retrieval_repairs_once_and_persists_diagnostic
     assert repaired.json()["retrieval_rounds"][0]["candidate_count"] == 0
     assert repaired.json()["retrieval_rounds"][1]["candidate_count"] == 1
     assert exhausted.status_code == 202
-    assert exhausted.json()["status"] == "abstained"
-    assert exhausted.json()["answer"]["refusal"]["code"] == "NO_CANDIDATES"
+    assert exhausted.json()["status"] == "answered"
+    assert exhausted.json()["answer"]["answer_basis"] == "ai_general_knowledge"
     assert exhausted.json()["retrieval_diagnostic"] == "no_candidates"
     assert len(exhausted.json()["retrieval_rounds"]) == 3
     assert personalized.status_code == 202
@@ -1125,7 +1147,7 @@ async def test_recent_context_enforces_default_turn_and_character_budgets(
 
 
 @pytest.mark.integration
-async def test_query_without_active_index_abstains_without_chat_call(
+async def test_query_without_active_index_requires_course_source_for_course_specific_question(
     test_database_url: str,
     tmp_path: Path,
 ) -> None:
@@ -1152,6 +1174,7 @@ async def test_query_without_active_index_abstains_without_chat_call(
 
     assert response.status_code == 202
     assert response.json()["status"] == "abstained"
-    assert response.json()["answer"]["refusal"]["code"] == "INDEX_UNAVAILABLE"
+    assert response.json()["answer"]["refusal"]["code"] == "COURSE_SOURCE_REQUIRED"
     assert provider.requests == []
+    assert provider.general_requests == []
     await database.dispose()

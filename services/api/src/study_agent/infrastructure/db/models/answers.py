@@ -120,7 +120,8 @@ class ConversationMessageModel(Base):
         CheckConstraint("role IN ('user', 'assistant')", name="ck_conversation_messages_role"),
         CheckConstraint(
             "intent IS NULL OR intent IN "
-            "('hint', 'clarify', 'example', 'answer_check', 'solution', 'reflection', 'source')",
+            "('hint', 'clarify', 'example', 'answer_check', 'solution', 'reflection', 'source', "
+            "'open_question')",
             name="ck_conversation_messages_intent",
         ),
         CheckConstraint(

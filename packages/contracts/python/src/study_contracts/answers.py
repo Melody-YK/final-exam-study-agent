@@ -13,6 +13,11 @@ class AnswerStatus(StrEnum):
     ABSTAINED = "abstained"
 
 
+class AnswerBasis(StrEnum):
+    COURSE_MATERIALS = "course_materials"
+    AI_GENERAL_KNOWLEDGE = "ai_general_knowledge"
+
+
 class Claim(ContractModel):
     id: str = Field(min_length=1)
     text: str = Field(min_length=1)
@@ -48,6 +53,7 @@ class StructuredAnswer(ContractModel):
     query_id: str = Field(min_length=1)
     status: AnswerStatus
     answer_markdown: str
+    answer_basis: AnswerBasis | None = None
     claims: list[Claim] = Field(default_factory=list)
     citations: list[Citation] = Field(default_factory=list)
     refusal: Refusal | None = None
@@ -68,20 +74,40 @@ class StructuredAnswer(ContractModel):
                 raise ValueError("abstained answers must not include claims or citations")
             if self.refusal is None:
                 raise ValueError("abstained answers require a refusal")
+            if self.answer_basis is not None:
+                raise ValueError("abstained answers must not declare an answer basis")
             return self
 
         if not self.answer_markdown.strip():
             raise ValueError("answered responses require answer text")
-        if not self.claims or not self.citations:
-            raise ValueError("answered responses require claims and citations")
         if self.refusal is not None:
             raise ValueError("answered responses must not include a refusal")
 
-        known_citation_ids = set(citation_ids)
-        for claim in self.claims:
-            if not claim.citation_ids:
-                raise ValueError("every answered claim requires at least one citation")
-            unknown_ids = set(claim.citation_ids) - known_citation_ids
-            if unknown_ids:
-                raise ValueError("claim references citation identifiers not present in citations")
+        if self.answer_basis is None:
+            self.answer_basis = (
+                AnswerBasis.COURSE_MATERIALS
+                if self.claims or self.citations
+                else AnswerBasis.AI_GENERAL_KNOWLEDGE
+            )
+        if self.answer_basis is AnswerBasis.COURSE_MATERIALS and (
+            not self.claims or not self.citations
+        ):
+            raise ValueError("course-material answers require claims and citations")
+        if self.answer_basis is AnswerBasis.AI_GENERAL_KNOWLEDGE and (
+            self.claims or self.citations
+        ):
+            raise ValueError("AI general-knowledge answers must not include claims or citations")
+
+        if self.answer_basis is AnswerBasis.COURSE_MATERIALS:
+            known_citation_ids = set(citation_ids)
+            for claim in self.claims:
+                if not claim.citation_ids:
+                    raise ValueError("every answered claim requires at least one citation")
+                unknown_ids = set(claim.citation_ids) - known_citation_ids
+                if unknown_ids:
+                    raise ValueError(
+                        "claim references citation identifiers not present in citations"
+                    )
+            return self
+
         return self

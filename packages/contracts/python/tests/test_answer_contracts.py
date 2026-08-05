@@ -2,6 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from study_contracts.answers import (
+    AnswerBasis,
     AnswerStatus,
     Citation,
     Claim,
@@ -52,6 +53,27 @@ def test_answered_response_round_trips_claim_and_source_location() -> None:
 
     assert restored == answer
     assert restored.citations[0].locator.ordinal == 12
+
+
+def test_general_answer_is_marked_and_cannot_claim_course_citations() -> None:
+    answer = StructuredAnswer(
+        query_id="query-general",
+        status=AnswerStatus.ANSWERED,
+        answer_markdown="可以把进程理解成一个运行中的程序实例。",
+        answer_basis=AnswerBasis.AI_GENERAL_KNOWLEDGE,
+    )
+
+    restored = StructuredAnswer.model_validate_json(answer.model_dump_json())
+
+    assert restored.answer_basis is AnswerBasis.AI_GENERAL_KNOWLEDGE
+    with pytest.raises(ValidationError):
+        StructuredAnswer(
+            query_id="query-general",
+            status=AnswerStatus.ANSWERED,
+            answer_markdown="无来源回答",
+            answer_basis=AnswerBasis.AI_GENERAL_KNOWLEDGE,
+            claims=[Claim(id="claim-1", text="无来源", citation_ids=["citation-1"])],
+        )
 
 
 def test_abstained_response_requires_refusal_and_forbids_claims() -> None:

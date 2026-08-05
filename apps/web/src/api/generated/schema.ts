@@ -1405,6 +1405,11 @@ export interface components {
             items: components["schemas"]["AdminAccountResponse"][];
         };
         /**
+         * AnswerBasis
+         * @enum {string}
+         */
+        AnswerBasis: "course_materials" | "ai_general_knowledge";
+        /**
          * AnswerStatus
          * @enum {string}
          */
@@ -2820,7 +2825,7 @@ export interface components {
          * PracticeTutorIntent
          * @enum {string}
          */
-        PracticeTutorIntent: "hint" | "clarify" | "example" | "answer_check" | "solution" | "reflection" | "source";
+        PracticeTutorIntent: "hint" | "clarify" | "example" | "answer_check" | "solution" | "reflection" | "source" | "open_question";
         /** PracticeTutorMessage */
         PracticeTutorMessage: {
             /** Content */
@@ -3099,6 +3104,7 @@ export interface components {
         };
         /** StructuredAnswer */
         StructuredAnswer: {
+            answer_basis?: components["schemas"]["AnswerBasis"] | null;
             /** Answer Markdown */
             answer_markdown: string;
             /** Citations */

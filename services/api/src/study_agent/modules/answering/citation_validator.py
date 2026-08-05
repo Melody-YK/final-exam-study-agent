@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from pydantic import ValidationError
 
 from study_agent.modules.answering.types import AuthorizedEvidence
-from study_contracts import AnswerStatus, StructuredAnswer
+from study_contracts import AnswerBasis, AnswerStatus, StructuredAnswer
 
 
 class CitationValidationError(ValueError):
@@ -42,6 +42,10 @@ class CitationValidator:
 
         if answer.status is AnswerStatus.ABSTAINED:
             return answer
+        if answer.answer_basis is not AnswerBasis.COURSE_MATERIALS:
+            raise CitationValidationError(
+                "the evidence-bound provider cannot return a general-knowledge answer"
+            )
 
         by_id = {item.evidence.id: item for item in authorized}
         if len(by_id) != len(authorized):

@@ -36,7 +36,10 @@ from study_agent.modules.answering.memory import (
 )
 from study_agent.modules.answering.planning import CourseQueryPlanner, QueryPlan
 from study_agent.modules.answering.retrieval import QueryEvidence, RetrievedEvidence
-from study_agent.modules.answering.service import TrustedAnswerService
+from study_agent.modules.answering.service import (
+    GeneralKnowledgeAnswerService,
+    TrustedAnswerService,
+)
 from study_agent.modules.answering.telemetry import log_conversation_event
 from study_agent.modules.answering.types import (
     AnswerExecution,
@@ -47,7 +50,7 @@ from study_agent.observability.trace import get_trace_id, new_trace_id
 from study_agent.providers.errors import ProviderError, ProviderErrorCode
 from study_agent.providers.factory import ProviderRegistry
 from study_agent.providers.protocols import Clock, ConversationContextTurn, LearnerMemoryContext
-from study_contracts import AnswerStatus, Refusal, StructuredAnswer
+from study_contracts import AnswerBasis, AnswerStatus, Refusal, StructuredAnswer
 
 
 @dataclass(frozen=True, slots=True)
@@ -500,7 +503,11 @@ class QueryRepository:
             if query.status == "invalidated":
                 return await self._snapshot(session, query)
             resolved = execution
-            if execution.answer is not None and execution.answer.status is AnswerStatus.ANSWERED:
+            if (
+                execution.answer is not None
+                and execution.answer.status is AnswerStatus.ANSWERED
+                and execution.answer.answer_basis is AnswerBasis.COURSE_MATERIALS
+            ):
                 current = await self._sources_current_in_session(
                     session,
                     query,
@@ -548,34 +555,36 @@ class QueryRepository:
                 query.usage = dict(resolved.usage)
                 query.completed_at = now
                 if answer.status is AnswerStatus.ANSWERED:
-                    if snapshot_id is None or retrieved is None:
-                        raise RuntimeError("answered query requires a retrieval snapshot")
-                    by_id = {item.evidence.id: item for item in retrieved.candidates}
-                    for citation in answer.citations:
-                        source = by_id[citation.id]
-                        session.add(
-                            AnswerDependencyModel(
-                                id=new_id(),
-                                query_id=query.id,
-                                retrieval_snapshot_id=snapshot_id,
-                                user_id=query.user_id,
-                                course_id=query.course_id,
-                                evidence_id=citation.id,
-                                document_id=citation.document_id,
-                                revision_id=citation.revision_id,
-                                chunk_id=citation.chunk_id,
-                                document_name=citation.document_name,
-                                document_deletion_epoch=source.document_deletion_epoch,
-                                content_sha256=source.evidence.content_sha256,
-                                locator=citation.locator.model_dump(mode="json"),
-                                quote=citation.quote,
-                                bounding_boxes=[
-                                    box.model_dump(mode="json") for box in citation.bounding_boxes
-                                ],
-                                provenance=list(source.provenance),
-                                available=True,
+                    if answer.answer_basis is AnswerBasis.COURSE_MATERIALS:
+                        if snapshot_id is None or retrieved is None:
+                            raise RuntimeError("answered query requires a retrieval snapshot")
+                        by_id = {item.evidence.id: item for item in retrieved.candidates}
+                        for citation in answer.citations:
+                            source = by_id[citation.id]
+                            session.add(
+                                AnswerDependencyModel(
+                                    id=new_id(),
+                                    query_id=query.id,
+                                    retrieval_snapshot_id=snapshot_id,
+                                    user_id=query.user_id,
+                                    course_id=query.course_id,
+                                    evidence_id=citation.id,
+                                    document_id=citation.document_id,
+                                    revision_id=citation.revision_id,
+                                    chunk_id=citation.chunk_id,
+                                    document_name=citation.document_name,
+                                    document_deletion_epoch=source.document_deletion_epoch,
+                                    content_sha256=source.evidence.content_sha256,
+                                    locator=citation.locator.model_dump(mode="json"),
+                                    quote=citation.quote,
+                                    bounding_boxes=[
+                                        box.model_dump(mode="json")
+                                        for box in citation.bounding_boxes
+                                    ],
+                                    provenance=list(source.provenance),
+                                    available=True,
+                                )
                             )
-                        )
                     append_query_event(
                         session,
                         query,
@@ -899,21 +908,24 @@ class QueryRepository:
                 continue
             answer: str | None = None
             if query.status == "answered":
-                query_dependencies = dependencies_by_query.get(query.id, [])
-                expected_citations = len(query.citations)
-                sources_current = bool(query_dependencies) and (
-                    len(query_dependencies) == expected_citations
-                    and all(
-                        self._context_dependency_is_current(
-                            dependency,
-                            documents_by_id,
-                            chunks_by_key,
-                        )
-                        for dependency in query_dependencies
-                    )
-                )
-                if sources_current:
+                if not query.citations:
                     answer = query.answer_markdown.strip() or None
+                else:
+                    query_dependencies = dependencies_by_query.get(query.id, [])
+                    expected_citations = len(query.citations)
+                    sources_current = bool(query_dependencies) and (
+                        len(query_dependencies) == expected_citations
+                        and all(
+                            self._context_dependency_is_current(
+                                dependency,
+                                documents_by_id,
+                                chunks_by_key,
+                            )
+                            for dependency in query_dependencies
+                        )
+                    )
+                    if sources_current:
+                        answer = query.answer_markdown.strip() or None
             turn_chars = len(question) + len(answer or "")
             if turn_chars > remaining:
                 break
@@ -1337,6 +1349,10 @@ class QueryService:
             evidence_gate=self._evidence_gate,
             timeout_seconds=timeout_seconds,
         )
+        self._general_answering = GeneralKnowledgeAnswerService(
+            registry.chat,
+            timeout_seconds=timeout_seconds,
+        )
 
     async def execute(
         self,
@@ -1460,24 +1476,34 @@ class QueryService:
             rounds=tuple(rounds),
             diagnostic=diagnostic,
         )
+        await self._repository.start_generation(principal, query_id)
         if decision.sufficient:
-            await self._repository.start_generation(principal, query_id)
-        execution = await self._answering.answer(
-            query_id=query_id,
-            question=question,
-            active_index=retrieved.active_index,
-            candidates=retrieved.candidates,
-            sources_are_current=lambda: self._evidence.sources_are_current(
-                principal,
-                course_id,
-                retrieved.active_lexical_index_id,
-                retrieved.candidates,
-            ),
-            conversation_context=conversation_context,
-            conversation_summary=conversation_summary,
-            learner_memories=learner_memories,
-            standalone_question=plan.standalone_question,
-        )
+            execution = await self._answering.answer(
+                query_id=query_id,
+                question=question,
+                active_index=retrieved.active_index,
+                candidates=retrieved.candidates,
+                sources_are_current=lambda: self._evidence.sources_are_current(
+                    principal,
+                    course_id,
+                    retrieved.active_lexical_index_id,
+                    retrieved.candidates,
+                ),
+                conversation_context=conversation_context,
+                conversation_summary=conversation_summary,
+                learner_memories=learner_memories,
+                standalone_question=plan.standalone_question,
+            )
+        else:
+            execution = await self._general_answering.answer(
+                query_id=query_id,
+                question=question,
+                diagnostic=diagnostic.value,
+                conversation_context=conversation_context,
+                conversation_summary=conversation_summary,
+                learner_memories=learner_memories,
+                standalone_question=plan.standalone_question,
+            )
         return await self._repository.finalize(
             principal,
             query_id,

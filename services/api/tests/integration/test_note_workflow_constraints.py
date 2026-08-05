@@ -61,7 +61,7 @@ P1_PHASES = (
 )
 UNIT_TYPES = ("slide", "pdf_section", "pdf_page_window")
 SHA256 = "a" * 64
-CURRENT_HEAD = "20260804_0018"
+CURRENT_HEAD = "20260804_0019"
 _DIALECT = postgresql.dialect()
 _TEXT_CAST = re.compile(
     r"::\s*(?:character\s+varying|text)(?:\s*\[\s*\])?",

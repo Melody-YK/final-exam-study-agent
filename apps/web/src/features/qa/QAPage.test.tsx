@@ -716,6 +716,54 @@ describe('QAPage', () => {
     expect(screen.queryByText('进程是资源分配的基本单位。')).not.toBeInTheDocument()
   })
 
+  it('labels a no-source general answer as supplemental AI content', async () => {
+    const answer: StructuredAnswer = {
+      schema_version: '1.0',
+      query_id: 'query-1',
+      status: 'answered',
+      answer_basis: 'ai_general_knowledge',
+      answer_markdown: '进程可以理解成一个运行中的程序实例。',
+      claims: [],
+      citations: [],
+      refusal: null,
+    }
+    vi.spyOn(studyApi, 'createQuery').mockResolvedValue(
+      answeredSnapshot({ answer, retrieval_diagnostic: 'no_candidates' }),
+    )
+    renderInWorkspace(<QAPage />)
+
+    await submitQuestion('什么是进程？')
+
+    expect(await screen.findByText('AI 通识回答')).toBeInTheDocument()
+    expect(screen.getByText(/未找到可验证的课程来源/)).toBeInTheDocument()
+    expect(screen.getByText('进程可以理解成一个运行中的程序实例。')).toBeInTheDocument()
+    expect(screen.queryByText('chapter-1.png')).not.toBeInTheDocument()
+  })
+
+  it('explains when a course-specific fact still requires course evidence', async () => {
+    const answer: StructuredAnswer = {
+      schema_version: '1.0',
+      query_id: 'query-1',
+      status: 'abstained',
+      answer_markdown: '',
+      claims: [],
+      citations: [],
+      refusal: {
+        code: 'COURSE_SOURCE_REQUIRED',
+        message: '这个问题涉及课程中的具体事实，但没有找到可验证来源。',
+      },
+    }
+    vi.spyOn(studyApi, 'createQuery').mockResolvedValue(
+      answeredSnapshot({ status: 'abstained', answer }),
+    )
+    renderInWorkspace(<QAPage />)
+
+    await submitQuestion('老师要求掌握哪些章节？')
+
+    expect(await screen.findByText('需要课程来源')).toBeInTheDocument()
+    expect(screen.getByText(/没有找到可验证来源/)).toBeInTheDocument()
+  })
+
   it('renders a Provider failure turn without manufacturing an answer', async () => {
     vi.spyOn(studyApi, 'createQuery').mockResolvedValue(
       answeredSnapshot({

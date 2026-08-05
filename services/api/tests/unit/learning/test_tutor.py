@@ -129,6 +129,32 @@ async def test_current_example_request_overrides_an_old_answer_attempt() -> None
 
 
 @pytest.mark.asyncio
+async def test_unmatched_open_question_uses_open_question_intent() -> None:
+    provider = _TutorProvider(
+        [{"answer_markdown": "可以把它看成程序运行时的资源容器。", "evidence_ids": ["E1"]}]
+    )
+
+    result = await _tutor(provider).answer(
+        mode=PracticeTutorMode.HINT,
+        question_type=QuestionType.SINGLE_CHOICE,
+        prompt="进程是什么?",
+        options=[
+            QuestionOption(id="a", label="资源分配的基本单位"),
+            QuestionOption(id="b", label="处理器调度的基本单位"),
+        ],
+        correct_answer="a",
+        explanation="进程负责资源分配。",
+        submitted_answer=None,
+        message="这个知识点在实际系统里有什么用?",
+        history=[],
+        evidence=(_evidence(),),
+    )
+
+    assert result.intent is PracticeTutorIntent.OPEN_QUESTION
+    assert provider.requests[0].payload["current_intent"] == "open_question"
+
+
+@pytest.mark.asyncio
 async def test_hint_mode_retries_when_provider_reveals_correct_option() -> None:
     provider = _TutorProvider(
         [
