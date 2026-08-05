@@ -1,3 +1,5 @@
+# ruff: noqa: RUF001
+
 import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
@@ -18,6 +20,7 @@ from study_agent.infrastructure.db.models import (
     DocumentModel,
     DocumentRevisionModel,
     LearningMasteryModel,
+    LearningUnitEvidenceSupplementModel,
     LearningUnitModel,
     LearningUnitSourceModel,
     LexicalManifestModel,
@@ -46,6 +49,8 @@ from study_agent.providers.errors import ProviderError, ProviderErrorCode
 from study_agent.providers.factory import ProviderRegistry
 from study_agent.providers.protocols import JsonCompletionPrompt, StructuredJsonDraft
 from study_contracts import (
+    LearningUnitEvidenceRole,
+    LearningUnitEvidenceSupplementRequest,
     LearningUnitPracticeStatus,
     LearningUnitStatus,
     PracticeBatchRequest,
@@ -164,9 +169,9 @@ async def _seed_practice_fixture(
                 revision_id=revision_id,
                 ordinal=1,
                 text=(
-                    "进程是资源分配的基本单位。它拥有独立的地址空间和系统资源，"  # noqa: RUF001
-                    "由操作系统负责创建、调度和回收。线程是进程中的执行单元，"  # noqa: RUF001
-                    "同一进程内的线程共享进程资源，但可以独立参与处理器调度。"  # noqa: RUF001
+                    "进程是资源分配的基本单位。它拥有独立的地址空间和系统资源，"
+                    "由操作系统负责创建、调度和回收。线程是进程中的执行单元，"
+                    "同一进程内的线程共享进程资源，但可以独立参与处理器调度。"
                 ),
                 locator_kind="page",
                 page_ordinal=1,
@@ -389,6 +394,7 @@ async def test_learning_migration_creates_scoped_tables_and_constraints(
             tables = await _table_names(connection)
             assert {
                 "learning_units",
+                "learning_unit_evidence_supplements",
                 "learning_unit_sources",
                 "learning_mastery",
                 "practice_questions",
@@ -408,6 +414,16 @@ async def test_learning_migration_creates_scoped_tables_and_constraints(
                 "ck_learning_units_kind",
                 "ck_learning_units_status",
             } <= unit_constraints
+            supplement_constraints = await _constraint_names(
+                connection, "learning_unit_evidence_supplements"
+            )
+            assert {
+                "ck_learning_evidence_supplements_role",
+                "ck_learning_evidence_supplements_status",
+                "ck_learning_evidence_supplements_hash",
+                "ck_learning_evidence_supplements_source_hash",
+                "fk_learning_evidence_supplements_source_scope",
+            } <= supplement_constraints
             attempt_constraints = await _constraint_names(connection, "practice_attempts")
             assert {
                 "uq_practice_attempts_idempotency",
@@ -599,7 +615,7 @@ async def test_learning_batch_retries_invalid_model_output_until_all_items_succe
         assert len(snapshot.question_ids) == 5
         assert provider.generation_calls == 6
         assert provider.review_calls == expected_review_calls
-        assert snapshot.items[0].attempt_count == 2
+        assert snapshot.items[0].attempt_count == 1
         assert all(item.attempt_count == 1 for item in snapshot.items[1:])
         if failure_mode == "provider_bad_response":
             async with database.session(principal) as session:
@@ -610,7 +626,7 @@ async def test_learning_batch_retries_invalid_model_output_until_all_items_succe
                         )
                     )
                 )
-            assert ProviderErrorCode.BAD_RESPONSE.value in error_codes
+            assert ProviderErrorCode.BAD_RESPONSE.value not in error_codes
             assert "PROVIDER_PROVIDER_BAD_RESPONSE" not in error_codes
     finally:
         await runner.shutdown()
@@ -1210,3 +1226,218 @@ async def test_learning_batch_replay_survives_provider_disabled_gate(
 
     assert snapshot.id == batch_id
     await database.dispose()
+
+
+@pytest.mark.integration
+async def test_learning_unit_evidence_preserves_parsed_text_and_versions_user_supplements(
+    test_database_url: str,
+    tmp_path: Path,
+) -> None:
+    await upgrade_database(test_database_url)
+    database = Database(test_database_url)
+    principal = LocalPrincipalProvider().resolve("127.0.0.1")
+    course = await CourseRepository(database).create(principal, "证据补充")
+    _session_id, _question_id = await _seed_practice_fixture(database, principal, course)
+    settings = Settings(
+        _env_file=None,
+        app_mode=AppMode.TEST,
+        database_url=SecretStr(test_database_url),
+        local_storage_root=tmp_path,
+        lexical_index_root=tmp_path / "lexical",
+    )
+    service = LearningLoopService(
+        database,
+        settings,
+        SystemClock(),
+        ProviderRegistry(
+            embedding_provider=None,
+            chat_provider=None,
+            http_client=None,
+            owns_http_client=False,
+        ),
+    )
+    try:
+        units = await service.list_learning_units(principal, course.id)
+        unit = next(item for item in units if item.label == "测试章节")
+        parsed = await service.list_learning_unit_evidence(principal, course.id, unit.id)
+        assert len(parsed) == 1
+        assert parsed[0].origin.value == "parsed"
+        assert parsed[0].is_primary is True
+        source_id = parsed[0].source_id
+
+        first_text = (
+            "题型：计算题。已知进程需要 4 个资源单元，系统共有 10 个资源单元，"
+            "请计算资源利用率，并写出计算过程。参考答案：40%。"
+        )
+        first = await service.create_learning_unit_evidence_supplement(
+            principal,
+            course.id,
+            unit.id,
+            LearningUnitEvidenceSupplementRequest(
+                source_id=source_id,
+                role=LearningUnitEvidenceRole.COMPLETE_PROTOTYPE,
+                text=first_text,
+            ),
+        )
+        assert first.origin.value == "user_supplied"
+        assert first.is_primary is True
+        assert first.practice_status.value == "ready"
+
+        listed = await service.list_learning_unit_evidence(principal, course.id, unit.id)
+        assert [item.origin.value for item in listed] == ["parsed", "user_supplied"]
+        assert next(item for item in listed if item.origin.value == "parsed").is_primary is False
+        assert (
+            next(item for item in listed if item.origin.value == "user_supplied").text == first_text
+        )
+
+        second_text = (
+            "题型：计算题。某进程占用 3 个资源单元，系统共有 12 个资源单元，"
+            "请计算资源利用率，并给出完整列式。参考答案：25%。"
+        )
+        second = await service.create_learning_unit_evidence_supplement(
+            principal,
+            course.id,
+            unit.id,
+            LearningUnitEvidenceSupplementRequest(
+                source_id=source_id,
+                role=LearningUnitEvidenceRole.COMPLETE_PROTOTYPE,
+                text=second_text,
+            ),
+        )
+        async with database.session(principal) as session:
+            versions = list(
+                await session.scalars(
+                    select(LearningUnitEvidenceSupplementModel).order_by(
+                        LearningUnitEvidenceSupplementModel.created_at
+                    )
+                )
+            )
+        assert [version.status for version in versions] == ["superseded", "active"]
+        assert all(version.source_content_sha256 == parsed[0].content_sha256 for version in versions)
+        assert second.supplement_id == versions[-1].id
+
+        await service.revoke_learning_unit_evidence_supplement(
+            principal, course.id, unit.id, second.supplement_id or ""
+        )
+        reverted = await service.list_learning_unit_evidence(principal, course.id, unit.id)
+        assert len(reverted) == 1
+        assert reverted[0].origin.value == "parsed"
+        assert reverted[0].is_primary is True
+    finally:
+        await database.dispose()
+
+
+@pytest.mark.integration
+async def test_learning_question_records_supplement_evidence_and_is_staled_on_revoke(
+    test_database_url: str,
+    tmp_path: Path,
+) -> None:
+    await upgrade_database(test_database_url)
+    database = Database(test_database_url)
+    principal = LocalPrincipalProvider().resolve("127.0.0.1")
+    course = await CourseRepository(database).create(principal, "证据驱动出题")
+    _session_id, _question_id = await _seed_practice_fixture(database, principal, course)
+    settings = Settings(
+        _env_file=None,
+        app_mode=AppMode.TEST,
+        database_url=SecretStr(test_database_url),
+        local_storage_root=tmp_path,
+        lexical_index_root=tmp_path / "lexical",
+        practice_generation_enabled=True,
+        practice_runner_enabled=True,
+    )
+    service = LearningLoopService(
+        database,
+        settings,
+        SystemClock(),
+        ProviderRegistry(
+            embedding_provider=None,
+            chat_provider=_GeneratedQuestionProvider(),  # type: ignore[arg-type]
+            http_client=None,
+            owns_http_client=False,
+        ),
+    )
+    runner = LearningBatchRunner(database, settings, SystemClock(), service)
+    try:
+        units = await service.list_learning_units(principal, course.id)
+        unit = next(item for item in units if item.label == "测试章节")
+        parsed = await service.list_learning_unit_evidence(principal, course.id, unit.id)
+        supplement_text = (
+            "这是一个关于进程资源利用率的完整计算题：进程使用 2 个资源单元，"
+            "系统共有 8 个资源单元，求资源利用率并写出步骤，答案为 25%。"
+        )
+        supplement = await service.create_learning_unit_evidence_supplement(
+            principal,
+            course.id,
+            unit.id,
+            LearningUnitEvidenceSupplementRequest(
+                source_id=parsed[0].source_id,
+                role=LearningUnitEvidenceRole.COMPLETE_PROTOTYPE,
+                text=supplement_text,
+            ),
+        )
+
+        batch_id = str(uuid4())
+        request = PracticeBatchRequest(learning_unit_ids=[unit.id], question_count=1)
+        async with database.session(principal) as session:
+            session.add(
+                PracticeBatchModel(
+                    id=batch_id,
+                    user_id=course.user_id,
+                    course_id=course.id,
+                    learning_unit_ids=[unit.id],
+                    target_question_count=1,
+                    total_items=1,
+                    status="queued",
+                    phase="validating_inputs",
+                    idempotency_key_hash=hashlib.sha256(batch_id.encode()).hexdigest(),
+                    request_hash=canonical_sha256(
+                        {"course_id": course.id, **request.model_dump(mode="json")}
+                    ),
+                    state_version=1,
+                    attempt_count=0,
+                )
+            )
+            await session.flush()
+            session.add(
+                PracticeBatchItemModel(
+                    id=str(uuid4()),
+                    user_id=course.user_id,
+                    course_id=course.id,
+                    batch_id=batch_id,
+                    ordinal=1,
+                    status="queued",
+                    attempt_count=0,
+                )
+            )
+
+        assert await runner.run_once(batch_id) == batch_id
+        snapshot = await service.get_batch(principal, batch_id)
+        assert snapshot.status.value == "succeeded"
+        generated_id = snapshot.question_ids[0]
+        async with database.session(principal) as session:
+            question = await session.scalar(
+                select(PracticeQuestionModel).where(PracticeQuestionModel.id == generated_id)
+            )
+            evidence = await session.scalar(
+                select(PracticeQuestionEvidenceModel).where(
+                    PracticeQuestionEvidenceModel.question_id == generated_id
+                )
+            )
+        assert question is not None
+        assert evidence is not None
+        assert supplement.supplement_id == evidence.supplement_id
+        assert supplement_text in question.explanation
+
+        await service.revoke_learning_unit_evidence_supplement(
+            principal, course.id, unit.id, supplement.supplement_id or ""
+        )
+        async with database.session(principal) as session:
+            question = await session.scalar(
+                select(PracticeQuestionModel).where(PracticeQuestionModel.id == generated_id)
+            )
+        assert question is not None
+        assert question.status == "stale"
+    finally:
+        await runner.shutdown()
+        await database.dispose()

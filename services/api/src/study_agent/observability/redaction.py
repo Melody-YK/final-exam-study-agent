@@ -47,6 +47,7 @@ _SENSITIVE_KEYS = frozenset(
         "stack_info",
         "token",
         "worker_token",
+        "vision_api_key",
     }
 )
 _SENSITIVE_SUFFIXES = (

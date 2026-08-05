@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import cast
 
-from sqlalchemy import and_, func, select, text
+from sqlalchemy import and_, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from study_agent.config import Settings
@@ -19,6 +20,7 @@ from study_agent.infrastructure.db.models import (
     CourseModel,
     DocumentModel,
     LearningMasteryModel,
+    LearningUnitEvidenceSupplementModel,
     LearningUnitModel,
     LearningUnitSourceModel,
     PracticeAttemptModel,
@@ -49,6 +51,7 @@ from study_agent.modules.learning.concepts import (
     exercise_prototype_number,
     is_exercise_prototype_label,
     is_zero_placeholder_label,
+    practice_confidence_for_unit,
     practice_evidence_stats,
     practice_mode_for_unit,
 )
@@ -84,6 +87,10 @@ from study_contracts import (
     LearningSourceStatus,
     LearningSummary,
     LearningUnit,
+    LearningUnitEvidenceItem,
+    LearningUnitEvidenceOrigin,
+    LearningUnitEvidenceRole,
+    LearningUnitEvidenceSupplementRequest,
     LearningUnitKind,
     LearningUnitPracticeMode,
     LearningUnitPracticeStatus,
@@ -166,6 +173,52 @@ def _unit_source_from_row(row: LearningUnitSourceModel) -> LearningUnitSource:
         locator=_locator(row.locator),
         status=LearningSourceStatus(row.status),
     )
+
+
+@dataclass(frozen=True, slots=True)
+class _EvidenceMaterial:
+    """Current text for one parsed source, optionally overlaid by the user."""
+
+    source_id: str
+    chunk_id: str
+    content_sha256: str
+    text: str
+    supplement_id: str | None = None
+    role: str | None = None
+
+    @property
+    def id(self) -> str:
+        return self.chunk_id
+
+
+def _text_sha256(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _practice_confidence_for_materials(
+    materials: tuple[_EvidenceMaterial, ...] | list[_EvidenceMaterial],
+    *,
+    practice_mode: LearningUnitPracticeMode,
+    is_exercise_prototype: bool = False,
+) -> tuple[LearningUnitPracticeStatus, str | None]:
+    texts = tuple(material.text for material in materials)
+    status, note = practice_confidence_for_unit(
+        texts,
+        practice_mode=practice_mode,
+        is_exercise_prototype=is_exercise_prototype,
+    )
+    supplied = [item for item in materials if item.supplement_id is not None]
+    if supplied and status is not LearningUnitPracticeStatus.INSUFFICIENT_EVIDENCE:
+        return LearningUnitPracticeStatus.READY, "已采用用户补充的高置信证据。"
+    if (
+        supplied
+        and any(item.role == LearningUnitEvidenceRole.COMPLETE_PROTOTYPE.value for item in supplied)
+        and sum(len(item.text.strip()) for item in supplied) >= 20
+    ):
+        # A learner-confirmed complete prototype is allowed to rescue a short or noisy OCR
+        # fragment, while the request contract still prevents blank supplements.
+        return LearningUnitPracticeStatus.READY, "已采用用户补充的完整原型。"
+    return status, note
 
 
 def _is_legacy_zero_placeholder(unit: LearningUnitModel) -> bool:
@@ -416,6 +469,352 @@ class LearningLoopService(LearningBatchProcessor):
             await self._sync_units(session, course)
             return await self._unit_snapshots(session, principal, course_id)
 
+    async def list_learning_unit_evidence(
+        self,
+        principal: Principal,
+        course_id: str,
+        unit_id: str,
+    ) -> list[LearningUnitEvidenceItem]:
+        async with self._database.session(principal) as session:
+            course = await self._course_for_principal(session, principal, course_id)
+            if course is None:
+                raise LearningServiceError(LearningServiceErrorCode.NOT_FOUND, "课程不存在。")
+            await self._sync_units(session, course)
+            unit = await session.scalar(
+                select(LearningUnitModel).where(
+                    LearningUnitModel.id == unit_id,
+                    LearningUnitModel.course_id == course_id,
+                    LearningUnitModel.user_id == course.user_id,
+                )
+            )
+            if unit is None:
+                raise LearningServiceError(LearningServiceErrorCode.NOT_FOUND, "学习单元不存在。")
+            return await self._list_learning_unit_evidence_in_session(
+                session, course.user_id, course_id, unit
+            )
+
+    async def create_learning_unit_evidence_supplement(
+        self,
+        principal: Principal,
+        course_id: str,
+        unit_id: str,
+        request: LearningUnitEvidenceSupplementRequest,
+    ) -> LearningUnitEvidenceItem:
+        async with self._database.session(principal) as session:
+            course = await self._course_for_principal(session, principal, course_id)
+            if course is None:
+                raise LearningServiceError(LearningServiceErrorCode.NOT_FOUND, "课程不存在。")
+            await self._sync_units(session, course)
+            unit = await session.scalar(
+                select(LearningUnitModel).where(
+                    LearningUnitModel.id == unit_id,
+                    LearningUnitModel.course_id == course_id,
+                    LearningUnitModel.user_id == course.user_id,
+                )
+            )
+            if unit is None:
+                raise LearningServiceError(LearningServiceErrorCode.NOT_FOUND, "学习单元不存在。")
+            scope_ids = await self._unit_scope_ids(session, course.user_id, course_id, unit_id)
+            source = await session.scalar(
+                select(LearningUnitSourceModel)
+                .join(
+                    DocumentModel,
+                    and_(
+                        DocumentModel.id == LearningUnitSourceModel.document_id,
+                        DocumentModel.course_id == LearningUnitSourceModel.course_id,
+                        DocumentModel.user_id == LearningUnitSourceModel.user_id,
+                    ),
+                )
+                .join(
+                    RevisionChunkModel,
+                    and_(
+                        RevisionChunkModel.id == LearningUnitSourceModel.chunk_id,
+                        RevisionChunkModel.revision_id == LearningUnitSourceModel.revision_id,
+                    ),
+                )
+                .where(
+                    LearningUnitSourceModel.id == request.source_id,
+                    LearningUnitSourceModel.user_id == course.user_id,
+                    LearningUnitSourceModel.course_id == course_id,
+                    LearningUnitSourceModel.unit_id.in_(scope_ids),
+                    LearningUnitSourceModel.status == "valid",
+                    DocumentModel.deleted_at.is_(None),
+                    DocumentModel.review_status == "approved",
+                    DocumentModel.active_revision_id == LearningUnitSourceModel.revision_id,
+                    RevisionChunkModel.content_sha256 == LearningUnitSourceModel.content_sha256,
+                )
+            )
+            if source is None:
+                raise LearningServiceError(
+                    LearningServiceErrorCode.SOURCE_UNAVAILABLE,
+                    "所选证据片段已失效, 请重新打开证据列表。",
+                )
+            # Lock the complete selected scope so replacement and revocation cannot
+            # race across a parent section and one of its child learning units.
+            await session.execute(
+                select(LearningUnitModel.id)
+                .where(
+                    LearningUnitModel.user_id == course.user_id,
+                    LearningUnitModel.course_id == course_id,
+                    LearningUnitModel.id.in_(scope_ids),
+                )
+                .order_by(LearningUnitModel.id)
+                .with_for_update()
+            )
+            supplement = await session.scalar(
+                select(LearningUnitEvidenceSupplementModel)
+                .where(
+                    LearningUnitEvidenceSupplementModel.user_id == course.user_id,
+                    LearningUnitEvidenceSupplementModel.course_id == course_id,
+                    LearningUnitEvidenceSupplementModel.unit_id == source.unit_id,
+                    LearningUnitEvidenceSupplementModel.status == "active",
+                )
+                .with_for_update()
+            )
+            if supplement is not None:
+                supplement.status = "superseded"
+                await self._mark_questions_stale_for_supplement(session, supplement.id)
+            normalized_text = request.text.strip()
+            supplement = LearningUnitEvidenceSupplementModel(
+                id=new_id(),
+                user_id=course.user_id,
+                course_id=course_id,
+                unit_id=source.unit_id,
+                source_id=source.id,
+                source_content_sha256=source.content_sha256,
+                role=request.role.value,
+                text=normalized_text,
+                content_sha256=_text_sha256(normalized_text),
+                status="active",
+            )
+            session.add(supplement)
+            await session.flush()
+            items = await self._list_learning_unit_evidence_in_session(
+                session, course.user_id, course_id, unit
+            )
+            created = next((item for item in items if item.supplement_id == supplement.id), None)
+            if created is None:
+                raise LearningServiceError(
+                    LearningServiceErrorCode.SOURCE_UNAVAILABLE,
+                    "补充证据保存后无法重新读取。",
+                )
+            return created
+
+    async def revoke_learning_unit_evidence_supplement(
+        self,
+        principal: Principal,
+        course_id: str,
+        unit_id: str,
+        supplement_id: str,
+    ) -> None:
+        async with self._database.session(principal) as session:
+            course = await self._course_for_principal(session, principal, course_id)
+            if course is None:
+                raise LearningServiceError(LearningServiceErrorCode.NOT_FOUND, "课程不存在。")
+            unit = await session.scalar(
+                select(LearningUnitModel).where(
+                    LearningUnitModel.id == unit_id,
+                    LearningUnitModel.course_id == course_id,
+                    LearningUnitModel.user_id == course.user_id,
+                )
+            )
+            if unit is None:
+                raise LearningServiceError(LearningServiceErrorCode.NOT_FOUND, "学习单元不存在。")
+            scope_ids = await self._unit_scope_ids(session, course.user_id, course_id, unit_id)
+            await session.execute(
+                select(LearningUnitModel.id)
+                .where(
+                    LearningUnitModel.user_id == course.user_id,
+                    LearningUnitModel.course_id == course_id,
+                    LearningUnitModel.id.in_(scope_ids),
+                )
+                .order_by(LearningUnitModel.id)
+                .with_for_update()
+            )
+            supplement = await session.scalar(
+                select(LearningUnitEvidenceSupplementModel)
+                .where(
+                    LearningUnitEvidenceSupplementModel.id == supplement_id,
+                    LearningUnitEvidenceSupplementModel.user_id == course.user_id,
+                    LearningUnitEvidenceSupplementModel.course_id == course_id,
+                    LearningUnitEvidenceSupplementModel.unit_id.in_(scope_ids),
+                    LearningUnitEvidenceSupplementModel.status == "active",
+                )
+                .with_for_update()
+            )
+            if supplement is None:
+                raise LearningServiceError(
+                    LearningServiceErrorCode.NOT_FOUND, "有效的补充证据不存在。"
+                )
+            supplement.status = "revoked"
+            await self._mark_questions_stale_for_supplement(session, supplement.id)
+
+    async def _mark_questions_stale_for_supplement(
+        self,
+        session: AsyncSession,
+        supplement_id: str,
+    ) -> None:
+        question_ids = list(
+            await session.scalars(
+                select(PracticeQuestionEvidenceModel.question_id).where(
+                    PracticeQuestionEvidenceModel.supplement_id == supplement_id
+                )
+            )
+        )
+        if question_ids:
+            await session.execute(
+                update(PracticeQuestionModel)
+                .where(PracticeQuestionModel.id.in_(question_ids))
+                .values(status=QuestionStatus.STALE.value)
+            )
+
+    async def _list_learning_unit_evidence_in_session(
+        self,
+        session: AsyncSession,
+        user_id: str,
+        course_id: str,
+        unit: LearningUnitModel,
+    ) -> list[LearningUnitEvidenceItem]:
+        scope_ids = await self._unit_scope_ids(session, user_id, course_id, unit.id)
+        rows = list(
+            await session.execute(
+                select(
+                    LearningUnitSourceModel,
+                    DocumentModel,
+                    RevisionChunkModel,
+                    LearningUnitEvidenceSupplementModel,
+                )
+                .join(
+                    DocumentModel,
+                    and_(
+                        DocumentModel.id == LearningUnitSourceModel.document_id,
+                        DocumentModel.course_id == LearningUnitSourceModel.course_id,
+                        DocumentModel.user_id == LearningUnitSourceModel.user_id,
+                    ),
+                )
+                .join(
+                    RevisionChunkModel,
+                    and_(
+                        RevisionChunkModel.id == LearningUnitSourceModel.chunk_id,
+                        RevisionChunkModel.revision_id == LearningUnitSourceModel.revision_id,
+                    ),
+                )
+                .outerjoin(
+                    LearningUnitEvidenceSupplementModel,
+                    and_(
+                        LearningUnitEvidenceSupplementModel.source_id == LearningUnitSourceModel.id,
+                        LearningUnitEvidenceSupplementModel.course_id
+                        == LearningUnitSourceModel.course_id,
+                        LearningUnitEvidenceSupplementModel.user_id
+                        == LearningUnitSourceModel.user_id,
+                        LearningUnitEvidenceSupplementModel.source_content_sha256
+                        == LearningUnitSourceModel.content_sha256,
+                        LearningUnitEvidenceSupplementModel.status == "active",
+                    ),
+                )
+                .where(
+                    LearningUnitSourceModel.user_id == user_id,
+                    LearningUnitSourceModel.course_id == course_id,
+                    LearningUnitSourceModel.unit_id.in_(scope_ids),
+                    LearningUnitSourceModel.status == "valid",
+                    DocumentModel.deleted_at.is_(None),
+                    DocumentModel.review_status == "approved",
+                    DocumentModel.active_revision_id == LearningUnitSourceModel.revision_id,
+                    RevisionChunkModel.content_sha256 == LearningUnitSourceModel.content_sha256,
+                )
+                .order_by(RevisionChunkModel.ordinal, LearningUnitSourceModel.id)
+            )
+        )
+        selected: dict[
+            tuple[str, str, str],
+            tuple[
+                LearningUnitSourceModel,
+                DocumentModel,
+                RevisionChunkModel,
+                LearningUnitEvidenceSupplementModel | None,
+            ],
+        ] = {}
+        for source, document, chunk, supplement in rows:
+            key = (source.document_id, source.revision_id, source.chunk_id)
+            current = selected.get(key)
+            if current is None or (current[3] is None and supplement is not None):
+                selected[key] = (source, document, chunk, supplement)
+        selected_rows = sorted(selected.values(), key=lambda row: (row[2].ordinal, row[2].id))
+        materials = [
+            _EvidenceMaterial(
+                source_id=source.id,
+                chunk_id=chunk.id,
+                content_sha256=(
+                    source.content_sha256 if supplement is None else supplement.content_sha256
+                ),
+                text=chunk.text if supplement is None else supplement.text,
+                supplement_id=None if supplement is None else supplement.id,
+                role=None if supplement is None else supplement.role,
+            )
+            for source, _document, chunk, supplement in selected_rows
+        ]
+        mode = practice_mode_for_unit(
+            unit.kind,
+            unit.label,
+            evidence_texts=(item.text for item in materials),
+        )
+        practice_status, confidence_note = _practice_confidence_for_materials(
+            materials,
+            practice_mode=mode,
+            is_exercise_prototype=(
+                unit.kind == LearningUnitKind.CONCEPT.value
+                and is_exercise_prototype_label(unit.label)
+            ),
+        )
+        result: list[LearningUnitEvidenceItem] = []
+        for (source, document, _chunk, supplement), material in zip(
+            selected_rows, materials, strict=True
+        ):
+            result.append(
+                LearningUnitEvidenceItem(
+                    id=source.id,
+                    unit_id=source.unit_id,
+                    source_id=source.id,
+                    supplement_id=None,
+                    origin=LearningUnitEvidenceOrigin.PARSED,
+                    role=None,
+                    document_id=source.document_id,
+                    document_name=document.filename,
+                    revision_id=source.revision_id,
+                    chunk_id=source.chunk_id,
+                    content_sha256=source.content_sha256,
+                    locator=_locator(source.locator),
+                    text=_chunk.text,
+                    is_primary=supplement is None,
+                    practice_status=practice_status,
+                    confidence_note=confidence_note,
+                    created_at=source.created_at,
+                )
+            )
+            if supplement is not None:
+                result.append(
+                    LearningUnitEvidenceItem(
+                        id=supplement.id,
+                        unit_id=source.unit_id,
+                        source_id=source.id,
+                        supplement_id=supplement.id,
+                        origin=LearningUnitEvidenceOrigin.USER_SUPPLIED,
+                        role=LearningUnitEvidenceRole(supplement.role),
+                        document_id=source.document_id,
+                        document_name=document.filename,
+                        revision_id=source.revision_id,
+                        chunk_id=source.chunk_id,
+                        content_sha256=material.content_sha256,
+                        locator=_locator(source.locator),
+                        text=material.text,
+                        is_primary=True,
+                        practice_status=practice_status,
+                        confidence_note=confidence_note,
+                        created_at=supplement.created_at,
+                    )
+                )
+        return result
+
     async def create_batch(
         self,
         principal: Principal,
@@ -513,8 +912,21 @@ class LearningLoopService(LearningBatchProcessor):
                         LearningServiceErrorCode.SOURCE_UNAVAILABLE,
                         "所选学习单元没有当前有效来源。",
                     )
-                stats = practice_evidence_stats(chunk.text for chunk in evidence[1])
-                if not stats.is_sufficient:
+                source_texts = tuple(chunk.text for chunk in evidence[1])
+                practice_mode = practice_mode_for_unit(
+                    unit.kind,
+                    unit.label,
+                    evidence_texts=source_texts,
+                )
+                practice_status, _confidence_note = _practice_confidence_for_materials(
+                    evidence[1],
+                    practice_mode=practice_mode,
+                    is_exercise_prototype=(
+                        unit.kind == LearningUnitKind.CONCEPT.value
+                        and is_exercise_prototype_label(unit.label)
+                    ),
+                )
+                if practice_status is LearningUnitPracticeStatus.INSUFFICIENT_EVIDENCE:
                     raise LearningServiceError(
                         LearningServiceErrorCode.INSUFFICIENT_EVIDENCE,
                         "所选主题的有效正文不足，暂时无法稳定生成题目。",  # noqa: RUF001
@@ -1454,7 +1866,7 @@ class LearningLoopService(LearningBatchProcessor):
                 evidence = await self._current_evidence(session, course.user_id, course.id, unit.id)
                 if not evidence[0]:
                     continue
-                if not practice_evidence_stats(chunk.text for chunk in evidence[1]).is_sufficient:
+                if not practice_evidence_stats(item.text for item in evidence[1]).is_sufficient:
                     continue
                 result.append(
                     ReviewQueueItem(
@@ -1547,11 +1959,13 @@ class LearningLoopService(LearningBatchProcessor):
             if unit is None or not evidence[0]:
                 raise QuestionValidationError("SOURCE_UNAVAILABLE", "来源已失效。")
             assert unit_id is not None
-            chunk_text_by_id = {chunk.id: chunk.text for chunk in evidence[1]}
+            material_by_key = {
+                (material.chunk_id, material.content_sha256): material for material in evidence[1]
+            }
             authorized_evidence: list[AuthorizedEvidence] = []
             for ref in evidence[0]:
-                chunk_text = chunk_text_by_id.get(ref.chunk_id)
-                if chunk_text is None:
+                material = material_by_key.get((ref.chunk_id, ref.content_sha256))
+                if material is None:
                     raise QuestionValidationError("SOURCE_UNAVAILABLE", "来源片段已失效。")
                 authorized_evidence.append(
                     AuthorizedEvidence(
@@ -1560,8 +1974,9 @@ class LearningLoopService(LearningBatchProcessor):
                         revision_id=ref.revision_id,
                         chunk_id=ref.chunk_id,
                         content_sha256=ref.content_sha256,
-                        text=chunk_text,
+                        text=material.text,
                         locator=ref.locator,
+                        supplement_id=material.supplement_id,
                     )
                 )
             question_evidence = select_question_evidence(
@@ -1569,6 +1984,11 @@ class LearningLoopService(LearningBatchProcessor):
             )
             if not question_evidence:
                 raise QuestionValidationError("SOURCE_UNAVAILABLE", "来源片段已失效。")
+            _practice_status, confidence_note = _practice_confidence_for_materials(
+                evidence[1],
+                practice_mode=practice_mode,
+                is_exercise_prototype=is_exercise_prototype_label(unit.label),
+            )
             question_type = (
                 infer_exercise_question_type(tuple(item.text for item in question_evidence))
                 if practice_mode is LearningUnitPracticeMode.EXERCISE_VARIANT
@@ -1592,6 +2012,7 @@ class LearningLoopService(LearningBatchProcessor):
                 avoid_prompts=avoid_prompts,
                 attempt_number=item.attempt_count + 1,
                 previous_failure_code=previous_failure_code,
+                practice_confidence_note=confidence_note,
             )
             if not question_type.is_constructed_response:
                 question = position_correct_option(
@@ -1626,6 +2047,15 @@ class LearningLoopService(LearningBatchProcessor):
             # SQLAlchemy cannot infer that the question must be inserted
             # before the evidence rows and batch-item update.
             await session.flush()
+            supplement_by_key = {
+                (
+                    selected.document_id,
+                    selected.revision_id,
+                    selected.chunk_id,
+                    selected.content_sha256,
+                ): selected.supplement_id
+                for selected in question_evidence
+            }
             for ordinal, ref in enumerate(question.evidence_refs, start=1):
                 session.add(
                     PracticeQuestionEvidenceModel(
@@ -1637,6 +2067,14 @@ class LearningLoopService(LearningBatchProcessor):
                         document_id=ref.document_id,
                         revision_id=ref.revision_id,
                         chunk_id=ref.chunk_id,
+                        supplement_id=supplement_by_key.get(
+                            (
+                                ref.document_id,
+                                ref.revision_id,
+                                ref.chunk_id,
+                                ref.content_sha256,
+                            )
+                        ),
                         content_sha256=ref.content_sha256,
                         locator=ref.locator.model_dump(mode="json"),
                         quote=ref.quote,
@@ -2046,21 +2484,25 @@ class LearningLoopService(LearningBatchProcessor):
         snapshots: list[LearningUnit] = []
         for unit in rows:
             evidence = await self._current_evidence(session, user_id, course_id, unit.id)
-            stats = practice_evidence_stats(chunk.text for chunk in evidence[1])
-            if unit.status == LearningUnitStatus.AVAILABLE.value and evidence[0]:
-                practice_status = (
-                    LearningUnitPracticeStatus.READY
-                    if stats.is_sufficient
-                    else LearningUnitPracticeStatus.INSUFFICIENT_EVIDENCE
-                )
-            else:
-                practice_status = LearningUnitPracticeStatus.STALE
             practice_mode = practice_mode_for_unit(
                 unit.kind,
                 unit.label,
                 child_labels=child_labels_by_parent.get(unit.id, ()),
                 evidence_texts=(chunk.text for chunk in evidence[1]),
             )
+            stats = practice_evidence_stats(item.text for item in evidence[1])
+            confidence_note: str | None = None
+            if unit.status == LearningUnitStatus.AVAILABLE.value and evidence[0]:
+                practice_status, confidence_note = _practice_confidence_for_materials(
+                    evidence[1],
+                    practice_mode=practice_mode,
+                    is_exercise_prototype=(
+                        unit.kind == LearningUnitKind.CONCEPT.value
+                        and is_exercise_prototype_label(unit.label)
+                    ),
+                )
+            else:
+                practice_status = LearningUnitPracticeStatus.STALE
             unit_sources = source_by_unit.get(unit.id, [])
             if unit.kind == LearningUnitKind.SECTION.value and evidence[0]:
                 unit_sources = [
@@ -2083,6 +2525,7 @@ class LearningLoopService(LearningBatchProcessor):
                 parent_id=unit.parent_id,
                 status=LearningUnitStatus(unit.status),
                 practice_status=practice_status,
+                practice_confidence_note=confidence_note,
                 practice_mode=practice_mode,
                 prototype_question_type=(
                     infer_exercise_question_type(tuple(chunk.text for chunk in evidence[1]))
@@ -2151,11 +2594,16 @@ class LearningLoopService(LearningBatchProcessor):
         user_id: str,
         course_id: str,
         unit_id: str,
-    ) -> tuple[list[EvidenceReference], list[RevisionChunkModel]]:
+    ) -> tuple[list[EvidenceReference], list[_EvidenceMaterial]]:
         unit_scope_ids = await self._unit_scope_ids(session, user_id, course_id, unit_id)
         rows = list(
             await session.execute(
-                select(LearningUnitSourceModel, DocumentModel, RevisionChunkModel)
+                select(
+                    LearningUnitSourceModel,
+                    DocumentModel,
+                    RevisionChunkModel,
+                    LearningUnitEvidenceSupplementModel,
+                )
                 .join(
                     DocumentModel,
                     and_(
@@ -2169,6 +2617,19 @@ class LearningLoopService(LearningBatchProcessor):
                     and_(
                         RevisionChunkModel.id == LearningUnitSourceModel.chunk_id,
                         RevisionChunkModel.revision_id == LearningUnitSourceModel.revision_id,
+                    ),
+                )
+                .outerjoin(
+                    LearningUnitEvidenceSupplementModel,
+                    and_(
+                        LearningUnitEvidenceSupplementModel.source_id == LearningUnitSourceModel.id,
+                        LearningUnitEvidenceSupplementModel.course_id
+                        == LearningUnitSourceModel.course_id,
+                        LearningUnitEvidenceSupplementModel.user_id
+                        == LearningUnitSourceModel.user_id,
+                        LearningUnitEvidenceSupplementModel.source_content_sha256
+                        == LearningUnitSourceModel.content_sha256,
+                        LearningUnitEvidenceSupplementModel.status == "active",
                     ),
                 )
                 .where(
@@ -2185,13 +2646,30 @@ class LearningLoopService(LearningBatchProcessor):
             )
         )
         refs: list[EvidenceReference] = []
-        chunks: list[RevisionChunkModel] = []
-        seen_chunks: set[tuple[str, str, str]] = set()
-        for source, document, chunk in rows:
+        materials: list[_EvidenceMaterial] = []
+        seen_chunks: dict[tuple[str, str, str], int] = {}
+        for source, document, chunk, supplement in rows:
             chunk_key = (source.document_id, source.revision_id, source.chunk_id)
-            if chunk_key in seen_chunks:
+            text_value = chunk.text if supplement is None else supplement.text
+            content_sha256 = (
+                source.content_sha256 if supplement is None else supplement.content_sha256
+            )
+            material = _EvidenceMaterial(
+                source_id=source.id,
+                chunk_id=source.chunk_id,
+                content_sha256=content_sha256,
+                text=text_value,
+                supplement_id=None if supplement is None else supplement.id,
+                role=None if supplement is None else supplement.role,
+            )
+            existing_index = seen_chunks.get(chunk_key)
+            if existing_index is not None:
+                # A child and its parent can point at the same parsed chunk. Prefer a
+                # user overlay whenever one is present, otherwise retain the first row.
+                if materials[existing_index].supplement_id is None and material.supplement_id:
+                    materials[existing_index] = material
                 continue
-            seen_chunks.add(chunk_key)
+            seen_chunks[chunk_key] = len(materials)
             locator = _locator(source.locator)
             refs.append(
                 EvidenceReference(
@@ -2199,13 +2677,24 @@ class LearningLoopService(LearningBatchProcessor):
                     document_name=document.filename,
                     revision_id=source.revision_id,
                     chunk_id=source.chunk_id,
-                    content_sha256=source.content_sha256,
+                    content_sha256=content_sha256,
                     locator=locator,
-                    quote=chunk.text[: min(300, len(chunk.text))],
+                    quote=text_value[: min(300, len(text_value))],
                 )
             )
-            chunks.append(chunk)
-        return refs, chunks
+            materials.append(material)
+        # A later duplicate can replace the material, so rebuild references from the
+        # final selected material list to keep quote and hash aligned.
+        if len(refs) == len(materials):
+            for index, material in enumerate(materials):
+                ref = refs[index]
+                refs[index] = ref.model_copy(
+                    update={
+                        "content_sha256": material.content_sha256,
+                        "quote": material.text[: min(300, len(material.text))],
+                    }
+                )
+        return refs, materials
 
     async def _question_evidence(
         self,
@@ -2219,10 +2708,15 @@ class LearningLoopService(LearningBatchProcessor):
         self,
         session: AsyncSession,
         question: PracticeQuestionModel,
-    ) -> tuple[list[EvidenceReference], list[RevisionChunkModel]]:
+    ) -> tuple[list[EvidenceReference], list[_EvidenceMaterial]]:
         rows = list(
             await session.execute(
-                select(PracticeQuestionEvidenceModel, DocumentModel, RevisionChunkModel)
+                select(
+                    PracticeQuestionEvidenceModel,
+                    DocumentModel,
+                    RevisionChunkModel,
+                    LearningUnitEvidenceSupplementModel,
+                )
                 .join(
                     DocumentModel,
                     and_(
@@ -2238,6 +2732,20 @@ class LearningLoopService(LearningBatchProcessor):
                         RevisionChunkModel.revision_id == PracticeQuestionEvidenceModel.revision_id,
                     ),
                 )
+                .outerjoin(
+                    LearningUnitEvidenceSupplementModel,
+                    and_(
+                        LearningUnitEvidenceSupplementModel.id
+                        == PracticeQuestionEvidenceModel.supplement_id,
+                        LearningUnitEvidenceSupplementModel.course_id
+                        == PracticeQuestionEvidenceModel.course_id,
+                        LearningUnitEvidenceSupplementModel.user_id
+                        == PracticeQuestionEvidenceModel.user_id,
+                        LearningUnitEvidenceSupplementModel.source_content_sha256
+                        == RevisionChunkModel.content_sha256,
+                        LearningUnitEvidenceSupplementModel.status == "active",
+                    ),
+                )
                 .where(
                     PracticeQuestionEvidenceModel.question_id == question.id,
                     PracticeQuestionEvidenceModel.course_id == question.course_id,
@@ -2246,18 +2754,30 @@ class LearningLoopService(LearningBatchProcessor):
                     DocumentModel.deleted_at.is_(None),
                     DocumentModel.review_status == "approved",
                     DocumentModel.active_revision_id == PracticeQuestionEvidenceModel.revision_id,
-                    RevisionChunkModel.content_sha256
-                    == PracticeQuestionEvidenceModel.content_sha256,
+                    or_(
+                        and_(
+                            PracticeQuestionEvidenceModel.supplement_id.is_(None),
+                            RevisionChunkModel.content_sha256
+                            == PracticeQuestionEvidenceModel.content_sha256,
+                        ),
+                        and_(
+                            PracticeQuestionEvidenceModel.supplement_id.is_not(None),
+                            LearningUnitEvidenceSupplementModel.id.is_not(None),
+                            LearningUnitEvidenceSupplementModel.content_sha256
+                            == PracticeQuestionEvidenceModel.content_sha256,
+                        ),
+                    ),
                 )
                 .order_by(PracticeQuestionEvidenceModel.ordinal)
             )
         )
         refs: list[EvidenceReference] = []
-        chunks: list[RevisionChunkModel] = []
-        for evidence, document, chunk in rows:
-            if evidence.quote not in chunk.text:
+        materials: list[_EvidenceMaterial] = []
+        for evidence, document, chunk, supplement in rows:
+            text_value = chunk.text if supplement is None else supplement.text
+            if evidence.quote not in text_value:
                 continue
-            quote = chunk.text[: min(2_000, len(chunk.text))].strip()
+            quote = text_value[: min(2_000, len(text_value))].strip()
             if not quote:
                 continue
             refs.append(
@@ -2271,8 +2791,17 @@ class LearningLoopService(LearningBatchProcessor):
                     quote=quote,
                 )
             )
-            chunks.append(chunk)
-        return refs, chunks
+            materials.append(
+                _EvidenceMaterial(
+                    source_id="",
+                    chunk_id=chunk.id,
+                    content_sha256=evidence.content_sha256,
+                    text=text_value,
+                    supplement_id=evidence.supplement_id,
+                    role=None if supplement is None else supplement.role,
+                )
+            )
+        return refs, materials
 
     async def _batch_snapshot(
         self, session: AsyncSession, batch: PracticeBatchModel

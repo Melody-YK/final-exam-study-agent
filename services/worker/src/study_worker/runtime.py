@@ -37,6 +37,7 @@ from study_worker.parsers.native_process import NativeSubprocessParser
 from study_worker.parsers.normalize import RawDocument
 from study_worker.parsers.ocr_process import OcrSubprocessParser
 from study_worker.parsers.protocols import ParseRequest, ParserExecutionError
+from study_worker.rendering.pdfium import PdfRenderError
 from study_worker.sandbox import Sandbox
 
 
@@ -61,9 +62,11 @@ class NativeTaskHandler:
         parser_profile: str = NATIVE_PROFILE,
         media_types: Collection[str] = NATIVE_MEDIA_TYPES,
         rejection_summary: str = "native parser rejected the document",
+        max_pages: int = 2_000,
+        max_pixels: int = 100_000_000,
     ) -> None:
-        if timeout_seconds <= 0:
-            raise ValueError("native handler timeout must be positive")
+        if timeout_seconds <= 0 or max_pages <= 0 or max_pixels <= 0:
+            raise ValueError("native handler limits must be positive")
         if not parser_profile.strip() or not media_types or not rejection_summary.strip():
             raise ValueError("parser handler routing must not be empty")
         self._parser = parser
@@ -71,6 +74,8 @@ class NativeTaskHandler:
         self._parser_profile = parser_profile
         self._media_types = frozenset(media_types)
         self._rejection_summary = rejection_summary
+        self._max_pages = max_pages
+        self._max_pixels = max_pixels
 
     async def __call__(
         self,
@@ -121,6 +126,9 @@ class NativeTaskHandler:
                 raw_document,
                 sandbox=sandbox,
                 reporter=reporter,
+                media_type=lease.media_type,
+                max_pages=self._max_pages,
+                max_pixels=self._max_pixels,
             )
         ]
         for ordinal in requested_pages[1:]:
@@ -139,6 +147,9 @@ class NativeTaskHandler:
                     page_document,
                     sandbox=sandbox,
                     reporter=reporter,
+                    media_type=lease.media_type,
+                    max_pages=self._max_pages,
+                    max_pixels=self._max_pixels,
                 )
             )
 
@@ -155,6 +166,12 @@ class NativeTaskHandler:
                 code="PARSER_RESULT_INVALID",
                 retryable=False,
                 summary="native parser returned an invalid result",
+            ) from None
+        except PdfRenderError as exc:
+            raise TaskExecutionError(
+                code=exc.code,
+                retryable=exc.retryable,
+                summary="worker could not render a PDF evidence page",
             ) from None
         except OSError:
             raise TaskExecutionError(
@@ -222,6 +239,9 @@ class NativeTaskHandler:
         *,
         sandbox: Sandbox,
         reporter: JobReporter,
+        media_type: str,
+        max_pages: int,
+        max_pixels: int,
     ) -> PackagedPage:
         try:
             return await package_parse_page(
@@ -229,12 +249,21 @@ class NativeTaskHandler:
                 raw_document=raw_document,
                 sandbox=sandbox,
                 reporter=reporter,
+                media_type=media_type,
+                max_pages=max_pages,
+                max_pixels=max_pixels,
             )
         except ValueError:
             raise TaskExecutionError(
                 code="PARSER_RESULT_INVALID",
                 retryable=False,
                 summary="native parser returned an invalid result",
+            ) from None
+        except PdfRenderError as exc:
+            raise TaskExecutionError(
+                code=exc.code,
+                retryable=exc.retryable,
+                summary="worker could not render a PDF evidence page",
             ) from None
         except OSError:
             raise TaskExecutionError(
@@ -282,6 +311,8 @@ def build_native_handler(settings: WorkerSettings) -> TaskHandler:
     return NativeTaskHandler(
         parser=parser,
         timeout_seconds=settings.external_process_timeout_seconds,
+        max_pages=settings.max_pages,
+        max_pixels=settings.max_pixels,
     )
 
 
@@ -296,13 +327,22 @@ def _docling_marker_ready(root: Path, marker_name: str) -> bool:
 class OcrTaskHandler(NativeTaskHandler):
     """OCR-specific route using the same page checkpoint and artifact pipeline."""
 
-    def __init__(self, *, parser: ParserProcess, timeout_seconds: float) -> None:
+    def __init__(
+        self,
+        *,
+        parser: ParserProcess,
+        timeout_seconds: float,
+        max_pages: int = 2_000,
+        max_pixels: int = 100_000_000,
+    ) -> None:
         super().__init__(
             parser=parser,
             timeout_seconds=timeout_seconds,
             parser_profile="ocr-v1",
             media_types=OCR_MEDIA_TYPES,
             rejection_summary="isolated OCR parser rejected the document",
+            max_pages=max_pages,
+            max_pixels=max_pixels,
         )
 
 
@@ -328,17 +368,28 @@ def build_ocr_handler(settings: WorkerSettings, status: OcrCapabilityStatus) -> 
     return OcrTaskHandler(
         parser=parser,
         timeout_seconds=settings.external_process_timeout_seconds,
+        max_pages=settings.max_pages,
+        max_pixels=settings.max_pixels,
     )
 
 
 class MineruTaskHandler:
     """Run one remote MinerU request for the lease and checkpoint every returned page."""
 
-    def __init__(self, *, parser: ParserProcess, timeout_seconds: float) -> None:
-        if timeout_seconds <= 0:
-            raise ValueError("MinerU handler timeout must be positive")
+    def __init__(
+        self,
+        *,
+        parser: ParserProcess,
+        timeout_seconds: float,
+        max_pages: int = 2_000,
+        max_pixels: int = 100_000_000,
+    ) -> None:
+        if timeout_seconds <= 0 or max_pages <= 0 or max_pixels <= 0:
+            raise ValueError("MinerU handler limits must be positive")
         self._parser = parser
         self._timeout_seconds = timeout_seconds
+        self._max_pages = max_pages
+        self._max_pixels = max_pixels
 
     async def __call__(
         self,
@@ -382,6 +433,9 @@ class MineruTaskHandler:
                 lease=lease,
                 sandbox=sandbox,
                 reporter=reporter,
+                media_type=lease.media_type,
+                max_pages=self._max_pages,
+                max_pixels=self._max_pixels,
             )
         except ParserExecutionError as exc:
             raise TaskExecutionError(
@@ -394,6 +448,12 @@ class MineruTaskHandler:
                 code="PARSER_RESULT_INVALID",
                 retryable=False,
                 summary="MinerU returned an invalid result",
+            ) from None
+        except PdfRenderError as exc:
+            raise TaskExecutionError(
+                code=exc.code,
+                retryable=exc.retryable,
+                summary="worker could not render a PDF evidence page",
             ) from None
         except OSError:
             raise TaskExecutionError(
@@ -420,4 +480,6 @@ def build_mineru_handler(
     return MineruTaskHandler(
         parser=parser,
         timeout_seconds=settings.external_process_timeout_seconds,
+        max_pages=settings.max_pages,
+        max_pixels=settings.max_pixels,
     )

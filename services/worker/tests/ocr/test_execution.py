@@ -270,6 +270,7 @@ async def test_ocr_handler_preserves_first_checkpoint_when_later_page_is_retryab
     assert [checkpoint.page_ordinal for checkpoint in reporter.checkpoints] == [1]
     assert [item.name for item in reporter.uploads] == [
         "raw-page-000001.json",
+        "rendered-page-000001.png",
         "page-000001.json",
     ]
 

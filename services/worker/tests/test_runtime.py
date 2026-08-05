@@ -13,6 +13,7 @@ from study_contracts import (
     PARSE_ATTEMPT_MEDIA_TYPE,
     PARSE_PAGE_MEDIA_TYPE,
     PARSER_RAW_MEDIA_TYPE,
+    AssetType,
     BlockType,
     JobArtifactReceipt,
     JobProgress,
@@ -162,15 +163,19 @@ async def test_native_handler_packages_full_pdf_with_failed_ocr_page(
     assert reporter.progress[-1].total_pages == 2
     assert [upload.name for upload in reporter.uploads] == [
         "raw-page-000001.json",
+        "rendered-page-000001.png",
         "page-000001.json",
         "raw-page-000002.json",
+        "rendered-page-000002.png",
         "page-000002.json",
         "parse-result.json",
     ]
     assert [upload.media_type for upload in reporter.uploads] == [
         PARSER_RAW_MEDIA_TYPE,
+        "image/png",
         PARSE_PAGE_MEDIA_TYPE,
         PARSER_RAW_MEDIA_TYPE,
+        "image/png",
         PARSE_PAGE_MEDIA_TYPE,
         PARSE_ATTEMPT_MEDIA_TYPE,
     ]
@@ -195,6 +200,17 @@ async def test_native_handler_packages_full_pdf_with_failed_ocr_page(
     assert second_page.quality.issues[0].retryable is True
     assert attempt.requested_page_ordinals == [1, 2]
     assert attempt.covered_page_ordinals == [1, 2]
+    rendered_assets = [asset for asset in attempt.assets if asset.type is AssetType.RENDERED_PAGE]
+    assert [asset.locator.ordinal for asset in rendered_assets] == [1, 2]
+    assert all(asset.media_type == "image/png" for asset in rendered_assets)
+    assert all(asset.bbox_norm.model_dump(mode="json") == {
+        "x": 0.0,
+        "y": 0.0,
+        "width": 1.0,
+        "height": 1.0,
+    } for asset in rendered_assets)
+    assert all(asset.metadata["render_backend"] == "pypdfium2" for asset in rendered_assets)
+    assert _upload(reporter, "rendered-page-000001.png").payload.startswith(b"\x89PNG\r\n\x1a\n")
     assert [checkpoint.output_ref for checkpoint in reporter.checkpoints] == [
         first_page_upload.receipt.artifact_ref,
         second_page_upload.receipt.artifact_ref,
@@ -222,6 +238,7 @@ async def test_native_handler_packages_only_requested_pdf_page(tmp_path: Path) -
     assert reporter.progress[-1].total_pages == 2
     assert [upload.name for upload in reporter.uploads] == [
         "raw-page-000002.json",
+        "rendered-page-000002.png",
         "page-000002.json",
         "parse-result.json",
     ]
@@ -368,8 +385,7 @@ async def test_native_handler_checkpoints_earlier_page_before_later_child_failur
     parser = PageParser()
     handler = NativeTaskHandler(parser=parser, timeout_seconds=5)
     manager = SandboxManager(tmp_path / "sandboxes")
-    source = tmp_path / "input.pdf"
-    source.write_bytes(b"self-authored parser input")
+    source = build_documents(tmp_path / "fixtures").pdf
 
     with manager.create() as sandbox:
         shutil.copyfile(source, sandbox.input_path)
@@ -384,6 +400,7 @@ async def test_native_handler_checkpoints_earlier_page_before_later_child_failur
     assert parser.requests == [(1,), (2,)]
     assert [upload.name for upload in reporter.uploads] == [
         "raw-page-000001.json",
+        "rendered-page-000001.png",
         "page-000001.json",
     ]
     assert [checkpoint.page_ordinal for checkpoint in reporter.checkpoints] == [1]

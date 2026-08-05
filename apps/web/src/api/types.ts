@@ -47,6 +47,11 @@ export type BoundingBox = Schema<'BoundingBox'>
 
 export type LearningSourceStatus = Schema<'LearningSourceStatus'>
 export type LearningUnit = Schema<'LearningUnit'>
+export type LearningUnitEvidenceItem = Schema<'LearningUnitEvidenceItem'>
+export type LearningUnitEvidenceOrigin = Schema<'LearningUnitEvidenceOrigin'>
+export type LearningUnitEvidenceRole = Schema<'LearningUnitEvidenceRole'>
+export type LearningUnitEvidenceSupplementRequest = Schema<'LearningUnitEvidenceSupplementRequest'>
+export type VisionEvidenceReview = Schema<'VisionEvidenceReview'>
 export type LearningUnitKind = Schema<'LearningUnitKind'>
 export type LearningUnitPracticeMode = Schema<'LearningUnitPracticeMode'>
 export type LearningUnitStatus = Schema<'LearningUnitStatus'>

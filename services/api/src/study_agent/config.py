@@ -29,6 +29,7 @@ class StorageBackend(StrEnum):
 
 type EmbeddingProviderName = Literal["openai-compatible"]
 type ChatProviderName = Literal["deepseek"]
+type VisionProviderName = Literal["openai-compatible"]
 type AuthProviderName = Literal["oidc"]
 
 
@@ -79,6 +80,15 @@ class Settings(BaseSettings):
     chat_model: str = "deepseek-v4-flash"
     deepseek_api_key: SecretStr | None = None
     chat_stream: bool = True
+
+    # Vision review is an opt-in fallback for pages whose native/OCR structure
+    # is suspicious. It is intentionally independent from the text chat model.
+    vision_provider: VisionProviderName = "openai-compatible"
+    vision_enabled: bool = False
+    vision_base_url: str = "https://api.openai.com/v1"
+    vision_model: str = "gpt-4o-mini"
+    vision_api_key: SecretStr | None = None
+    vision_max_image_bytes: int = Field(default=10 * 1024 * 1024, ge=1, le=20 * 1024 * 1024)
 
     provider_timeout_seconds: float = Field(default=30.0, gt=0, le=300)
     provider_max_attempts: int = Field(default=3, ge=1, le=8)
@@ -156,6 +166,7 @@ class Settings(BaseSettings):
     @field_validator(
         "embedding_api_key",
         "deepseek_api_key",
+        "vision_api_key",
         "auth_client_secret",
         "worker_token",
         mode="before",
@@ -219,8 +230,10 @@ class Settings(BaseSettings):
     @field_validator(
         "embedding_base_url",
         "chat_base_url",
+        "vision_base_url",
         "embedding_model",
         "chat_model",
+        "vision_model",
         "note_docx_cjk_font_family",
     )
     @classmethod
@@ -230,7 +243,7 @@ class Settings(BaseSettings):
             raise ValueError("value must not be blank")
         return stripped
 
-    @field_validator("embedding_base_url", "chat_base_url")
+    @field_validator("embedding_base_url", "chat_base_url", "vision_base_url")
     @classmethod
     def provider_base_url_must_be_safe(cls, value: str) -> str:
         parsed = urlsplit(value)
@@ -315,6 +328,7 @@ class Settings(BaseSettings):
         secret_endpoints = (
             (self.embedding_api_key, self.embedding_base_url),
             (self.deepseek_api_key, self.chat_base_url),
+            (self.vision_api_key, self.vision_base_url),
         )
         if self.app_mode is not AppMode.TEST and any(
             secret is not None and urlsplit(base_url).scheme != "https"
@@ -359,6 +373,10 @@ class Settings(BaseSettings):
     @property
     def chat_configured(self) -> bool:
         return self.deepseek_api_key is not None
+
+    @property
+    def vision_configured(self) -> bool:
+        return self.vision_enabled and self.vision_api_key is not None
 
     @property
     def providers_configured(self) -> bool:

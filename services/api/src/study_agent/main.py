@@ -238,6 +238,9 @@ def _boundary_rejection(status_code: int, title: str) -> JSONResponse:
 
 _QUERY_PATH = re.compile(r"^/api/v1/courses/[^/]+/queries$")
 _PRACTICE_TUTOR_PATH = re.compile(r"^/api/v1/practice-sessions/[^/]+/questions/[^/]+/tutor$")
+_VISION_REVIEW_PATH = re.compile(
+    r"^/api/v1/courses/[^/]+/learning-units/[^/]+/evidence/[^/]+/vision-review$"
+)
 _UPLOAD_DECLARATION_PATH = re.compile(r"^/api/v1/courses/[^/]+/documents$")
 _UPLOAD_BYTES_PATH = re.compile(r"^/api/v1/uploads/[^/]+$")
 
@@ -246,7 +249,9 @@ def _expensive_request_bucket(request: Request) -> tuple[str, int] | None:
     settings = request.app.state.settings
     path = request.url.path
     if request.method == "POST" and (
-        _QUERY_PATH.fullmatch(path) or _PRACTICE_TUTOR_PATH.fullmatch(path)
+        _QUERY_PATH.fullmatch(path)
+        or _PRACTICE_TUTOR_PATH.fullmatch(path)
+        or _VISION_REVIEW_PATH.fullmatch(path)
     ):
         return "provider-query", settings.query_requests_per_minute
     if (request.method == "POST" and _UPLOAD_DECLARATION_PATH.fullmatch(path)) or (

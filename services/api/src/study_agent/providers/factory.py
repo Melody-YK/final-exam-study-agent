@@ -12,7 +12,12 @@ from study_agent.config import Settings
 from study_agent.providers.deepseek import DeepSeekChatProvider
 from study_agent.providers.embedding_openai import OpenAICompatibleEmbeddingProvider
 from study_agent.providers.errors import provider_not_configured
-from study_agent.providers.protocols import ChatProvider, EmbeddingProvider
+from study_agent.providers.protocols import (
+    ChatProvider,
+    EmbeddingProvider,
+    VisionJsonCompletionProvider,
+)
+from study_agent.providers.vision import OpenAICompatibleVisionProvider
 
 SUPPORTED_EMBEDDING_PROVIDERS = ("openai-compatible",)
 SUPPORTED_CHAT_PROVIDERS = ("deepseek",)
@@ -28,9 +33,11 @@ class ProviderRegistry:
         chat_provider: ChatProvider | None,
         http_client: httpx.AsyncClient | None,
         owns_http_client: bool,
+        vision_provider: VisionJsonCompletionProvider | None = None,
     ) -> None:
         self._embedding_provider = embedding_provider
         self._chat_provider = chat_provider
+        self._vision_provider = vision_provider
         self._http_client = http_client
         self._owns_http_client = owns_http_client
 
@@ -38,7 +45,8 @@ class ProviderRegistry:
         return (
             "ProviderRegistry("
             f"embedding_configured={self._embedding_provider is not None}, "
-            f"chat_configured={self._chat_provider is not None})"
+            f"chat_configured={self._chat_provider is not None}, "
+            f"vision_configured={self._vision_provider is not None})"
         )
 
     async def __aenter__(self) -> Self:
@@ -61,6 +69,11 @@ class ProviderRegistry:
         if self._chat_provider is None:
             raise provider_not_configured("chat")
         return self._chat_provider
+
+    def vision(self) -> VisionJsonCompletionProvider:
+        if self._vision_provider is None:
+            raise provider_not_configured("vision")
+        return self._vision_provider
 
     async def aclose(self) -> None:
         if (
@@ -86,10 +99,14 @@ def build_provider_registry(
         raise provider_not_configured("embedding")
     if settings.chat_configured and settings.chat_provider not in SUPPORTED_CHAT_PROVIDERS:
         raise provider_not_configured("chat")
+    if settings.vision_configured and settings.vision_provider != "openai-compatible":
+        raise provider_not_configured("vision")
     if http_client is not None and http_client.is_closed:
         raise ValueError("injected provider HTTP client is closed")
 
-    needs_http = settings.embedding_configured or settings.chat_configured
+    needs_http = (
+        settings.embedding_configured or settings.chat_configured or settings.vision_configured
+    )
     shared_http = http_client
     owns_http = False
     if needs_http and shared_http is None:
@@ -135,9 +152,26 @@ def build_provider_registry(
             sleep=sleep,
         )
 
+    vision_provider: VisionJsonCompletionProvider | None = None
+    if settings.vision_configured and settings.vision_api_key is not None:
+        vision_provider = OpenAICompatibleVisionProvider(
+            api_key=settings.vision_api_key,
+            base_url=settings.vision_base_url,
+            model=settings.vision_model,
+            timeout_seconds=settings.provider_timeout_seconds,
+            max_attempts=settings.provider_max_attempts,
+            retry_base_seconds=settings.provider_retry_base_seconds,
+            retry_max_seconds=settings.provider_retry_max_seconds,
+            max_response_bytes=settings.provider_max_response_bytes,
+            max_image_bytes=settings.vision_max_image_bytes,
+            http_client=shared_http,
+            sleep=sleep,
+        )
+
     return ProviderRegistry(
         embedding_provider=embedding_provider,
         chat_provider=chat_provider,
         http_client=shared_http,
         owns_http_client=owns_http,
+        vision_provider=vision_provider,
     )

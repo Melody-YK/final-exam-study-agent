@@ -15,7 +15,7 @@ ANSWERING_TABLES = {
     "query_runs",
     "retrieval_snapshots",
 }
-CURRENT_HEAD = "20260804_0019"
+CURRENT_HEAD = "20260805_0021"
 
 
 @pytest.mark.integration

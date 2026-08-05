@@ -523,6 +523,86 @@ describe("LearningPage", () => {
     });
   });
 
+  it("allows trying a low-confidence prototype with an explicit warning", async () => {
+    const lowConfidenceUnit: LearningUnit = {
+      ...units[0]!,
+      id: "prototype-low-confidence",
+      canonical_key: "concept:第9题",
+      kind: "concept",
+      label: "第9题",
+      parent_id: null,
+      practice_mode: "exercise_variant",
+      practice_status: "low_confidence",
+      practice_confidence_note: "原型含有可能的公式或 OCR 噪声，生成时只使用能够确认的方法。",
+    };
+    const lowConfidenceBatch = {
+      ...batch,
+      learning_unit_ids: [lowConfidenceUnit.id],
+      target_question_count: 1,
+      total_items: 1,
+    } satisfies PracticeBatchSnapshot;
+    vi.spyOn(studyApi, "listLearningUnits").mockResolvedValue([lowConfidenceUnit]);
+    vi.spyOn(studyApi, "getLearningSummary").mockResolvedValue({
+      ...summary,
+      units: [lowConfidenceUnit],
+    });
+    vi.spyOn(studyApi, "getReviewQueue").mockResolvedValue([]);
+    const createBatch = vi
+      .spyOn(studyApi, "createPracticeBatch")
+      .mockResolvedValue(lowConfidenceBatch);
+
+    const { user } = renderInWorkspace(<LearningPage />);
+    const checkbox = await screen.findByRole("checkbox", { name: /第9题/ });
+
+    expect(checkbox).toHaveAccessibleName(/低置信度/);
+    await user.click(checkbox);
+    expect(
+      screen.getByText(/所选范围包含低置信度原型/),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /开始生成变式题/ }));
+    expect(createBatch).toHaveBeenCalledWith("course-1", {
+      learning_unit_ids: [lowConfidenceUnit.id],
+      question_count: 1,
+    });
+  });
+
+  it("warns when a selected chapter contains a low-confidence prototype", async () => {
+    const chapter: LearningUnit = {
+      ...units[0]!,
+      id: "chapter-with-low-confidence-prototype",
+      canonical_key: "section:习题章节",
+      label: "习题章节",
+    };
+    const prototype: LearningUnit = {
+      ...units[0]!,
+      id: "prototype-child-low-confidence",
+      canonical_key: "concept:section:习题章节/第3题",
+      kind: "concept",
+      label: "第3题",
+      parent_id: chapter.id,
+      practice_mode: "exercise_variant",
+      practice_status: "low_confidence",
+      practice_confidence_note: "原型材料较短，可能缺少完整题干或求解条件。",
+    };
+    const groupedUnits = [chapter, prototype];
+    vi.spyOn(studyApi, "listLearningUnits").mockResolvedValue(groupedUnits);
+    vi.spyOn(studyApi, "getLearningSummary").mockResolvedValue({
+      ...summary,
+      units: groupedUnits,
+    });
+    vi.spyOn(studyApi, "getReviewQueue").mockResolvedValue([]);
+
+    const { user } = renderInWorkspace(<LearningPage />);
+    const chapterCheckbox = await screen.findByRole("checkbox", {
+      name: /习题章节/,
+    });
+
+    await user.click(chapterCheckbox);
+    expect(
+      screen.getByText(/所选范围包含低置信度原型/),
+    ).toBeInTheDocument();
+  });
+
   it("allows nine user-selected scopes and requires enough questions to cover them", async () => {
     const selectableUnits = manyLearningUnits().slice(0, 9);
     vi.spyOn(studyApi, "listLearningUnits").mockResolvedValue(selectableUnits);

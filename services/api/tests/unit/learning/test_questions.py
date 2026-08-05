@@ -21,7 +21,7 @@ from study_agent.modules.learning.questions import (
 )
 from study_agent.providers.errors import ProviderError, ProviderErrorCode
 from study_agent.providers.factory import ProviderRegistry
-from study_agent.providers.protocols import StructuredJsonDraft
+from study_agent.providers.protocols import JsonCompletionPrompt, StructuredJsonDraft
 from study_contracts import LearningUnitPracticeMode, Question, QuestionType, SourceLocator
 
 
@@ -132,9 +132,37 @@ def test_exercise_variant_prompt_requires_a_self_contained_transformation() -> N
 
     assert prompt.payload["generation_mode"] == "exercise_variant"
     assert prompt.payload["avoid_prompts"] == ["旧的 FIFO 练习题"]
-    assert "同知识点、同解题方法、同推理结构" in prompt.system_prompt
+    assert prompt.payload["variation_guidance"] == {
+        "preserve": ["核心知识点", "解题方法", "题型"],
+        "change": [
+            "由模型根据原型自主选择一个实质性变化方向",
+            "确保题干条件、答案和解法都与新变化一致",
+        ],
+        "avoid": ["原题措辞", "原答案结果", "已有练习"],
+    }
+    assert "保留知识点、方法和题型" in prompt.system_prompt
     assert "不能引用原题" in prompt.system_prompt
-    assert "完整推导新条件" in prompt.system_prompt
+    assert "自主选择最自然的变式方向" in prompt.system_prompt
+    assert prompt.payload["source_quality"] == "normal"
+
+
+def test_calculation_variant_prompt_keeps_variation_model_led() -> None:
+    prompt = build_question_prompt(
+        unit_label="第9题",
+        question_type=QuestionType.CALCULATION,
+        evidence=(
+            _evidence(
+                text="盘块大小为2KB，32GB数据使用三级索引，块指针为8B。",
+            ),
+        ),
+        generation_mode=LearningUnitPracticeMode.EXERCISE_VARIANT,
+    )
+
+    assert prompt.payload["variation_guidance"] is not None
+    assert prompt.payload["source_quality"] == "normal"
+    assert "自主选择合理的新条件或变化方向" in prompt.system_prompt
+    assert "variation_constraints" not in prompt.payload
+    assert "不输出 Markdown 表格" in prompt.system_prompt
 
 
 def test_exercise_question_type_inference_preserves_free_response_shape() -> None:
@@ -237,24 +265,33 @@ def test_exercise_variant_validation_rejects_copy_duplicate_and_unchanged_parame
         )
     assert duplicate_error.value.code == "QUESTION_VARIANT_DUPLICATE"
 
-    unchanged = validate_provider_question(
+
+def test_calculation_variant_is_not_rejected_by_bare_numeric_heuristics() -> None:
+    evidence = _evidence(
+        text=(
+            "盘块大小为2KB，32GB数据使用3级索引，块指针为8B；参考答案中还出现4分和2^8等推导数字。"
+        )
+    )
+    transformed = validate_provider_question(
         {
             "question_type": "calculation",
-            "prompt": "另一个系统仍使用原参数，采用FIFO算法计算缺页次数。",
-            "reference_answer": "缺页次数与原型答案相同。",
-            "solution": "按原型中的FIFO步骤逐项模拟。",
+            "prompt": (
+                "某文件系统每个索引盘块大小为4KB，块指针大小为4B，采用3级索引，"
+                "计算一个索引盘块可存放的块指针数。"
+            ),
+            "reference_answer": "可存放1024个块指针。",
+            "solution": "4KB = 4096B，4096 ÷ 4 = 1024。",
             "evidence_ids": ["E1"],
             "difficulty": 2,
         },
-        question_id="variant-unchanged",
+        question_id="variant-unit-aware",
         course_id="course-1",
         learning_unit_id="unit-1",
         authorized_evidence=(evidence,),
         expected_question_type=QuestionType.CALCULATION,
     )
-    with pytest.raises(QuestionValidationError) as unchanged_error:
-        validate_exercise_variant(unchanged, (evidence,))
-    assert unchanged_error.value.code == "QUESTION_VARIANT_NOT_TRANSFORMED"
+
+    validate_exercise_variant(transformed, (evidence,))
 
 
 def test_question_validation_accepts_simplified_provider_contract_and_backfills_source() -> None:
@@ -608,6 +645,58 @@ class _ConstructedJsonProvider:
         )
 
 
+class _RepairingConstructedJsonProvider:
+    def __init__(self) -> None:
+        self.requests: list[JsonCompletionPrompt] = []
+        self.generation_calls = 0
+        self.review_calls = 0
+
+    async def complete_json(self, request: JsonCompletionPrompt) -> StructuredJsonDraft:
+        self.requests.append(request)
+        if getattr(request, "response_schema_version", "") == (
+            "learning-constructed-question-review-1.0"
+        ):
+            self.review_calls += 1
+            if self.review_calls == 1:
+                return StructuredJsonDraft(
+                    payload={
+                        "verdict": "reject",
+                        "issue_codes": ["REFERENCE_ANSWER_INCONSISTENT"],
+                        "reason": "参考答案与新题参数不一致，需要重新计算。",
+                    },
+                    model="test-provider",
+                )
+            return StructuredJsonDraft(
+                payload={
+                    "verdict": "pass",
+                    "issue_codes": [],
+                    "reason": "新题参数、参考答案和解题过程一致。",
+                },
+                model="test-provider",
+            )
+
+        self.generation_calls += 1
+        if self.generation_calls == 1:
+            prompt = "某分页系统页面大小为128字节，逻辑地址为390，求页号和页内偏移。"
+            answer = "页号为3，页内偏移为6字节。"
+            solution = "390 = 3×128 + 6，因此页号为3，页内偏移为6字节。"
+        else:
+            prompt = "某分页系统页面大小为256字节，逻辑地址为777，求页号和页内偏移。"
+            answer = "页号为3，页内偏移为9字节。"
+            solution = "777 = 3×256 + 9，因此页号为3，页内偏移为9字节。"
+        return StructuredJsonDraft(
+            payload={
+                "question_type": "calculation",
+                "prompt": prompt,
+                "reference_answer": answer,
+                "solution": solution,
+                "evidence_ids": ["E1"],
+                "difficulty": 2,
+            },
+            model="test-provider",
+        )
+
+
 class _SlowJsonProvider:
     async def complete_json(self, _request: object) -> StructuredJsonDraft:
         await asyncio.sleep(0.05)
@@ -721,11 +810,44 @@ async def test_generator_keeps_calculation_type_and_passes_retry_feedback() -> N
     assert question.options == []
     generation_request = provider.requests[0]
     assert generation_request.payload["variation_attempt"] == 2
-    assert "新的输入数值" in generation_request.payload["retry_feedback"]
+    assert "明显不同的变化方向" in generation_request.payload["retry_feedback"]
     assert [request.response_schema_version for request in provider.requests] == [
         "learning-question-3.0",
         "learning-constructed-question-review-1.0",
     ]
+
+
+@pytest.mark.asyncio
+async def test_generator_repairs_constructed_question_with_review_detail() -> None:
+    provider = _RepairingConstructedJsonProvider()
+    registry = ProviderRegistry(
+        embedding_provider=None,
+        chat_provider=provider,  # type: ignore[arg-type]
+        http_client=None,
+        owns_http_client=False,
+    )
+    evidence = _evidence(text="页面大小为100字节，可用逻辑地址除以页面大小得到页号和页内偏移。")
+
+    question, _response_id, _model = await QuestionGenerator(registry).generate(
+        question_id="question-calculation-repaired",
+        course_id="course-1",
+        learning_unit_id="unit-1",
+        unit_label="第6题",
+        question_type=QuestionType.CALCULATION,
+        evidence=(evidence,),
+        generation_mode=LearningUnitPracticeMode.EXERCISE_VARIANT,
+    )
+
+    assert question.prompt.endswith("777，求页号和页内偏移。")
+    assert provider.generation_calls == 2
+    assert provider.review_calls == 2
+    retry_request = provider.requests[2]
+    assert retry_request.payload["variation_attempt"] == 2
+    assert retry_request.payload["retry_feedback"] == (
+        "重新计算并修正参考答案和完整解法，确保二者与题干一致。"
+    )
+    assert "参考答案与新题参数不一致" in retry_request.payload["retry_feedback_detail"]
+    assert any("页面大小为128字节" in prompt for prompt in retry_request.payload["avoid_prompts"])
 
 
 @pytest.mark.asyncio

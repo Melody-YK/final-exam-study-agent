@@ -3,7 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { installMockApi } from "./mockApi";
 
 async function selectFirstScope(page: Page) {
-  await page.locator("label.learning-unit").first().click();
+  await page.locator("label.learning-unit__selector").first().click();
 }
 
 test.beforeEach(async ({ page }) => {
@@ -99,7 +99,9 @@ test("keeps drafts across questions and exposes a resume action after leaving pr
   ).toBeChecked();
 
   await page.getByRole("button", { name: "返回学习台" }).click();
-  await expect(page.getByRole("button", { name: "继续上次练习" })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "继续上次练习" }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "继续上次练习" }).click();
   await expect(
     page.getByRole("radio", { name: "线程负责资源分配" }),
@@ -114,9 +116,45 @@ test("asks AI for a source-bound hint before submitting", async ({ page }) => {
   await page.getByRole("button", { name: "问 AI" }).click();
   await page.getByLabel("向 AI 提问").fill("给我一点提示");
   await page.getByRole("button", { name: "发送问题" }).click();
-  await expect(page.getByText("先比较题干强调的是资源归属还是执行调度。")).toBeVisible();
+  await expect(
+    page.getByText("先比较题干强调的是资源归属还是执行调度。"),
+  ).toBeVisible();
   await page.getByRole("button", { name: "关闭" }).click();
   await expect(page.getByText("已使用 AI 提示")).toBeVisible();
+});
+
+test("lets the learner inspect and supplement a learning unit's evidence", async ({
+  page,
+}) => {
+  const evidenceButton = page.getByRole("button", {
+    name: "查看进程管理的1个证据片段",
+  });
+  await expect(evidenceButton).toBeVisible();
+  await evidenceButton.click();
+
+  const dialog = page.getByRole("dialog", { name: "学习单元证据" });
+  await expect(dialog).toContainText("原解析的进程管理片段");
+  await expect(dialog).toContainText("有效正文不足，等待用户补充完整原型。");
+
+  await dialog
+    .getByLabel("补充内容")
+    .fill(
+      "完整题干：某进程使用 2 个资源单元，系统共有 8 个资源单元，求资源利用率。参考答案：25%，并说明计算过程。",
+    );
+  await dialog.getByRole("button", { name: "保存为主证据" }).click();
+
+  await expect(dialog).toContainText("完整题干：某进程使用 2 个资源单元");
+  await expect(dialog).toContainText("完整题目与解答");
+  await expect(dialog).toContainText("生成主证据");
+  await dialog.getByRole("button", { name: "查看证据" }).click();
+  const adoptedEvidence = page.getByRole("dialog", { name: "采用的证据" });
+  await expect(adoptedEvidence).toContainText(
+    "完整题干：某进程使用 2 个资源单元",
+  );
+  await adoptedEvidence.getByRole("button", { name: "关闭" }).click();
+  await expect(
+    page.getByRole("dialog", { name: "学习单元证据" }),
+  ).toBeVisible();
 });
 
 test("Provider unavailable disables new generation and stale source stays unavailable", async ({

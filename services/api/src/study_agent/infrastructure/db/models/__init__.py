@@ -40,6 +40,7 @@ from study_agent.infrastructure.db.models.jobs import (
 )
 from study_agent.infrastructure.db.models.learning import (
     LearningMasteryModel,
+    LearningUnitEvidenceSupplementModel,
     LearningUnitModel,
     LearningUnitSourceModel,
     PracticeAttemptModel,
@@ -103,6 +104,7 @@ __all__ = [
     "JobEventModel",
     "LearnerMemoryModel",
     "LearningMasteryModel",
+    "LearningUnitEvidenceSupplementModel",
     "LearningUnitModel",
     "LearningUnitSourceModel",
     "LexicalManifestModel",

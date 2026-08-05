@@ -105,6 +105,7 @@ class LearningUnitSourceModel(Base):
             "chunk_id",
             name="uq_learning_unit_sources_binding",
         ),
+        UniqueConstraint("id", "course_id", "user_id", name="uq_learning_unit_sources_id_scope"),
         CheckConstraint(
             "status IN ('valid', 'stale', 'unavailable')", name="ck_learning_unit_sources_status"
         ),
@@ -124,6 +125,78 @@ class LearningUnitSourceModel(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="valid")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class LearningUnitEvidenceSupplementModel(Base):
+    __tablename__ = "learning_unit_evidence_supplements"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["unit_id", "course_id", "user_id"],
+            ["learning_units.id", "learning_units.course_id", "learning_units.user_id"],
+            name="fk_learning_evidence_supplements_unit_scope",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["source_id", "course_id", "user_id"],
+            [
+                "learning_unit_sources.id",
+                "learning_unit_sources.course_id",
+                "learning_unit_sources.user_id",
+            ],
+            name="fk_learning_evidence_supplements_source_scope",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "id", "course_id", "user_id", name="uq_learning_evidence_supplements_id_scope"
+        ),
+        CheckConstraint(
+            "role IN ('complete_prototype', 'reference_solution', 'additional_context')",
+            name="ck_learning_evidence_supplements_role",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'superseded', 'revoked')",
+            name="ck_learning_evidence_supplements_status",
+        ),
+        CheckConstraint("btrim(text) <> ''", name="ck_learning_evidence_supplements_text_nonblank"),
+        CheckConstraint(
+            f"content_sha256 {_HASH_CHECK}", name="ck_learning_evidence_supplements_hash"
+        ),
+        CheckConstraint(
+            f"source_content_sha256 {_HASH_CHECK}",
+            name="ck_learning_evidence_supplements_source_hash",
+        ),
+        Index(
+            "uq_learning_evidence_supplements_active_unit",
+            "user_id",
+            "course_id",
+            "unit_id",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
+        ),
+        Index(
+            "ix_learning_evidence_supplements_scope_status",
+            "user_id",
+            "course_id",
+            "status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    course_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    unit_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    source_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    source_content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    role: Mapped[str] = mapped_column(String(32), nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
 
@@ -198,6 +271,16 @@ class PracticeQuestionEvidenceModel(Base):
             name="fk_practice_question_evidence_chunk_scope",
             ondelete="CASCADE",
         ),
+        ForeignKeyConstraint(
+            ["supplement_id", "course_id", "user_id"],
+            [
+                "learning_unit_evidence_supplements.id",
+                "learning_unit_evidence_supplements.course_id",
+                "learning_unit_evidence_supplements.user_id",
+            ],
+            name="fk_practice_question_evidence_supplement_scope",
+            ondelete="RESTRICT",
+        ),
         UniqueConstraint(
             "question_id",
             "course_id",
@@ -217,6 +300,7 @@ class PracticeQuestionEvidenceModel(Base):
     document_id: Mapped[str] = mapped_column(String(36), nullable=False)
     revision_id: Mapped[str] = mapped_column(String(36), nullable=False)
     chunk_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    supplement_id: Mapped[str | None] = mapped_column(String(36))
     content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     locator: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     quote: Mapped[str] = mapped_column(Text, nullable=False)

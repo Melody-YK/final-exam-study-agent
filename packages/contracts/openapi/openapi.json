@@ -2999,6 +2999,18 @@
             ],
             "title": "Parent Id"
           },
+          "practice_confidence_note": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Practice Confidence Note"
+          },
           "practice_mode": {
             "$ref": "#/components/schemas/LearningUnitPracticeMode",
             "default": "knowledge_recall"
@@ -3039,6 +3051,170 @@
         "title": "LearningUnit",
         "type": "object"
       },
+      "LearningUnitEvidenceItem": {
+        "additionalProperties": false,
+        "properties": {
+          "chunk_id": {
+            "minLength": 1,
+            "title": "Chunk Id",
+            "type": "string"
+          },
+          "confidence_note": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence Note"
+          },
+          "content_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Sha256",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "document_id": {
+            "minLength": 1,
+            "title": "Document Id",
+            "type": "string"
+          },
+          "document_name": {
+            "minLength": 1,
+            "title": "Document Name",
+            "type": "string"
+          },
+          "id": {
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "is_primary": {
+            "title": "Is Primary",
+            "type": "boolean"
+          },
+          "locator": {
+            "$ref": "#/components/schemas/SourceLocator"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/LearningUnitEvidenceOrigin"
+          },
+          "practice_status": {
+            "$ref": "#/components/schemas/LearningUnitPracticeStatus"
+          },
+          "revision_id": {
+            "minLength": 1,
+            "title": "Revision Id",
+            "type": "string"
+          },
+          "role": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LearningUnitEvidenceRole"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source_id": {
+            "minLength": 1,
+            "title": "Source Id",
+            "type": "string"
+          },
+          "supplement_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supplement Id"
+          },
+          "text": {
+            "maxLength": 50000,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          },
+          "unit_id": {
+            "minLength": 1,
+            "title": "Unit Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "unit_id",
+          "source_id",
+          "origin",
+          "document_id",
+          "document_name",
+          "revision_id",
+          "chunk_id",
+          "content_sha256",
+          "locator",
+          "text",
+          "is_primary",
+          "practice_status",
+          "created_at"
+        ],
+        "title": "LearningUnitEvidenceItem",
+        "type": "object"
+      },
+      "LearningUnitEvidenceOrigin": {
+        "enum": [
+          "parsed",
+          "user_supplied"
+        ],
+        "title": "LearningUnitEvidenceOrigin",
+        "type": "string"
+      },
+      "LearningUnitEvidenceRole": {
+        "enum": [
+          "complete_prototype",
+          "reference_solution",
+          "additional_context"
+        ],
+        "title": "LearningUnitEvidenceRole",
+        "type": "string"
+      },
+      "LearningUnitEvidenceSupplementRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "role": {
+            "$ref": "#/components/schemas/LearningUnitEvidenceRole",
+            "default": "complete_prototype"
+          },
+          "source_id": {
+            "minLength": 1,
+            "title": "Source Id",
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 20000,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_id",
+          "text"
+        ],
+        "title": "LearningUnitEvidenceSupplementRequest",
+        "type": "object"
+      },
       "LearningUnitKind": {
         "enum": [
           "section",
@@ -3059,6 +3235,7 @@
       "LearningUnitPracticeStatus": {
         "enum": [
           "ready",
+          "low_confidence",
           "insufficient_evidence",
           "stale"
         ],
@@ -5783,6 +5960,105 @@
         "title": "ValidationError",
         "type": "object"
       },
+      "VisionEvidenceReview": {
+        "additionalProperties": false,
+        "description": "User-reviewable extraction from a low-confidence rendered page.",
+        "properties": {
+          "conditions": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "title": "Conditions",
+            "type": "array"
+          },
+          "confidence": {
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ],
+            "title": "Confidence",
+            "type": "string"
+          },
+          "document_name": {
+            "minLength": 1,
+            "title": "Document Name",
+            "type": "string"
+          },
+          "evidence_complete": {
+            "title": "Evidence Complete",
+            "type": "boolean"
+          },
+          "extracted_text": {
+            "maxLength": 20000,
+            "minLength": 1,
+            "title": "Extracted Text",
+            "type": "string"
+          },
+          "locator": {
+            "$ref": "#/components/schemas/SourceLocator"
+          },
+          "model": {
+            "minLength": 1,
+            "title": "Model",
+            "type": "string"
+          },
+          "question_type": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QuestionType"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "reference_answer": {
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Answer"
+          },
+          "source_id": {
+            "minLength": 1,
+            "title": "Source Id",
+            "type": "string"
+          },
+          "uncertain_spans": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "title": "Uncertain Spans",
+            "type": "array"
+          }
+        },
+        "required": [
+          "source_id",
+          "document_name",
+          "locator",
+          "extracted_text",
+          "evidence_complete",
+          "confidence",
+          "reason",
+          "model"
+        ],
+        "title": "VisionEvidenceReview",
+        "type": "object"
+      },
       "WorkerCapabilities": {
         "additionalProperties": false,
         "properties": {
@@ -7571,6 +7847,255 @@
           }
         },
         "summary": "Regenerate Learning Units",
+        "tags": [
+          "learning-loop"
+        ]
+      }
+    },
+    "/api/v1/courses/{course_id}/learning-units/{unit_id}/evidence": {
+      "get": {
+        "operationId": "list_learning_unit_evidence_api_v1_courses__course_id__learning_units__unit_id__evidence_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "course_id",
+            "required": true,
+            "schema": {
+              "title": "Course Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "unit_id",
+            "required": true,
+            "schema": {
+              "title": "Unit Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LearningUnitEvidenceItem"
+                  },
+                  "title": "Response List Learning Unit Evidence Api V1 Courses  Course Id  Learning Units  Unit Id  Evidence Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Learning Unit Evidence",
+        "tags": [
+          "learning-loop"
+        ]
+      }
+    },
+    "/api/v1/courses/{course_id}/learning-units/{unit_id}/evidence-supplements": {
+      "post": {
+        "operationId": "create_learning_unit_evidence_supplement_api_v1_courses__course_id__learning_units__unit_id__evidence_supplements_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "course_id",
+            "required": true,
+            "schema": {
+              "title": "Course Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "unit_id",
+            "required": true,
+            "schema": {
+              "title": "Unit Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LearningUnitEvidenceSupplementRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LearningUnitEvidenceItem"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Learning Unit Evidence Supplement",
+        "tags": [
+          "learning-loop"
+        ]
+      }
+    },
+    "/api/v1/courses/{course_id}/learning-units/{unit_id}/evidence-supplements/{supplement_id}": {
+      "delete": {
+        "operationId": "revoke_learning_unit_evidence_supplement_api_v1_courses__course_id__learning_units__unit_id__evidence_supplements__supplement_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "course_id",
+            "required": true,
+            "schema": {
+              "title": "Course Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "unit_id",
+            "required": true,
+            "schema": {
+              "title": "Unit Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "supplement_id",
+            "required": true,
+            "schema": {
+              "title": "Supplement Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke Learning Unit Evidence Supplement",
+        "tags": [
+          "learning-loop"
+        ]
+      }
+    },
+    "/api/v1/courses/{course_id}/learning-units/{unit_id}/evidence/{source_id}/vision-review": {
+      "post": {
+        "operationId": "review_learning_unit_evidence_with_vision_api_v1_courses__course_id__learning_units__unit_id__evidence__source_id__vision_review_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "course_id",
+            "required": true,
+            "schema": {
+              "title": "Course Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "unit_id",
+            "required": true,
+            "schema": {
+              "title": "Unit Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "title": "Source Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisionEvidenceReview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "证据页面不可用"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "多模态 Provider 未配置"
+          }
+        },
+        "summary": "Review Learning Unit Evidence With Vision",
         "tags": [
           "learning-loop"
         ]

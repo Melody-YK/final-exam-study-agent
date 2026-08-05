@@ -72,6 +72,25 @@ class JsonCompletionPrompt:
 
 
 @dataclass(frozen=True, slots=True)
+class VisionImage:
+    """One bounded image supplied to a multimodal completion."""
+
+    data: bytes
+    media_type: str
+    detail: str = "high"
+
+
+@dataclass(frozen=True, slots=True)
+class VisionJsonCompletionPrompt:
+    """A provider-neutral JSON request that includes one or more page images."""
+
+    system_prompt: str
+    payload: dict[str, object]
+    images: tuple[VisionImage, ...]
+    response_schema_version: str = "1.0"
+
+
+@dataclass(frozen=True, slots=True)
 class TextCompletionPrompt:
     """A provider-neutral request for a user-visible streaming draft."""
 
@@ -141,6 +160,11 @@ class ChatProvider(Protocol):
 @runtime_checkable
 class JsonCompletionProvider(Protocol):
     async def complete_json(self, request: JsonCompletionPrompt) -> StructuredJsonDraft: ...
+
+
+@runtime_checkable
+class VisionJsonCompletionProvider(Protocol):
+    async def complete_json(self, request: VisionJsonCompletionPrompt) -> StructuredJsonDraft: ...
 
 
 @runtime_checkable

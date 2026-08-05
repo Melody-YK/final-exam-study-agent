@@ -502,6 +502,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/courses/{course_id}/learning-units/{unit_id}/evidence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Learning Unit Evidence */
+        get: operations["list_learning_unit_evidence_api_v1_courses__course_id__learning_units__unit_id__evidence_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/courses/{course_id}/learning-units/{unit_id}/evidence-supplements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Learning Unit Evidence Supplement */
+        post: operations["create_learning_unit_evidence_supplement_api_v1_courses__course_id__learning_units__unit_id__evidence_supplements_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/courses/{course_id}/learning-units/{unit_id}/evidence-supplements/{supplement_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke Learning Unit Evidence Supplement */
+        delete: operations["revoke_learning_unit_evidence_supplement_api_v1_courses__course_id__learning_units__unit_id__evidence_supplements__supplement_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/courses/{course_id}/learning-units/{unit_id}/evidence/{source_id}/vision-review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Review Learning Unit Evidence With Vision */
+        post: operations["review_learning_unit_evidence_with_vision_api_v1_courses__course_id__learning_units__unit_id__evidence__source_id__vision_review_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/courses/{course_id}/note-batches": {
         parameters: {
             query?: never;
@@ -2259,6 +2327,8 @@ export interface components {
             next_review_at?: string | null;
             /** Parent Id */
             parent_id?: string | null;
+            /** Practice Confidence Note */
+            practice_confidence_note?: string | null;
             /** @default knowledge_recall */
             practice_mode: components["schemas"]["LearningUnitPracticeMode"];
             /** @default insufficient_evidence */
@@ -2267,6 +2337,61 @@ export interface components {
             /** Sources */
             sources?: components["schemas"]["LearningUnitSource"][];
             status: components["schemas"]["LearningUnitStatus"];
+        };
+        /** LearningUnitEvidenceItem */
+        LearningUnitEvidenceItem: {
+            /** Chunk Id */
+            chunk_id: string;
+            /** Confidence Note */
+            confidence_note?: string | null;
+            /** Content Sha256 */
+            content_sha256: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Document Id */
+            document_id: string;
+            /** Document Name */
+            document_name: string;
+            /** Id */
+            id: string;
+            /** Is Primary */
+            is_primary: boolean;
+            locator: components["schemas"]["SourceLocator"];
+            origin: components["schemas"]["LearningUnitEvidenceOrigin"];
+            practice_status: components["schemas"]["LearningUnitPracticeStatus"];
+            /** Revision Id */
+            revision_id: string;
+            role?: components["schemas"]["LearningUnitEvidenceRole"] | null;
+            /** Source Id */
+            source_id: string;
+            /** Supplement Id */
+            supplement_id?: string | null;
+            /** Text */
+            text: string;
+            /** Unit Id */
+            unit_id: string;
+        };
+        /**
+         * LearningUnitEvidenceOrigin
+         * @enum {string}
+         */
+        LearningUnitEvidenceOrigin: "parsed" | "user_supplied";
+        /**
+         * LearningUnitEvidenceRole
+         * @enum {string}
+         */
+        LearningUnitEvidenceRole: "complete_prototype" | "reference_solution" | "additional_context";
+        /** LearningUnitEvidenceSupplementRequest */
+        LearningUnitEvidenceSupplementRequest: {
+            /** @default complete_prototype */
+            role: components["schemas"]["LearningUnitEvidenceRole"];
+            /** Source Id */
+            source_id: string;
+            /** Text */
+            text: string;
         };
         /**
          * LearningUnitKind
@@ -2283,7 +2408,7 @@ export interface components {
          * LearningUnitPracticeStatus
          * @enum {string}
          */
-        LearningUnitPracticeStatus: "ready" | "insufficient_evidence" | "stale";
+        LearningUnitPracticeStatus: "ready" | "low_confidence" | "insufficient_evidence" | "stale";
         /** LearningUnitSource */
         LearningUnitSource: {
             /** Chunk Id */
@@ -3164,6 +3289,37 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+        };
+        /**
+         * VisionEvidenceReview
+         * @description User-reviewable extraction from a low-confidence rendered page.
+         */
+        VisionEvidenceReview: {
+            /** Conditions */
+            conditions?: string[];
+            /**
+             * Confidence
+             * @enum {string}
+             */
+            confidence: "high" | "medium" | "low";
+            /** Document Name */
+            document_name: string;
+            /** Evidence Complete */
+            evidence_complete: boolean;
+            /** Extracted Text */
+            extracted_text: string;
+            locator: components["schemas"]["SourceLocator"];
+            /** Model */
+            model: string;
+            question_type?: components["schemas"]["QuestionType"] | null;
+            /** Reason */
+            reason: string;
+            /** Reference Answer */
+            reference_answer?: string | null;
+            /** Source Id */
+            source_id: string;
+            /** Uncertain Spans */
+            uncertain_spans?: string[];
         };
         /** WorkerCapabilities */
         WorkerCapabilities: {
@@ -4325,6 +4481,156 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_learning_unit_evidence_api_v1_courses__course_id__learning_units__unit_id__evidence_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                course_id: string;
+                unit_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LearningUnitEvidenceItem"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_learning_unit_evidence_supplement_api_v1_courses__course_id__learning_units__unit_id__evidence_supplements_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                course_id: string;
+                unit_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LearningUnitEvidenceSupplementRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LearningUnitEvidenceItem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_learning_unit_evidence_supplement_api_v1_courses__course_id__learning_units__unit_id__evidence_supplements__supplement_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                course_id: string;
+                unit_id: string;
+                supplement_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    review_learning_unit_evidence_with_vision_api_v1_courses__course_id__learning_units__unit_id__evidence__source_id__vision_review_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                course_id: string;
+                unit_id: string;
+                source_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VisionEvidenceReview"];
+                };
+            };
+            /** @description 证据页面不可用 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description 多模态 Provider 未配置 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
                 };
             };
         };

@@ -7,6 +7,8 @@ from fastapi import APIRouter, Header, Request, Response, status
 from study_agent.api.errors import ApiProblem, ProblemCode, ProblemDetails
 from study_agent.api.schemas.learning_loop import (
     LearningSummaryResponse,
+    LearningUnitEvidenceResponse,
+    LearningUnitEvidenceSupplementRequest,
     LearningUnitResponse,
     PracticeAttemptRequest,
     PracticeAttemptResponse,
@@ -18,21 +20,34 @@ from study_agent.api.schemas.learning_loop import (
     PracticeTutorRequest,
     PracticeTutorResponseModel,
     ReviewQueueItemResponse,
+    VisionEvidenceReviewResponse,
 )
+from study_agent.config import Settings
 from study_agent.identity.principal import Principal
 from study_agent.identity.session import get_request_principal
+from study_agent.infrastructure.db.session import Database
 from study_agent.modules.learning.runner import LearningBatchRunner
 from study_agent.modules.learning.service import (
     LearningLoopService,
     LearningServiceError,
     LearningServiceErrorCode,
 )
+from study_agent.modules.learning.vision_review import (
+    VisionEvidenceReviewService,
+    VisionReviewError,
+    VisionReviewErrorCode,
+)
+from study_agent.providers.errors import ProviderError, ProviderErrorCode
+from study_agent.providers.factory import ProviderRegistry
+from study_agent.providers.protocols import ObjectStorage
 from study_contracts import (
     LearningSummary,
     LearningUnit,
+    LearningUnitEvidenceItem,
     PracticeAttemptResult,
     PracticeTutorConversation,
     PracticeTutorResponse,
+    VisionEvidenceReview,
 )
 
 router = APIRouter(prefix="/api/v1", tags=["learning-loop"])
@@ -49,6 +64,62 @@ def _service(request: Request) -> LearningLoopService:
 
 def _runner(request: Request) -> LearningBatchRunner:
     return cast(LearningBatchRunner, request.app.state.learning_runner)
+
+
+def _vision_service(request: Request) -> VisionEvidenceReviewService:
+    return VisionEvidenceReviewService(
+        cast(Database, request.app.state.database),
+        cast(ObjectStorage, request.app.state.storage),
+        cast(Settings, request.app.state.settings),
+        cast(ProviderRegistry, request.app.state.provider_registry),
+    )
+
+
+def _vision_problem(exc: VisionReviewError) -> ApiProblem:
+    if exc.code is VisionReviewErrorCode.NOT_FOUND:
+        return ApiProblem(
+            status=404,
+            code=ProblemCode.RESOURCE_NOT_FOUND,
+            title="学习证据不存在",
+            detail=exc.detail,
+        )
+    if exc.code is VisionReviewErrorCode.OUTPUT_INVALID:
+        return ApiProblem(
+            status=502,
+            code=ProblemCode.PROVIDER_BAD_RESPONSE,
+            title="多模态复核结果无效",
+            detail=exc.detail,
+            retryable=True,
+        )
+    return ApiProblem(
+        status=409,
+        code=ProblemCode.INDEX_UNAVAILABLE,
+        title="证据页面不可用于多模态复核",
+        detail=exc.detail,
+        retryable=True,
+    )
+
+
+def _vision_provider_problem(exc: ProviderError) -> ApiProblem:
+    if exc.code is ProviderErrorCode.NOT_CONFIGURED:
+        return ApiProblem(
+            status=503,
+            code=ProblemCode.PROVIDER_NOT_CONFIGURED,
+            title="多模态 Provider 未配置",
+        )
+    if exc.code is ProviderErrorCode.TIMEOUT:
+        return ApiProblem(
+            status=504,
+            code=ProblemCode.PROVIDER_TIMEOUT,
+            title="多模态复核响应超时",
+            retryable=True,
+        )
+    return ApiProblem(
+        status=502,
+        code=ProblemCode.PROVIDER_BAD_RESPONSE,
+        title="多模态复核失败",
+        retryable=exc.retryable,
+    )
 
 
 def _problem(exc: LearningServiceError) -> ApiProblem:
@@ -198,6 +269,95 @@ async def regenerate_learning_units(
         )
     except LearningServiceError as exc:
         raise _problem(exc) from exc
+
+
+@router.get(
+    "/courses/{course_id}/learning-units/{unit_id}/evidence",
+    response_model=list[LearningUnitEvidenceResponse],
+)
+async def list_learning_unit_evidence(
+    course_id: str,
+    unit_id: str,
+    request: Request,
+) -> list[LearningUnitEvidenceItem]:
+    try:
+        return await _service(request).list_learning_unit_evidence(
+            await _principal(request), course_id, unit_id
+        )
+    except LearningServiceError as exc:
+        raise _problem(exc) from exc
+
+
+@router.post(
+    "/courses/{course_id}/learning-units/{unit_id}/evidence/{source_id}/vision-review",
+    response_model=VisionEvidenceReviewResponse,
+    responses={
+        409: {"model": ProblemDetails, "description": "证据页面不可用"},
+        503: {"model": ProblemDetails, "description": "多模态 Provider 未配置"},
+    },
+)
+async def review_learning_unit_evidence_with_vision(
+    course_id: str,
+    unit_id: str,
+    source_id: str,
+    request: Request,
+) -> VisionEvidenceReview:
+    try:
+        return await _vision_service(request).review_source(
+            await _principal(request),
+            course_id,
+            unit_id,
+            source_id,
+        )
+    except VisionReviewError as exc:
+        raise _vision_problem(exc) from exc
+    except ProviderError as exc:
+        raise _vision_provider_problem(exc) from exc
+    except TimeoutError as exc:
+        raise ApiProblem(
+            status=504,
+            code=ProblemCode.PROVIDER_TIMEOUT,
+            title="多模态复核响应超时",
+            retryable=True,
+        ) from exc
+
+
+@router.post(
+    "/courses/{course_id}/learning-units/{unit_id}/evidence-supplements",
+    response_model=LearningUnitEvidenceResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_learning_unit_evidence_supplement(
+    course_id: str,
+    unit_id: str,
+    payload: LearningUnitEvidenceSupplementRequest,
+    request: Request,
+) -> LearningUnitEvidenceItem:
+    try:
+        return await _service(request).create_learning_unit_evidence_supplement(
+            await _principal(request), course_id, unit_id, payload
+        )
+    except LearningServiceError as exc:
+        raise _problem(exc) from exc
+
+
+@router.delete(
+    "/courses/{course_id}/learning-units/{unit_id}/evidence-supplements/{supplement_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def revoke_learning_unit_evidence_supplement(
+    course_id: str,
+    unit_id: str,
+    supplement_id: str,
+    request: Request,
+) -> Response:
+    try:
+        await _service(request).revoke_learning_unit_evidence_supplement(
+            await _principal(request), course_id, unit_id, supplement_id
+        )
+    except LearningServiceError as exc:
+        raise _problem(exc) from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(

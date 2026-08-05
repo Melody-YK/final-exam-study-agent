@@ -10,6 +10,8 @@ def test_local_settings_bind_loopback_and_leave_providers_unconfigured() -> None
     assert settings.bind_host == "127.0.0.1"
     assert settings.embedding_api_key is None
     assert settings.deepseek_api_key is None
+    assert settings.vision_api_key is None
+    assert settings.vision_configured is False
     assert settings.providers_configured is False
 
 

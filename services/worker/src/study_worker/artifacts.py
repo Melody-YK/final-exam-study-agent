@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -14,6 +15,7 @@ from study_contracts import (
     Asset,
     AssetType,
     BlockType,
+    BoundingBox,
     JobArtifactReceipt,
     Page,
     PageQualityStatus,
@@ -33,9 +35,13 @@ from study_worker.parsers.normalize import (
 )
 from study_worker.parsers.paddle_general import build_ocr_quality
 from study_worker.parsers.quality import evaluate_page_quality
+from study_worker.rendering.pdfium import PNG_MEDIA_TYPE, render_pdf_page
 from study_worker.sandbox import Sandbox
 
 RAW_PAGE_MEDIA_TYPE = PARSER_RAW_MEDIA_TYPE
+PDF_MEDIA_TYPE = "application/pdf"
+_DEFAULT_MAX_PAGES = 2_000
+_DEFAULT_MAX_PIXELS = 100_000_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +57,9 @@ async def package_parse_attempt(
     lease: WorkerLease,
     sandbox: Sandbox,
     reporter: JobReporter,
+    media_type: str | None = None,
+    max_pages: int = _DEFAULT_MAX_PAGES,
+    max_pixels: int = _DEFAULT_MAX_PIXELS,
 ) -> TaskResult:
     requested = tuple(sorted(lease.requested_pages)) or tuple(
         range(1, raw_document.total_page_count + 1)
@@ -67,6 +76,9 @@ async def package_parse_attempt(
                 raw_document=raw_document,
                 sandbox=sandbox,
                 reporter=reporter,
+                media_type=media_type,
+                max_pages=max_pages,
+                max_pixels=max_pixels,
             )
         )
     return await finalize_parse_attempt(
@@ -84,6 +96,9 @@ async def package_parse_page(
     raw_document: RawDocument,
     sandbox: Sandbox,
     reporter: JobReporter,
+    media_type: str | None = None,
+    max_pages: int = _DEFAULT_MAX_PAGES,
+    max_pixels: int = _DEFAULT_MAX_PIXELS,
 ) -> PackagedPage:
     """Upload and checkpoint one page before the next parser child is started."""
 
@@ -101,6 +116,9 @@ async def package_parse_page(
         raw_document=raw_document,
         sandbox=sandbox,
         reporter=reporter,
+        media_type=media_type,
+        max_pages=max_pages,
+        max_pixels=max_pixels,
     )
     if raw_document.parser_profile == "ocr-v1":
         quality = build_ocr_quality(
@@ -236,9 +254,24 @@ async def _package_assets(
     raw_document: RawDocument,
     sandbox: Sandbox,
     reporter: JobReporter,
+    media_type: str | None,
+    max_pages: int,
+    max_pixels: int,
 ) -> tuple[list[Asset], dict[int, str]]:
     assets: list[Asset] = []
     asset_ids: dict[int, str] = {}
+    if _base_media_type(media_type) == PDF_MEDIA_TYPE:
+        assets.append(
+            await _package_rendered_page(
+                raw_page,
+                raw_receipt=raw_receipt,
+                raw_document=raw_document,
+                sandbox=sandbox,
+                reporter=reporter,
+                max_pages=max_pages,
+                max_pixels=max_pixels,
+            )
+        )
     for block in raw_page.blocks:
         asset_type = _asset_type(block)
         if asset_type is None:
@@ -279,6 +312,53 @@ async def _package_assets(
     return assets, asset_ids
 
 
+async def _package_rendered_page(
+    raw_page: RawPage,
+    *,
+    raw_receipt: JobArtifactReceipt,
+    raw_document: RawDocument,
+    sandbox: Sandbox,
+    reporter: JobReporter,
+    max_pages: int,
+    max_pixels: int,
+) -> Asset:
+    artifact_name = f"rendered-page-{raw_page.ordinal:06d}.png"
+    rendered = await asyncio.to_thread(
+        render_pdf_page,
+        sandbox.input_path,
+        sandbox.output_dir / artifact_name,
+        ordinal=raw_page.ordinal,
+        expected_sha256=raw_document.document_sha256,
+        max_pages=max_pages,
+        max_pixels=max_pixels,
+    )
+    receipt = await reporter.upload_artifact(
+        artifact_name=artifact_name,
+        source=rendered.path,
+        media_type=PNG_MEDIA_TYPE,
+    )
+    return Asset(
+        id=f"rendered-page-{raw_page.ordinal:06d}",
+        type=AssetType.RENDERED_PAGE,
+        locator=SourceLocator(kind=raw_page.source_kind, ordinal=raw_page.ordinal),
+        bbox_norm=BoundingBox(x=0.0, y=0.0, width=1.0, height=1.0),
+        object_ref=receipt.artifact_ref,
+        media_type=receipt.media_type,
+        sha256=receipt.sha256,
+        size_bytes=receipt.size_bytes,
+        source_backend=raw_document.source_backend,
+        source_version=raw_document.source_version,
+        raw_result_ref=raw_receipt.artifact_ref,
+        metadata={
+            "metadata_only": False,
+            "render_backend": "pypdfium2",
+            "render_height": rendered.height,
+            "render_scale": rendered.scale,
+            "render_width": rendered.width,
+        },
+    )
+
+
 async def _upload_canonical(
     *,
     artifact_name: str,
@@ -309,6 +389,10 @@ def _asset_name(ordinal: int, block: RawBlock) -> str:
         raise ValueError("binary asset name requested for metadata-only block")
     suffix = Path(block.artifact.relative_path).suffix.lower() or ".bin"
     return f"asset-{ordinal:06d}-{block.reading_order:06d}{suffix}"
+
+
+def _base_media_type(media_type: str | None) -> str:
+    return (media_type or "").partition(";")[0].strip().lower()
 
 
 def _resolve_output_artifact(sandbox: Sandbox, relative_path: str) -> Path:

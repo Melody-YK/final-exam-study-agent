@@ -15,6 +15,7 @@ from study_agent.providers.embedding_openai import OpenAICompatibleEmbeddingProv
 from study_agent.providers.errors import ProviderError, ProviderErrorCode
 from study_agent.providers.factory import build_provider_registry
 from study_agent.providers.probe import probe_registry
+from study_agent.providers.vision import OpenAICompatibleVisionProvider
 
 from ..fakes.provider_server import ScriptedProviderServer, ScriptedResponse
 
@@ -42,11 +43,14 @@ async def test_registry_fails_closed_when_capability_is_unconfigured() -> None:
             registry.embedding()
         with pytest.raises(ProviderError) as chat_error:
             registry.chat()
+        with pytest.raises(ProviderError) as vision_error:
+            registry.vision()
     finally:
         await registry.aclose()
 
     assert embedding_error.value.code is ProviderErrorCode.NOT_CONFIGURED
     assert chat_error.value.code is ProviderErrorCode.NOT_CONFIGURED
+    assert vision_error.value.code is ProviderErrorCode.NOT_CONFIGURED
 
 
 @pytest.mark.asyncio
@@ -61,6 +65,27 @@ async def test_registry_contains_only_real_adapters_and_does_not_close_injected_
 
     await registry.aclose()
     assert client.is_closed is False
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_registry_builds_optional_vision_adapter_on_the_shared_client() -> None:
+    server = ScriptedProviderServer()
+    client = httpx.AsyncClient(transport=server.transport)
+    registry = build_provider_registry(
+        configured_settings(
+            vision_enabled=True,
+            vision_api_key=SecretStr("vision-factory-secret"),
+            vision_base_url="http://vision.test/v1",
+        ),
+        http_client=client,
+    )
+
+    assert isinstance(registry.vision(), OpenAICompatibleVisionProvider)
+    assert registry.vision()._http is client
+    assert "vision-factory-secret" not in repr(registry)
+
+    await registry.aclose()
     await client.aclose()
 
 

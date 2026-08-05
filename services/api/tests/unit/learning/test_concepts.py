@@ -8,6 +8,7 @@ from study_agent.modules.learning.concepts import (
     exercise_prototype_number,
     is_answer_key_text,
     is_exercise_prototype_label,
+    practice_confidence_for_unit,
     practice_evidence_stats,
     practice_mode_for_unit,
     source_status,
@@ -16,6 +17,7 @@ from study_contracts import (
     LearningSourceStatus,
     LearningUnitKind,
     LearningUnitPracticeMode,
+    LearningUnitPracticeStatus,
     LearningUnitStatus,
 )
 
@@ -93,6 +95,28 @@ def test_exercise_prototypes_and_answer_keys_select_variant_practice() -> None:
         practice_mode_for_unit(LearningUnitKind.CONCEPT, "理解进程状态")
         is LearningUnitPracticeMode.KNOWLEDGE_RECALL
     )
+
+
+def test_structure_markup_is_low_confidence_even_when_text_is_long() -> None:
+    status, note = practice_confidence_for_unit(
+        ["<table><tr><td>参考答案</td></tr></table>" + "计算过程 " * 30],
+        practice_mode=LearningUnitPracticeMode.EXERCISE_VARIANT,
+        is_exercise_prototype=True,
+    )
+
+    assert status is LearningUnitPracticeStatus.LOW_CONFIDENCE
+    assert note is not None
+    assert "表格" in note
+
+
+def test_plain_text_remains_ready() -> None:
+    status, note = practice_confidence_for_unit(
+        ["进程状态转换的触发条件、调度过程和判断依据。" * 6],
+        practice_mode=LearningUnitPracticeMode.KNOWLEDGE_RECALL,
+    )
+
+    assert status is LearningUnitPracticeStatus.READY
+    assert note is None
 
 
 def test_candidate_builder_uses_clean_labels_without_changing_canonical_keys() -> None:
@@ -334,6 +358,46 @@ def test_practice_evidence_stats_rejects_short_single_heading_and_accepts_contex
     assert not practice_evidence_stats(["只有标题"]).is_sufficient
     assert practice_evidence_stats(["正文 " * 60]).is_sufficient
     assert practice_evidence_stats(["正文 " * 15, "补充 " * 15]).is_sufficient
+
+
+def test_practice_confidence_marks_damaged_exercise_as_low_confidence() -> None:
+    status, note = practice_confidence_for_unit(
+        (
+            "参考答案：页面大小为2KB，计算 $2 \\mathrm { K B } / 8B$。"  # noqa: RUF001
+            "补充条件说明。" * 12,
+        ),
+        practice_mode=LearningUnitPracticeMode.EXERCISE_VARIANT,
+        is_exercise_prototype=True,
+    )
+
+    assert status is LearningUnitPracticeStatus.LOW_CONFIDENCE
+    assert note is not None
+    assert "OCR" in note
+
+
+def test_practice_confidence_keeps_normal_latex_and_numbers_ready() -> None:
+    status, note = practice_confidence_for_unit(
+        (
+            "页面大小为2.5KB，地址转换可写成 x^{2}，并使用 \\frac{1}{2} 的比例。"  # noqa: RUF001
+            "该原型还包含完整的题干、求解条件、计算目标和参考步骤，足以独立复核。"  # noqa: RUF001
+            "学习者可以依据这些条件列式、计算并解释结果，题目目标和评分依据均已给出。",  # noqa: RUF001
+        ),
+        practice_mode=LearningUnitPracticeMode.EXERCISE_VARIANT,
+        is_exercise_prototype=True,
+    )
+
+    assert status is LearningUnitPracticeStatus.READY
+    assert note is None
+
+
+def test_practice_confidence_keeps_tiny_non_exercise_source_blocked() -> None:
+    status, note = practice_confidence_for_unit(
+        ("只有标题",),
+        practice_mode=LearningUnitPracticeMode.KNOWLEDGE_RECALL,
+    )
+
+    assert status is LearningUnitPracticeStatus.INSUFFICIENT_EVIDENCE
+    assert note == "有效正文不足。"
 
 
 def test_candidates_deduplicate_keys_and_preserve_section_concept_hierarchy() -> None:

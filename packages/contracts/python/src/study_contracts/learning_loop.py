@@ -24,6 +24,7 @@ class LearningUnitStatus(StrEnum):
 
 class LearningUnitPracticeStatus(StrEnum):
     READY = "ready"
+    LOW_CONFIDENCE = "low_confidence"
     INSUFFICIENT_EVIDENCE = "insufficient_evidence"
     STALE = "stale"
 
@@ -107,6 +108,17 @@ class LearningSourceStatus(StrEnum):
     UNAVAILABLE = "unavailable"
 
 
+class LearningUnitEvidenceOrigin(StrEnum):
+    PARSED = "parsed"
+    USER_SUPPLIED = "user_supplied"
+
+
+class LearningUnitEvidenceRole(StrEnum):
+    COMPLETE_PROTOTYPE = "complete_prototype"
+    REFERENCE_SOLUTION = "reference_solution"
+    ADDITIONAL_CONTEXT = "additional_context"
+
+
 class AttemptOutcome(StrEnum):
     CORRECT = "correct"
     INCORRECT = "incorrect"
@@ -133,6 +145,56 @@ class LearningUnitSource(ContractModel):
     status: LearningSourceStatus = LearningSourceStatus.VALID
 
 
+class LearningUnitEvidenceItem(ContractModel):
+    id: NonEmptyString
+    unit_id: NonEmptyString
+    source_id: NonEmptyString
+    supplement_id: NonEmptyString | None = None
+    origin: LearningUnitEvidenceOrigin
+    role: LearningUnitEvidenceRole | None = None
+    document_id: NonEmptyString
+    document_name: NonEmptyString
+    revision_id: NonEmptyString
+    chunk_id: NonEmptyString
+    content_sha256: Sha256Hex
+    locator: SourceLocator
+    text: NonEmptyString = Field(max_length=50_000)
+    is_primary: bool
+    practice_status: LearningUnitPracticeStatus
+    confidence_note: str | None = Field(default=None, max_length=255)
+    created_at: datetime
+
+    @model_validator(mode="after")
+    def origin_fields_must_match(self) -> Self:
+        supplied = self.origin is LearningUnitEvidenceOrigin.USER_SUPPLIED
+        if supplied != (self.supplement_id is not None and self.role is not None):
+            raise ValueError("user-supplied evidence requires a supplement id and role")
+        return self
+
+
+class LearningUnitEvidenceSupplementRequest(ContractModel):
+    source_id: NonEmptyString
+    role: LearningUnitEvidenceRole = LearningUnitEvidenceRole.COMPLETE_PROTOTYPE
+    text: NonEmptyString = Field(max_length=20_000)
+
+
+class VisionEvidenceReview(ContractModel):
+    """User-reviewable extraction from a low-confidence rendered page."""
+
+    source_id: NonEmptyString
+    document_name: NonEmptyString
+    locator: SourceLocator
+    extracted_text: NonEmptyString = Field(max_length=20_000)
+    question_type: QuestionType | None = None
+    conditions: list[str] = Field(default_factory=list, max_length=32)
+    reference_answer: str | None = Field(default=None, max_length=20_000)
+    uncertain_spans: list[str] = Field(default_factory=list, max_length=32)
+    evidence_complete: bool
+    confidence: Literal["high", "medium", "low"]
+    reason: NonEmptyString = Field(max_length=2_000)
+    model: NonEmptyString
+
+
 class LearningUnit(ContractModel):
     id: NonEmptyString
     course_id: NonEmptyString
@@ -142,6 +204,7 @@ class LearningUnit(ContractModel):
     parent_id: NonEmptyString | None = None
     status: LearningUnitStatus
     practice_status: LearningUnitPracticeStatus = LearningUnitPracticeStatus.INSUFFICIENT_EVIDENCE
+    practice_confidence_note: str | None = Field(default=None, max_length=255)
     practice_mode: LearningUnitPracticeMode = LearningUnitPracticeMode.KNOWLEDGE_RECALL
     prototype_question_type: QuestionType | None = None
     evidence_chunk_count: int = Field(default=0, ge=0)

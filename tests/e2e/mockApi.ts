@@ -87,6 +87,29 @@ function learningUnit(
   }
 }
 
+function learningUnitEvidence(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'unit-process-source',
+    unit_id: 'unit-process',
+    source_id: 'unit-process-source',
+    supplement_id: null,
+    origin: 'parsed' as const,
+    role: null,
+    document_id: 'document-ready',
+    document_name: '操作系统课程.pdf',
+    revision_id: 'revision-active',
+    chunk_id: 'unit-process-chunk',
+    content_sha256: 'b'.repeat(64),
+    locator: { kind: 'page' as const, ordinal: 6 },
+    text: '原解析的进程管理片段，缺少完整题干和参考解答。',
+    is_primary: true,
+    practice_status: 'insufficient_evidence' as const,
+    confidence_note: '有效正文不足，等待用户补充完整原型。',
+    created_at: '2026-08-02T08:00:00Z',
+    ...overrides,
+  }
+}
+
 function practiceQuestion(
   id: string,
   learningUnitId: string,
@@ -568,6 +591,7 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
   let learningBatchPayload: { learning_unit_ids: string[]; question_count: number } | null = null
   let learningBatchQuestionIds: string[] = []
   let learningBatchCommandKey: string | null = null
+  let learningEvidenceSupplement: Record<string, unknown> | null = null
   let practiceSession: Record<string, unknown> | null = null
   const practiceAttempts = new Map<string, Record<string, unknown>>()
   let notesVersion = 1
@@ -1323,6 +1347,39 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
     if (method === 'GET' && path === `/courses/${courseId}/learning-units`) {
       return route.fulfill({ json: learningUnits })
     }
+    if (
+      method === 'GET' &&
+      path === `/courses/${courseId}/learning-units/unit-process/evidence`
+    ) {
+      return route.fulfill({
+        json: [
+          learningUnitEvidence({
+            is_primary: learningEvidenceSupplement === null,
+          }),
+          ...(learningEvidenceSupplement === null ? [] : [learningEvidenceSupplement]),
+        ],
+      })
+    }
+    if (
+      method === 'POST' &&
+      path === `/courses/${courseId}/learning-units/unit-process/evidence-supplements`
+    ) {
+      const payload = request.postDataJSON() as { role: string; text: string }
+      learningEvidenceSupplement = learningUnitEvidence({
+        id: 'unit-process-supplement',
+        source_id: 'unit-process-source',
+        supplement_id: 'unit-process-supplement',
+        origin: 'user_supplied' as const,
+        role: payload.role,
+        content_sha256: 'c'.repeat(64),
+        text: payload.text,
+        is_primary: true,
+        practice_status: 'ready' as const,
+        confidence_note: '已采用用户补充的完整原型。',
+        created_at: '2026-08-02T08:01:00Z',
+      })
+      return route.fulfill({ status: 201, json: learningEvidenceSupplement })
+    }
     if (method === 'GET' && path === `/courses/${courseId}/learning-summary`) {
       return route.fulfill({ json: learningSummary })
     }
@@ -1387,6 +1444,7 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
       )
       return route.fulfill({
         json: {
+          message_id: `tutor-message-${question.id}`,
           mode: answered ? 'review' : 'hint',
           answer_markdown: answered
             ? '进程负责资源分配，线程负责执行调度。'

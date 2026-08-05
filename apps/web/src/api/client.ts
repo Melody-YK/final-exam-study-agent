@@ -29,6 +29,9 @@ import type {
   LoginRequest,
   LearningSummary,
   LearningUnit,
+  LearningUnitEvidenceItem,
+  LearningUnitEvidenceSupplementRequest,
+  VisionEvidenceReview,
   LearnerMemoryCreate,
   LearnerMemoryPatch,
   LearnerMemoryRecord,
@@ -530,6 +533,48 @@ export class StudyApiClient {
     return this.request(`/courses/${encodeURIComponent(courseId)}/learning-units/regenerate`, {
       method: 'POST',
     })
+  }
+
+  listLearningUnitEvidence(courseId: string, unitId: string): Promise<LearningUnitEvidenceItem[]> {
+    return this.request(
+      `/courses/${encodeURIComponent(courseId)}/learning-units/${encodeURIComponent(unitId)}/evidence`,
+    )
+  }
+
+  createLearningUnitEvidenceSupplement(
+    courseId: string,
+    unitId: string,
+    input: LearningUnitEvidenceSupplementRequest,
+  ): Promise<LearningUnitEvidenceItem> {
+    return this.request(
+      `/courses/${encodeURIComponent(courseId)}/learning-units/${encodeURIComponent(unitId)}/evidence-supplements`,
+      {
+        method: 'POST',
+        body: jsonBody(input),
+      },
+    )
+  }
+
+  revokeLearningUnitEvidenceSupplement(
+    courseId: string,
+    unitId: string,
+    supplementId: string,
+  ): Promise<void> {
+    return this.request(
+      `/courses/${encodeURIComponent(courseId)}/learning-units/${encodeURIComponent(unitId)}/evidence-supplements/${encodeURIComponent(supplementId)}`,
+      { method: 'DELETE' },
+    )
+  }
+
+  reviewLearningUnitEvidenceWithVision(
+    courseId: string,
+    unitId: string,
+    sourceId: string,
+  ): Promise<VisionEvidenceReview> {
+    return this.request(
+      `/courses/${encodeURIComponent(courseId)}/learning-units/${encodeURIComponent(unitId)}/evidence/${encodeURIComponent(sourceId)}/vision-review`,
+      { method: 'POST' },
+    )
   }
 
   getLearningSummary(courseId: string): Promise<LearningSummary> {

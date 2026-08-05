@@ -552,6 +552,88 @@ describe('StudyApiClient', () => {
     expect(headers.get('Idempotency-Key')).toBe('note-regenerate-command-1')
   })
 
+  it('reads, saves, and revokes learning-unit evidence supplements with encoded scope', async () => {
+    const evidence = [
+      {
+        id: 'source-1',
+        unit_id: 'unit/1',
+        source_id: 'source-1',
+        supplement_id: null,
+        origin: 'parsed',
+        role: null,
+        document_id: 'document-1',
+        document_name: 'chapter.pdf',
+        revision_id: 'revision-1',
+        chunk_id: 'chunk-1',
+        content_sha256: 'a'.repeat(64),
+        locator: { kind: 'page', ordinal: 3 },
+        text: '原始证据',
+        is_primary: true,
+        practice_status: 'insufficient_evidence',
+        confidence_note: '有效正文不足。',
+        created_at: '2026-08-05T10:00:00Z',
+      },
+    ]
+    const created = {
+      ...evidence[0],
+      id: 'supplement-1',
+      supplement_id: 'supplement-1',
+      origin: 'user_supplied',
+      role: 'complete_prototype',
+      content_sha256: 'b'.repeat(64),
+      text: '完整题目与参考解答',
+      is_primary: true,
+      practice_status: 'ready',
+      confidence_note: '已采用用户补充的完整原型。',
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(evidence), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(created), {
+          status: 201,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const client = new StudyApiClient('/api/v1')
+
+    await expect(client.listLearningUnitEvidence('course/1', 'unit/1')).resolves.toEqual(evidence)
+    await expect(
+      client.createLearningUnitEvidenceSupplement('course/1', 'unit/1', {
+        source_id: 'source-1',
+        role: 'complete_prototype',
+        text: '完整题目与参考解答',
+      }),
+    ).resolves.toEqual(created)
+    await expect(
+      client.revokeLearningUnitEvidenceSupplement('course/1', 'unit/1', 'supplement/1'),
+    ).resolves.toBeUndefined()
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      '/api/v1/courses/course%2F1/learning-units/unit%2F1/evidence',
+      '/api/v1/courses/course%2F1/learning-units/unit%2F1/evidence-supplements',
+      '/api/v1/courses/course%2F1/learning-units/unit%2F1/evidence-supplements/supplement%2F1',
+    ])
+    expect(fetchMock.mock.calls.map(([, init]) => init?.credentials)).toEqual([
+      'include',
+      'include',
+      'include',
+    ])
+    expect(JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body))).toEqual({
+      source_id: 'source-1',
+      role: 'complete_prototype',
+      text: '完整题目与参考解答',
+    })
+    expect((fetchMock.mock.calls[2]?.[1] as RequestInit).method).toBe('DELETE')
+  })
+
   it('maps an API ProblemDetails response without replacing its code or trace', async () => {
     const apiProblem = problem({
       status: 409,

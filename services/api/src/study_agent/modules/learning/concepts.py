@@ -12,6 +12,7 @@ from study_contracts import (
     LearningSourceStatus,
     LearningUnitKind,
     LearningUnitPracticeMode,
+    LearningUnitPracticeStatus,
     LearningUnitSource,
     LearningUnitStatus,
     SourceLocator,
@@ -74,6 +75,7 @@ _CHINESE_DIGITS = {
 _CHINESE_UNITS = {"十": 10, "百": 100}
 MIN_PRACTICE_EVIDENCE_CHARS = 80
 MIN_PRACTICE_MULTI_CHUNK_CHARS = 80
+MIN_LOW_CONFIDENCE_EVIDENCE_CHARS = 24
 MAX_DERIVED_GOALS_PER_TOPIC = 24
 _NOISE_HEADING_MARKERS = (
     "习题",
@@ -165,6 +167,19 @@ _GOAL_SIGNAL_MARKERS = (
     "dma",
     "spooling",
 )
+_FORMULA_OR_OCR_NOISE = re.compile(
+    r"(?:"
+    r"\\mathrm\s*\{\s*(?:[A-Za-z0-9]\s+){1,}[A-Za-z0-9]\s*\}"
+    r"|\d\s+\.\s*\d"
+    r"|\d\s*\.\s+\d"
+    r"|(?<!\d)(?:\d\s+){2,}\d(?!\d)"
+    r")",
+    re.IGNORECASE,
+)
+_STRUCTURE_MARKUP_NOISE = re.compile(
+    r"</?(?:table|thead|tbody|tfoot|tr|td|th|br|p|div|span|img|math|svg)\b[^>]*>",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,6 +202,42 @@ def practice_evidence_stats(texts: Iterable[str]) -> PracticeEvidenceStats:
         chunk_count=len(non_empty),
         char_count=sum(len(text) for text in non_empty),
     )
+
+
+def practice_confidence_for_unit(
+    texts: Iterable[str],
+    *,
+    practice_mode: LearningUnitPracticeMode,
+    is_exercise_prototype: bool = False,
+) -> tuple[LearningUnitPracticeStatus, str | None]:
+    """Classify source quality without pretending to solve the exercise domain."""
+
+    non_empty = [text.strip() for text in texts if text and text.strip()]
+    stats = practice_evidence_stats(non_empty)
+    if not non_empty:
+        return LearningUnitPracticeStatus.INSUFFICIENT_EVIDENCE, "没有当前有效正文。"
+    joined = "\n".join(non_empty)
+    if _STRUCTURE_MARKUP_NOISE.search(joined):
+        return (
+            LearningUnitPracticeStatus.LOW_CONFIDENCE,
+            "检测到未展开的表格或页面结构标记，建议查看原页或使用多模态复核。",  # noqa: RUF001
+        )
+    if not stats.is_sufficient:
+        if (
+            practice_mode is LearningUnitPracticeMode.EXERCISE_VARIANT
+            and stats.char_count >= MIN_LOW_CONFIDENCE_EVIDENCE_CHARS
+        ):
+            return (
+                LearningUnitPracticeStatus.LOW_CONFIDENCE,
+                "原型材料较短，可能缺少完整题干或求解条件。",  # noqa: RUF001
+            )
+        return LearningUnitPracticeStatus.INSUFFICIENT_EVIDENCE, "有效正文不足。"
+    if is_exercise_prototype and _FORMULA_OR_OCR_NOISE.search(joined):
+        return (
+            LearningUnitPracticeStatus.LOW_CONFIDENCE,
+            "原型含有可能的公式或 OCR 噪声，生成时只使用能够确认的方法。",  # noqa: RUF001
+        )
+    return LearningUnitPracticeStatus.READY, None
 
 
 class _CandidateData(TypedDict):

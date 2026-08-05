@@ -102,6 +102,8 @@ class _PreviewResolver:
         self,
         session: AsyncSession,
         reference: _PreviewReference,
+        *,
+        prefer_rendered_page: bool = False,
     ) -> SourcePreview | None:
         row = (
             (
@@ -176,11 +178,16 @@ class _PreviewResolver:
         document, _, chunk, original_object = row
 
         needs_rendered_page = self._needs_rendered_page(document, reference.locator)
-        if needs_rendered_page:
+        if prefer_rendered_page or needs_rendered_page:
             stored_object = await self._rendered_page_object(
                 session,
                 reference=reference,
             )
+            if stored_object is None and (
+                prefer_rendered_page
+                and self._base_media_type(original_object.media_type).startswith("image/")
+            ):
+                stored_object = original_object
             if stored_object is None:
                 raise SourcePreviewUnavailable(SourcePreviewUnavailableReason.RENDERED_PAGE_MISSING)
         else:
@@ -201,7 +208,7 @@ class _PreviewResolver:
         except (FileNotFoundError, OSError):
             reason = (
                 SourcePreviewUnavailableReason.RENDERED_PAGE_MISSING
-                if needs_rendered_page
+                if needs_rendered_page or prefer_rendered_page
                 else SourcePreviewUnavailableReason.ORIGINAL_SOURCE_MISSING
             )
             raise SourcePreviewUnavailable(reason) from None
@@ -363,6 +370,8 @@ class SourcePreviewService:
         course_id: str,
         revision_id: str,
         chunk_id: str,
+        *,
+        prefer_rendered_page: bool = False,
     ) -> SourcePreview | None:
         async with self._database.session(principal) as session:
             row = (
@@ -427,4 +436,8 @@ class SourcePreviewService:
                 bounding_boxes=(),
                 provenance=(),
             )
-            return await self._resolver.resolve(session, reference)
+            return await self._resolver.resolve(
+                session,
+                reference,
+                prefer_rendered_page=prefer_rendered_page,
+            )

@@ -5,6 +5,7 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleAlert,
+  FileSearch,
   LoaderCircle,
   Play,
   RefreshCw,
@@ -23,6 +24,7 @@ import type {
 import { useWorkspace } from "../../app/WorkspaceContext";
 import { ErrorNotice } from "../../components/ui/ErrorNotice";
 import { PageHeader } from "../../components/ui/PageHeader";
+import { LearningEvidenceModal } from "./LearningEvidenceModal";
 import { LearningSummary } from "./LearningSummary";
 import { PracticeSession } from "./PracticeSession";
 
@@ -101,6 +103,7 @@ const unitStatusLabels = {
 
 const practiceStatusLabels = {
   ready: "可练习",
+  low_confidence: "低置信度 · 可尝试",
   insufficient_evidence: "资料不足",
   stale: "来源失效",
 } as const;
@@ -139,9 +142,11 @@ function isLegacyZeroPlaceholder(unit: LearningUnit): boolean {
   return isZeroPlaceholderLabel(unit.label) || isZeroPlaceholderLabel(keyLabel);
 }
 
-function isPracticeReady(unit: LearningUnit): boolean {
+function isPracticeSelectable(unit: LearningUnit): boolean {
   return (
-    unit.status === "available" && (unit.practice_status ?? "ready") === "ready"
+    unit.status === "available" &&
+    ((unit.practice_status ?? "ready") === "ready" ||
+      unit.practice_status === "low_confidence")
   );
 }
 
@@ -161,6 +166,7 @@ export function LearningPage() {
   const [sessionId, setSessionId] = useState<string | null>(storedSessionId);
   const [activeSession, setActiveSession] =
     useState<PracticeSessionSnapshot | null>(null);
+  const [evidenceUnit, setEvidenceUnit] = useState<LearningUnit | null>(null);
 
   const unitsQuery = useQuery({
     queryKey: ["learning-units", courseId],
@@ -251,7 +257,7 @@ export function LearningPage() {
   );
   const sourceReadyUnits = displayUnits;
   const availableUnits = useMemo(
-    () => displayUnits.filter(isPracticeReady),
+    () => displayUnits.filter(isPracticeSelectable),
     [displayUnits],
   );
   const sections = useMemo(
@@ -318,6 +324,15 @@ export function LearningPage() {
   const hasSelectedExercise = selectedUnitIds.some((unitId) => {
     const unit = unitById.get(unitId);
     return unit ? isExerciseVariant(unit) : false;
+  });
+  const hasLowConfidenceSelection = selectedUnitIds.some((unitId) => {
+    const unit = unitById.get(unitId);
+    if (!unit) return false;
+    if (unit.practice_status === "low_confidence") return true;
+    if (unit.kind !== "section") return false;
+    return (conceptsBySection.get(unit.id) ?? []).some(
+      (concept) => concept.practice_status === "low_confidence",
+    );
   });
   const availableKnowledgeGoalCount = knowledgeGoals.filter(
     (unit) => !isExerciseVariant(unit),
@@ -410,7 +425,9 @@ export function LearningPage() {
   useEffect(() => {
     if (session?.status !== "completed" || view !== "practice") return;
     localStorage.removeItem(storageKey(courseId, "session-id"));
-    localStorage.removeItem(`study-agent.learning:practice-progress:${session.id}`);
+    localStorage.removeItem(
+      `study-agent.learning:practice-progress:${session.id}`,
+    );
   }, [courseId, session, view]);
 
   const nextUnitSelection = (
@@ -439,7 +456,8 @@ export function LearningPage() {
         if (isExerciseVariant(unit)) {
           includesExercise = true;
           const prototypeCount = (conceptsBySection.get(unit.id) ?? []).filter(
-            (concept) => isExerciseVariant(concept) && isPracticeReady(concept),
+            (concept) =>
+              isExerciseVariant(concept) && isPracticeSelectable(concept),
           ).length;
           return total + Math.max(1, prototypeCount);
         }
@@ -466,7 +484,7 @@ export function LearningPage() {
 
   const renderLearningUnit = (unit: LearningUnit) => {
     const selected = selectedUnitIds.includes(unit.id);
-    const practiceReady = isPracticeReady(unit);
+    const practiceReady = isPracticeSelectable(unit);
     const nextSelection = selected
       ? selectedUnitIds
       : nextUnitSelection(selectedUnitIds, unit);
@@ -481,7 +499,9 @@ export function LearningPage() {
             isExerciseVariant(unit) ? isExerciseVariant(concept) : true,
           ).length
         : null;
-    const prototypeTypeLabel = prototypeQuestionTypeLabel(unit.prototype_question_type);
+    const prototypeTypeLabel = prototypeQuestionTypeLabel(
+      unit.prototype_question_type,
+    );
     const scopeLabel = isExerciseVariant(unit)
       ? unit.kind === "section"
         ? "习题范围 · 同型变式"
@@ -489,32 +509,63 @@ export function LearningPage() {
       : unit.kind === "section"
         ? "章节范围 · 整章练习"
         : "知识目标 · 精准练习";
+    const checkboxDescription = [
+      scopeLabel,
+      childCount === null
+        ? null
+        : isExerciseVariant(unit)
+          ? `${childCount} 道原型题`
+          : `${childCount} 个知识目标`,
+      unit.practice_status
+        ? practiceStatusLabels[unit.practice_status]
+        : unitStatusLabels[unit.status],
+      unit.practice_confidence_note,
+    ]
+      .filter((value): value is string => value !== null && value !== undefined)
+      .join(" · ");
     return (
-      <label
+      <div
         className={`learning-unit learning-unit--${unit.kind}${selected ? " is-selected" : ""}${disabled ? " is-disabled" : ""}`}
         key={unit.id}
+        title={unit.practice_confidence_note ?? undefined}
       >
-        <input
-          checked={selected}
-          disabled={disabled}
-          onChange={() => handleUnitSelection(unit)}
-          type="checkbox"
-        />
-        <span className="learning-unit__check" aria-hidden="true">
-          <Check size={14} />
-        </span>
-        <span className="learning-unit__copy">
-          <strong>{unit.label}</strong>
-          <small>
-            {scopeLabel}
-            {childCount === null
-              ? ""
-              : isExerciseVariant(unit)
-                ? ` · ${childCount} 道原型题`
-                : ` · ${childCount} 个知识目标`}{" "}
-            · {evidenceCount} 个证据片段
-          </small>
-        </span>
+        <label className="learning-unit__selector">
+          <input
+            aria-label={`${unit.label}，${checkboxDescription}`}
+            checked={selected}
+            disabled={disabled}
+            onChange={() => handleUnitSelection(unit)}
+            type="checkbox"
+          />
+          <span className="learning-unit__check" aria-hidden="true">
+            <Check size={14} />
+          </span>
+          <span className="learning-unit__copy">
+            <strong>{unit.label}</strong>
+            <small>
+              {scopeLabel}
+              {childCount === null
+                ? ""
+                : isExerciseVariant(unit)
+                  ? ` · ${childCount} 道原型题`
+                  : ` · ${childCount} 个知识目标`}
+            </small>
+            {unit.practice_confidence_note ? (
+              <small className="learning-unit__confidence-note">
+                {unit.practice_confidence_note}
+              </small>
+            ) : null}
+          </span>
+        </label>
+        <button
+          aria-label={`查看${unit.label}的${evidenceCount}个证据片段`}
+          className="learning-unit__evidence-button"
+          onClick={() => setEvidenceUnit(unit)}
+          type="button"
+        >
+          <FileSearch aria-hidden="true" size={14} />
+          {evidenceCount} 个证据片段
+        </button>
         <span
           className={`learning-unit__status learning-unit__status--${unit.practice_status ?? (unit.status === "available" ? "ready" : "stale")}`}
         >
@@ -522,7 +573,7 @@ export function LearningPage() {
             ? practiceStatusLabels[unit.practice_status]
             : unitStatusLabels[unit.status]}
         </span>
-      </label>
+      </div>
     );
   };
 
@@ -585,7 +636,9 @@ export function LearningPage() {
   };
 
   const handleStartReview = (item: ReviewQueueItem) => {
-    const suggestedQuestionCount = defaultQuestionCount([item.learning_unit_id]);
+    const suggestedQuestionCount = defaultQuestionCount([
+      item.learning_unit_id,
+    ]);
     setSelectedUnitIds([item.learning_unit_id]);
     setQuestionCountInput(String(suggestedQuestionCount));
     setView("overview");
@@ -692,8 +745,12 @@ export function LearningPage() {
             <div>
               <strong>上次练习已保存</strong>
               <p>
-                已完成 {session.questions.filter((question) => question.answered).length} /{" "}
-                {session.question_count} 题
+                已完成{" "}
+                {
+                  session.questions.filter((question) => question.answered)
+                    .length
+                }{" "}
+                / {session.question_count} 题
               </p>
             </div>
           </div>
@@ -730,14 +787,6 @@ export function LearningPage() {
           <CircleAlert aria-hidden="true" size={26} />
           <h3>暂无有效来源</h3>
           <p>当前课程的学习依据已失效或还未就绪。</p>
-        </section>
-      ) : availableUnits.length === 0 ? (
-        <section className="page-state">
-          <CircleAlert aria-hidden="true" size={26} />
-          <h3>暂无可练习主题</h3>
-          <p>
-            当前资料有来源，但正文不足以稳定生成题目，请补充或重新解析课件。
-          </p>
         </section>
       ) : (
         <div className="learning-workbench">
@@ -917,11 +966,13 @@ export function LearningPage() {
               role={selectionBoundaryError ? "alert" : undefined}
             >
               {selectionBoundaryError ??
-                (hasSelectedExercise
-                  ? "习题资料会生成同知识点变式题；默认每道原型题 1 道。只有参考答案时，会生成可独立求解的答案步骤变式。"
-                  : hasSelectedSection
-                    ? "整章练习会在章内抽样，建议生成 5–10 道题。"
-                    : "精准练习默认每个知识目标 1 道题；需要巩固时可手动增加。")}
+                (hasLowConfidenceSelection
+                  ? "所选范围包含低置信度原型，系统会尽量生成并严格复核；失败时可换范围或减少题目数量。"
+                  : hasSelectedExercise
+                    ? "习题资料会生成同知识点变式题；默认每道原型题 1 道。只有参考答案时，会生成可独立求解的答案步骤变式。"
+                    : hasSelectedSection
+                      ? "整章练习会在章内抽样，建议生成 5–10 道题。"
+                      : "精准练习默认每个知识目标 1 道题；需要巩固时可手动增加。")}
             </p>
             {capabilitiesLoading ? (
               <p className="learning-inline-status">
@@ -1076,6 +1127,12 @@ export function LearningPage() {
           </aside>
         </div>
       )}
+      <LearningEvidenceModal
+        courseId={courseId}
+        onClose={() => setEvidenceUnit(null)}
+        open={evidenceUnit !== null}
+        unit={evidenceUnit}
+      />
     </div>
   );
 }

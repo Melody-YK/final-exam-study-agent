@@ -4,6 +4,8 @@ from study_contracts import (
     EvidenceReference,
     LearningSummary,
     LearningUnit,
+    LearningUnitEvidenceItem,
+    LearningUnitEvidenceSupplementRequest,
     LearningUnitSource,
     PracticeAttemptRequest,
     PracticeAttemptResult,
@@ -15,10 +17,13 @@ from study_contracts import (
     PracticeTutorRequest,
     PracticeTutorResponse,
     ReviewQueueItem,
+    VisionEvidenceReview,
 )
 
 LearningUnitResponse = LearningUnit
 LearningUnitSourceResponse = LearningUnitSource
+LearningUnitEvidenceResponse = LearningUnitEvidenceItem
+VisionEvidenceReviewResponse = VisionEvidenceReview
 PracticeBatchResponse = PracticeBatchSnapshot
 PracticeSessionResponse = PracticeSessionSnapshot
 PracticeAttemptResponse = PracticeAttemptResult
@@ -30,6 +35,8 @@ LearningSummaryResponse = LearningSummary
 __all__ = [
     "EvidenceReference",
     "LearningSummaryResponse",
+    "LearningUnitEvidenceResponse",
+    "LearningUnitEvidenceSupplementRequest",
     "LearningUnitResponse",
     "LearningUnitSourceResponse",
     "PracticeAttemptRequest",
@@ -42,4 +49,5 @@ __all__ = [
     "PracticeTutorRequest",
     "PracticeTutorResponseModel",
     "ReviewQueueItemResponse",
+    "VisionEvidenceReviewResponse",
 ]
