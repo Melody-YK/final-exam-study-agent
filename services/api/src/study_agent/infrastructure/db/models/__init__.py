@@ -82,6 +82,7 @@ from study_agent.infrastructure.db.models.retrieval import (
     LexicalManifestModel,
     RetrievalTraceModel,
 )
+from study_agent.infrastructure.db.models.vision import VisionReviewRunModel
 
 ChunkModel = RevisionChunkModel
 
@@ -152,4 +153,5 @@ __all__ = [
     "StoredObjectModel",
     "UploadSessionModel",
     "UserModel",
+    "VisionReviewRunModel",
 ]

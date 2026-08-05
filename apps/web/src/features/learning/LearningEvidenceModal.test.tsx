@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { studyApi } from "../../api/client";
 import type { LearningUnit, LearningUnitEvidenceItem } from "../../api/types";
 import { sourcePreview } from "../../test/fixtures";
-import { renderInWorkspace } from "../../test/render";
+import { availableCapabilities, renderInWorkspace } from "../../test/render";
 import { LearningEvidenceModal } from "./LearningEvidenceModal";
 
 const unit: LearningUnit = {
@@ -233,5 +233,36 @@ describe("LearningEvidenceModal", () => {
     expect(screen.getByLabelText("补充内容")).toHaveValue(
       "某进程使用 2 个资源单元，系统共有 8 个资源单元，求资源利用率。\n\n已知条件：\n- 已使用 2 个资源单元\n- 系统共有 8 个资源单元\n\n参考答案或解题过程：\n资源利用率为 25%。",
     );
+  });
+
+  it("disables vision review when the runtime capability is unavailable", async () => {
+    const lowConfidence: LearningUnitEvidenceItem = {
+      ...parsed,
+      practice_status: "low_confidence",
+    };
+    vi.spyOn(studyApi, "listLearningUnitEvidence").mockResolvedValue([
+      lowConfidence,
+    ]);
+
+    renderInWorkspace(
+      <LearningEvidenceModal
+        courseId="course-1"
+        onClose={() => undefined}
+        open
+        unit={unit}
+      />,
+      {
+        workspace: {
+          capabilities: {
+            ...availableCapabilities,
+            vision: { status: "not_configured", label: "未配置多模态复核模型" },
+          },
+        },
+      },
+    );
+
+    expect(
+      await screen.findByRole("button", { name: "视觉模型未配置" }),
+    ).toBeDisabled();
   });
 });

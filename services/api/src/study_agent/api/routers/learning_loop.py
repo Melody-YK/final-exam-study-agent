@@ -301,6 +301,7 @@ async def review_learning_unit_evidence_with_vision(
     unit_id: str,
     source_id: str,
     request: Request,
+    idempotency_key: IdempotencyKey,
 ) -> VisionEvidenceReview:
     try:
         return await _vision_service(request).review_source(
@@ -308,6 +309,7 @@ async def review_learning_unit_evidence_with_vision(
             course_id,
             unit_id,
             source_id,
+            idempotency_key,
         )
     except VisionReviewError as exc:
         raise _vision_problem(exc) from exc

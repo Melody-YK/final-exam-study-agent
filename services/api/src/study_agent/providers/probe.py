@@ -15,7 +15,18 @@ from study_agent.providers.embedding_openai import (
 )
 from study_agent.providers.errors import ProviderError, ProviderErrorCode
 from study_agent.providers.factory import ProviderRegistry
-from study_agent.providers.protocols import EvidencePrompt, Passage
+from study_agent.providers.protocols import (
+    EvidencePrompt,
+    Passage,
+    VisionImage,
+    VisionJsonCompletionPrompt,
+)
+from study_agent.providers.vision import VISION_ENDPOINT_ALIAS
+
+_VISION_PROBE_IMAGE = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+    "0000000d49444154789c6360000000020001e221bc330000000049454e44ae426082"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +47,7 @@ class ProviderProbeReport:
     checked_at: str
     embedding: CapabilityProbe
     chat: CapabilityProbe
+    vision: CapabilityProbe
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False, separators=(",", ":"), sort_keys=True)
@@ -46,7 +58,10 @@ async def probe_registry(registry: ProviderRegistry) -> ProviderProbeReport:
 
     embedding = await _probe_embedding(registry)
     chat = await _probe_chat(registry)
+    vision = await _probe_vision(registry)
     statuses = {embedding.status, chat.status}
+    if vision.status != "not_configured":
+        statuses.add(vision.status)
     status: Literal["available", "partial", "unavailable"]
     if statuses == {"available"}:
         status = "available"
@@ -59,6 +74,7 @@ async def probe_registry(registry: ProviderRegistry) -> ProviderProbeReport:
         checked_at=datetime.now(UTC).isoformat(),
         embedding=embedding,
         chat=chat,
+        vision=vision,
     )
 
 
@@ -153,6 +169,55 @@ async def _probe_chat(registry: ProviderRegistry) -> CapabilityProbe:
         model=draft.model,
         dimensions=None,
         capabilities=capabilities,
+        elapsed_ms=_elapsed_ms(started),
+        error_code=None,
+    )
+
+
+async def _probe_vision(registry: ProviderRegistry) -> CapabilityProbe:
+    try:
+        raw_provider = registry.vision()
+    except ProviderError as exc:
+        if exc.code is not ProviderErrorCode.NOT_CONFIGURED:
+            raise
+        return _unavailable_capability(
+            status="not_configured",
+            endpoint_alias=VISION_ENDPOINT_ALIAS,
+            provider="openai-compatible",
+            error=exc,
+        )
+
+    started = perf_counter()
+    try:
+        draft = await raw_provider.complete_json(
+            VisionJsonCompletionPrompt(
+                system_prompt="Return a JSON object with a single status field set to available.",
+                payload={"probe": "synthetic multimodal transport check"},
+                images=(
+                    VisionImage(
+                        data=_VISION_PROBE_IMAGE,
+                        media_type="image/png",
+                        detail="low",
+                    ),
+                ),
+            )
+        )
+    except ProviderError as exc:
+        return _unavailable_capability(
+            status="unavailable",
+            endpoint_alias=VISION_ENDPOINT_ALIAS,
+            provider="openai-compatible",
+            model=getattr(raw_provider, "model", None),
+            error=exc,
+            elapsed_ms=_elapsed_ms(started),
+        )
+    return CapabilityProbe(
+        status="available",
+        endpoint_alias=VISION_ENDPOINT_ALIAS,
+        provider="openai-compatible",
+        model=draft.model,
+        dimensions=None,
+        capabilities=("image_input", "json_output"),
         elapsed_ms=_elapsed_ms(started),
         error_code=None,
     )

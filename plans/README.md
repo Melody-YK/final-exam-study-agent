@@ -16,8 +16,8 @@ stage plan or a production roadmap.
 | [004](004-source-readiness-actions.md) | Turn document readiness into clear study actions | P0 | S | None | DONE: reconciled at `d593087` on 2026-07-25 |
 | [005](005-actionable-concept-map.md) | Make the concept graph understandable and actionable | P0 | M | 004 | DONE: verified at `22e2774` on 2026-07-26 |
 | [006](006-predictable-note-templates.md) | Make the three note templates predictable before generation | P0 | M | regeneration slice clean | DONE: reviewed at `59bfc5e` on 2026-07-26 |
-| [007](007-source-preview-across-learning-surfaces.md) | Reuse original-page preview for notes and concept occurrences | P1 | L | 005, 006 | TODO after dependencies |
-| [008](008-invitation-account-capacity.md) | Enforce an explicit invitation account capacity | P1 | M | None | TODO after P0 |
+| [007](007-source-preview-across-learning-surfaces.md) | Reuse original-page preview for notes and concept occurrences | P1 | L | 005, 006 | DONE: landed in `abe7fcb` |
+| [008](008-invitation-account-capacity.md) | Enforce an explicit invitation account capacity | P1 | M | None | DONE: landed in `dbb1af8` |
 | [009](009-learning-loop.md) | 将可信课程资料闭环为主动回忆与复习队列 | P0 | L | 004, 005, 006 | DONE: baseline verified on 2026-08-02; title cleanup, draft restore, and learning-unit regeneration verified on 2026-08-03 |
 | [010](010-conversation-core.md) | 将课程问答与单题问 AI 建成共享对话与教学内核 | P0 | XL | 009 | DONE: phases A-D and desktop/mobile acceptance verified on 2026-08-04 |
 
@@ -70,10 +70,11 @@ REJECTED (with rationale)
 - Plan 006 is complete at `59bfc5e`: the three existing styles expose predictive samples, all three
   have deterministic limits, complete truncation preserves whole-source/AST linkage, and exam focus
   omits redundant page headings. Backend, Web, E2E, static, scope, and contract-hash gates passed.
-- Plan 007 follows 005 and 006 because it adds permission-scoped source actions to both surfaces. It
-  must preserve query citation authorization and cannot fabricate read URLs in the browser.
-- Plan 008 is independent in code but follows P0 in product order. It serializes active-seat and
-  invitation reservation changes under PostgreSQL rather than claiming production scalability.
+- Plan 007 followed 005 and 006 and landed in `abe7fcb`; it added permission-scoped source actions
+  to both surfaces while preserving query citation authorization and server-generated read URLs.
+- Plan 008 is independent in code but followed P0 in product order and landed in `dbb1af8`. It
+  serializes active-seat and invitation reservation changes under PostgreSQL rather than claiming
+  production scalability.
 
 ## P0 and P1 scope decision
 
@@ -89,9 +90,9 @@ REJECTED (with rationale)
 - Plan 003 includes dormant PostgreSQL/ORM facts for note tasks and immutable versions only. It
   excludes export/cleanup tables, StoredObject purpose changes, repositories, state transitions,
   backfill, API/OpenAPI changes, Web code, and AIWF document edits.
-- Plans 004-005 must not touch OpenAPI or generated TypeScript. Plan 006 executes on the reconciled
-  regeneration commit `84e8d5c`; Plan 007 still waits for 005 and 006. Plan 008 may regenerate
-  contracts only after rebasing and reviewing generated schema content.
+- Plans 004-005 must not touch OpenAPI or generated TypeScript. Plan 006 executed on the reconciled
+  regeneration commit `84e8d5c`; Plans 007 and 008 are landed and their generated contracts are
+  part of the current branch.
 - Explicitly deferred beyond P1: flashcards/active recall, spaced repetition, exam scheduling,
   audio/video, collaboration, a content marketplace, Neo4j, LLM relationship ontologies, external
   queue scaling, production LibreOffice isolation, exact ETA, DOCX/export, and observability work.

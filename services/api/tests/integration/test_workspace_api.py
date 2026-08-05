@@ -165,6 +165,7 @@ async def test_workspace_lists_status_and_retries_only_requested_pages_idempoten
         assert capabilities.status_code == 200
         capability_payload = capabilities.json()
         assert capability_payload["provider"]["status"] == "not_configured"
+        assert capability_payload["vision"]["status"] == "not_configured"
         assert capability_payload["ocr_parser"]["status"] == "worker_required"
         note_workflow = capability_payload["note_workflow"]
         assert note_workflow["enabled"] is True

@@ -82,6 +82,7 @@ class NoteWorkflowCapabilityResponse(BaseModel):
 class RuntimeCapabilitiesResponse(BaseModel):
     provider: CapabilityResponse
     embedding: CapabilityResponse
+    vision: CapabilityResponse
     native_parser: CapabilityResponse
     ocr_parser: CapabilityResponse
     mineru_parser: CapabilityResponse
@@ -164,6 +165,9 @@ async def get_runtime_capabilities(request: Request) -> RuntimeCapabilitiesRespo
     embedding_status: Literal["available", "not_configured"] = (
         "available" if settings.embedding_configured else "not_configured"
     )
+    vision_status: Literal["available", "not_configured"] = (
+        "available" if settings.vision_configured else "not_configured"
+    )
     demo_generation_ready = settings.demo_lab_enabled and settings.app_mode in {
         AppMode.LOCAL,
         AppMode.TEST,
@@ -201,6 +205,15 @@ async def get_runtime_capabilities(request: Request) -> RuntimeCapabilitiesRespo
             ),
             error_code=(
                 None if settings.embedding_configured else ProblemCode.PROVIDER_NOT_CONFIGURED
+            ),
+        ),
+        vision=CapabilityResponse(
+            status=vision_status,
+            label=(
+                "已配置, 等待请求时验证" if settings.vision_configured else "未配置多模态复核模型"
+            ),
+            error_code=(
+                None if settings.vision_configured else ProblemCode.PROVIDER_NOT_CONFIGURED
             ),
         ),
         native_parser=CapabilityResponse(

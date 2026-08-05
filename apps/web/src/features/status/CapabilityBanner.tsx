@@ -1,4 +1,4 @@
-import { CloudOff, Cpu, ScanText, Wifi } from 'lucide-react'
+import { CloudOff, Cpu, ScanSearch, ScanText, Wifi } from 'lucide-react'
 
 import type { CapabilityState, RuntimeCapabilities } from '../../api/types'
 
@@ -15,6 +15,7 @@ function capabilityText(state: CapabilityState | undefined, fallback: string): s
 
 export function CapabilityBanner({ capabilities, loading = false, error = false }: CapabilityBannerProps) {
   const providerReady = capabilities?.provider.status === 'available'
+  const visionReady = capabilities?.vision.status === 'available'
   const parserReady = capabilities?.native_parser.status === 'available'
   const ocrReady = capabilities?.ocr_parser.status === 'available'
 
@@ -25,6 +26,13 @@ export function CapabilityBanner({ capabilities, loading = false, error = false 
         <span>
           <strong>问答</strong>
           {loading ? '检查中' : error ? 'API 未报告' : capabilityText(capabilities?.provider, '未配置')}
+        </span>
+      </div>
+      <div className={visionReady ? 'is-available' : 'is-unavailable'}>
+        {visionReady ? <ScanSearch aria-hidden="true" size={16} /> : <CloudOff aria-hidden="true" size={16} />}
+        <span>
+          <strong>视觉复核</strong>
+          {loading ? '检查中' : error ? 'API 未报告' : capabilityText(capabilities?.vision, '未配置')}
         </span>
       </div>
       <div className={parserReady ? 'is-available' : 'is-unavailable'}>

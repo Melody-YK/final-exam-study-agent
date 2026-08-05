@@ -3185,6 +3185,7 @@ export interface components {
             note_workflow: components["schemas"]["NoteWorkflowCapabilityResponse"];
             ocr_parser: components["schemas"]["CapabilityResponse"];
             provider: components["schemas"]["CapabilityResponse"];
+            vision: components["schemas"]["CapabilityResponse"];
         };
         /** SourceLocator */
         SourceLocator: {
@@ -4587,7 +4588,9 @@ export interface operations {
     review_learning_unit_evidence_with_vision_api_v1_courses__course_id__learning_units__unit_id__evidence__source_id__vision_review_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
             path: {
                 course_id: string;
                 unit_id: string;

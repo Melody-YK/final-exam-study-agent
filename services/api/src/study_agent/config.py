@@ -86,7 +86,7 @@ class Settings(BaseSettings):
     vision_provider: VisionProviderName = "openai-compatible"
     vision_enabled: bool = False
     vision_base_url: str = "https://api.openai.com/v1"
-    vision_model: str = "gpt-4o-mini"
+    vision_model: str = "gpt-5.6-luna"
     vision_api_key: SecretStr | None = None
     vision_max_image_bytes: int = Field(default=10 * 1024 * 1024, ge=1, le=20 * 1024 * 1024)
 

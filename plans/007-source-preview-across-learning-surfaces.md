@@ -30,7 +30,7 @@
 - **Category**: security / direction / API / tests
 - **Planned at**: commit `a67dc87`, 2026-07-25
 - **Target branch**: `codex/p1-source-preview-surfaces`
-- **Execution status**: TODO after dependencies
+- **Execution status**: DONE, landed in `abe7fcb` and carried forward by the current learning surfaces
 
 ## Why this matters
 

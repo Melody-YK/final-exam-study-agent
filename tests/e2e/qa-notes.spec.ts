@@ -12,7 +12,7 @@ test('answered and abstained queries remain visibly distinct', async ({ page }) 
   const composer = page.getByLabel('课程问题')
   await composer.fill('什么是进程？')
   await page.getByRole('button', { name: '提交问题' }).click()
-  await expect(page.getByText('已有来源')).toBeVisible()
+  await expect(page.getByText('已有课程来源')).toBeVisible()
   await expect(page.getByText('进程是资源分配的基本单位，线程是调度的基本单位。')).toBeVisible()
 
   await page.getByRole('button', { name: /进程页面\.png/ }).click()

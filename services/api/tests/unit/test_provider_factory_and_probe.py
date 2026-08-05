@@ -162,6 +162,7 @@ async def test_probe_report_contains_alias_capabilities_and_timing_but_no_privat
     assert report.chat.status == "available"
     assert report.chat.endpoint_alias == "deepseek-chat"
     assert "json_output" in report.chat.capabilities
+    assert report.vision.status == "not_configured"
     assert "embedding-factory-secret" not in serialized
     assert "chat-factory-secret" not in serialized
     assert "provider-contract-probe" not in serialized
@@ -191,7 +192,57 @@ async def test_probe_reports_embedding_only_registry_as_partial_without_calling_
     assert report.embedding.status == "available"
     assert report.chat.status == "not_configured"
     assert report.chat.error_code == ProviderErrorCode.NOT_CONFIGURED.value
+    assert report.vision.status == "not_configured"
     assert [request.path for request in server.requests] == ["/v1/embeddings"]
+
+
+@pytest.mark.asyncio
+async def test_probe_reports_configured_vision_transport() -> None:
+    embedding = {
+        "model": "bge-m3-contract",
+        "data": [{"index": 0, "embedding": [0.1, 0.2, 0.3]}],
+    }
+    chat = {
+        "id": "probe-chat-id",
+        "model": "deepseek-v4-flash",
+        "choices": [{"message": {"content": json.dumps({"status": "answered", "claims": []})}}],
+    }
+    vision = {
+        "id": "probe-vision-id",
+        "model": "gpt-5.6-luna",
+        "choices": [{"message": {"content": json.dumps({"status": "available"})}}],
+    }
+    server = ScriptedProviderServer(
+        ScriptedResponse(json_body=embedding),
+        ScriptedResponse(json_body=chat),
+        ScriptedResponse(json_body=vision),
+    )
+    client = httpx.AsyncClient(transport=server.transport)
+    registry = build_provider_registry(
+        configured_settings(
+            chat_stream=False,
+            vision_enabled=True,
+            vision_api_key=SecretStr("vision-probe-secret"),
+            vision_base_url="http://vision.test/v1",
+        ),
+        http_client=client,
+    )
+    try:
+        report = await probe_registry(registry)
+    finally:
+        await registry.aclose()
+        await client.aclose()
+
+    assert report.status == "available"
+    assert report.vision.status == "available"
+    assert report.vision.endpoint_alias == "vision-openai-compatible"
+    assert report.vision.model == "gpt-5.6-luna"
+    assert report.vision.capabilities == ("image_input", "json_output")
+    assert [request.path for request in server.requests] == [
+        "/v1/embeddings",
+        "/chat/completions",
+        "/v1/chat/completions",
+    ]
 
 
 @pytest.mark.parametrize(

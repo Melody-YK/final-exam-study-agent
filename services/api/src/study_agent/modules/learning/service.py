@@ -1860,10 +1860,16 @@ class LearningLoopService(LearningBatchProcessor):
                 )
             )
             result: list[ReviewQueueItem] = []
+            evidence_by_unit = await self._current_evidence_for_units(
+                session,
+                course.user_id,
+                course.id,
+                tuple(unit.id for _mastery, unit in rows),
+            )
             for mastery, unit in rows:
                 if _is_legacy_zero_placeholder(unit):
                     continue
-                evidence = await self._current_evidence(session, course.user_id, course.id, unit.id)
+                evidence = evidence_by_unit.get(unit.id, ([], []))
                 if not evidence[0]:
                     continue
                 if not practice_evidence_stats(item.text for item in evidence[1]).is_sufficient:
@@ -2461,6 +2467,12 @@ class LearningLoopService(LearningBatchProcessor):
         if not rows:
             return []
         user_id = rows[0].user_id
+        evidence_by_unit = await self._current_evidence_for_units(
+            session,
+            user_id,
+            course_id,
+            tuple(unit.id for unit in rows),
+        )
         source_rows = list(
             await session.scalars(
                 select(LearningUnitSourceModel).where(
@@ -2483,7 +2495,7 @@ class LearningLoopService(LearningBatchProcessor):
         mastery_by_unit = {row.learning_unit_id: row for row in mastery_rows}
         snapshots: list[LearningUnit] = []
         for unit in rows:
-            evidence = await self._current_evidence(session, user_id, course_id, unit.id)
+            evidence = evidence_by_unit.get(unit.id, ([], []))
             practice_mode = practice_mode_for_unit(
                 unit.kind,
                 unit.label,
@@ -2595,7 +2607,42 @@ class LearningLoopService(LearningBatchProcessor):
         course_id: str,
         unit_id: str,
     ) -> tuple[list[EvidenceReference], list[_EvidenceMaterial]]:
-        unit_scope_ids = await self._unit_scope_ids(session, user_id, course_id, unit_id)
+        evidence_by_unit = await self._current_evidence_for_units(
+            session,
+            user_id,
+            course_id,
+            (unit_id,),
+        )
+        return evidence_by_unit.get(unit_id, ([], []))
+
+    async def _current_evidence_for_units(
+        self,
+        session: AsyncSession,
+        user_id: str,
+        course_id: str,
+        unit_ids: tuple[str, ...],
+    ) -> dict[str, tuple[list[EvidenceReference], list[_EvidenceMaterial]]]:
+        """Load all current source rows once, then project descendant scopes in memory."""
+
+        if not unit_ids:
+            return {}
+        hierarchy_rows = list(
+            await session.execute(
+                select(LearningUnitModel.id, LearningUnitModel.parent_id).where(
+                    LearningUnitModel.user_id == user_id,
+                    LearningUnitModel.course_id == course_id,
+                )
+            )
+        )
+        children: dict[str, list[str]] = {}
+        all_unit_ids: list[str] = []
+        for child_id, parent_id in hierarchy_rows:
+            all_unit_ids.append(child_id)
+            if parent_id is not None:
+                children.setdefault(parent_id, []).append(child_id)
+        if not all_unit_ids:
+            return {unit_id: ([], []) for unit_id in unit_ids}
+
         rows = list(
             await session.execute(
                 select(
@@ -2635,7 +2682,7 @@ class LearningLoopService(LearningBatchProcessor):
                 .where(
                     LearningUnitSourceModel.user_id == user_id,
                     LearningUnitSourceModel.course_id == course_id,
-                    LearningUnitSourceModel.unit_id.in_(unit_scope_ids),
+                    LearningUnitSourceModel.unit_id.in_(all_unit_ids),
                     LearningUnitSourceModel.status == "valid",
                     DocumentModel.deleted_at.is_(None),
                     DocumentModel.review_status == "approved",
@@ -2645,6 +2692,51 @@ class LearningLoopService(LearningBatchProcessor):
                 .order_by(RevisionChunkModel.ordinal, RevisionChunkModel.id)
             )
         )
+
+        rows_by_unit: dict[
+            str,
+            list[
+                tuple[
+                    LearningUnitSourceModel,
+                    DocumentModel,
+                    RevisionChunkModel,
+                    LearningUnitEvidenceSupplementModel | None,
+                ]
+            ],
+        ] = {}
+        for source, document, chunk, supplement in rows:
+            rows_by_unit.setdefault(source.unit_id, []).append(
+                (source, document, chunk, supplement)
+            )
+
+        result: dict[str, tuple[list[EvidenceReference], list[_EvidenceMaterial]]] = {}
+        for unit_id in unit_ids:
+            scope_ids = {unit_id}
+            pending = [unit_id]
+            while pending:
+                parent_id = pending.pop()
+                for child_id in children.get(parent_id, []):
+                    if child_id not in scope_ids:
+                        scope_ids.add(child_id)
+                        pending.append(child_id)
+            scoped_rows = [
+                row for scoped_unit_id in scope_ids for row in rows_by_unit.get(scoped_unit_id, [])
+            ]
+            scoped_rows.sort(key=lambda row: (row[2].ordinal, row[2].id))
+            result[unit_id] = self._evidence_from_rows(scoped_rows)
+        return result
+
+    @staticmethod
+    def _evidence_from_rows(
+        rows: list[
+            tuple[
+                LearningUnitSourceModel,
+                DocumentModel,
+                RevisionChunkModel,
+                LearningUnitEvidenceSupplementModel | None,
+            ]
+        ],
+    ) -> tuple[list[EvidenceReference], list[_EvidenceMaterial]]:
         refs: list[EvidenceReference] = []
         materials: list[_EvidenceMaterial] = []
         seen_chunks: dict[tuple[str, str, str], int] = {}

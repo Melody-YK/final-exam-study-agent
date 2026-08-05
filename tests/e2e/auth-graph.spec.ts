@@ -347,11 +347,11 @@ test('concept map focuses relationships and prepares a fresh QA draft', async ({
     '根据当前课程资料，概括“进程”在课程内容中的含义，并说明它与直接关联概念的联系。',
   )
   await expect(page.getByText('输入第一个问题开始会话')).toBeVisible()
-  await expect(page.getByText('已有来源')).toHaveCount(0)
+  await expect(page.getByText('已有课程来源')).toHaveCount(0)
   expect(queryRequests).toEqual([])
 
   await page.getByRole('button', { name: '提交问题' }).click()
-  await expect(page.getByText('已有来源')).toBeVisible()
+  await expect(page.getByText('已有课程来源')).toBeVisible()
   expect(queryRequests).toEqual([
     {
       question:

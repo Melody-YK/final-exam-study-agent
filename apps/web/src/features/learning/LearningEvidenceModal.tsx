@@ -21,6 +21,7 @@ import type {
 } from "../../api/types";
 import { ErrorNotice } from "../../components/ui/ErrorNotice";
 import { Modal } from "../../components/ui/Modal";
+import { useWorkspace } from "../../app/WorkspaceContext";
 import { SourceViewer } from "../source-viewer/SourceViewer";
 
 interface LearningEvidenceModalProps {
@@ -88,6 +89,7 @@ export function LearningEvidenceModal({
   open,
   unit,
 }: LearningEvidenceModalProps) {
+  const { capabilities } = useWorkspace();
   const queryClient = useQueryClient();
   const [sourceId, setSourceId] = useState("");
   const [role, setRole] =
@@ -118,6 +120,7 @@ export function LearningEvidenceModal({
   const activeSourceId = parsedItems.some((item) => item.source_id === sourceId)
     ? sourceId
     : (parsedItems[0]?.source_id ?? "");
+  const visionReady = capabilities?.vision.status === "available";
 
   const invalidateEvidence = async () => {
     await Promise.all([
@@ -400,7 +403,7 @@ export function LearningEvidenceModal({
                     item.practice_status === "low_confidence" ? (
                       <button
                         className="button button--small"
-                        disabled={reviewWithVision.isPending}
+                        disabled={!visionReady || reviewWithVision.isPending}
                         onClick={() => {
                           setVisionReview(null);
                           reviewWithVision.mutate(item);
@@ -420,7 +423,9 @@ export function LearningEvidenceModal({
                         {reviewWithVision.isPending &&
                         reviewWithVision.variables?.id === item.id
                           ? "正在复核"
-                          : "多模态复核"}
+                          : visionReady
+                            ? "多模态复核"
+                            : "视觉模型未配置"}
                       </button>
                     ) : null}
                   </footer>

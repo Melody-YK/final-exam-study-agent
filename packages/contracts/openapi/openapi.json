@@ -5662,11 +5662,15 @@
           },
           "provider": {
             "$ref": "#/components/schemas/CapabilityResponse"
+          },
+          "vision": {
+            "$ref": "#/components/schemas/CapabilityResponse"
           }
         },
         "required": [
           "provider",
           "embedding",
+          "vision",
           "native_parser",
           "ocr_parser",
           "mineru_parser",
@@ -8049,6 +8053,17 @@
             "required": true,
             "schema": {
               "title": "Source Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 512,
+              "minLength": 1,
+              "title": "Idempotency-Key",
               "type": "string"
             }
           }

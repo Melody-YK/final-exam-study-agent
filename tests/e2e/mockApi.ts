@@ -1314,6 +1314,10 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}) {
             status: providerStatus,
             label: providerAvailable ? '可用' : '未配置',
           },
+          vision: {
+            status: providerStatus,
+            label: providerAvailable ? '多模态复核可用' : '未配置',
+          },
           native_parser: { status: 'available', label: '原生解析可用' },
           ocr_parser: {
             status: 'worker_required',

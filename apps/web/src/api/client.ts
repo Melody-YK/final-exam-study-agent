@@ -573,7 +573,10 @@ export class StudyApiClient {
   ): Promise<VisionEvidenceReview> {
     return this.request(
       `/courses/${encodeURIComponent(courseId)}/learning-units/${encodeURIComponent(unitId)}/evidence/${encodeURIComponent(sourceId)}/vision-review`,
-      { method: 'POST' },
+      {
+        method: 'POST',
+        headers: { 'Idempotency-Key': idempotencyKey('vision-review') },
+      },
     )
   }
 

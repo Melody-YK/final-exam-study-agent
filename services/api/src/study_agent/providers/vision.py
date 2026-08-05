@@ -20,7 +20,8 @@ from study_agent.providers.protocols import (
     VisionJsonCompletionPrompt,
 )
 
-_PROVIDER_NAME = "vision-openai-compatible"
+VISION_ENDPOINT_ALIAS = "vision-openai-compatible"
+_PROVIDER_NAME = VISION_ENDPOINT_ALIAS
 _MAX_TOKENS = 4096
 _TEMPERATURE = 0.1
 _USAGE_KEYS = {

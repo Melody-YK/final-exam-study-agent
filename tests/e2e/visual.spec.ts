@@ -116,7 +116,7 @@ test('primary views stay nonblank and free of overflow or control overlap', asyn
   await page.getByRole('link', { name: '问答', exact: true }).click()
   await page.getByLabel('课程问题').fill('什么是进程？')
   await page.getByRole('button', { name: '提交问题' }).click()
-  await expect(page.getByText('已有来源')).toBeVisible()
+  await expect(page.getByText('已有课程来源')).toBeVisible()
   await verifyView(page, testInfo, 'qa')
 
   await page.getByRole('button', { name: /进程页面\.png/ }).click()

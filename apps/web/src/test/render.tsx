@@ -10,6 +10,7 @@ import { WorkspaceContext, type WorkspaceState } from '../app/WorkspaceContext'
 export const availableCapabilities: RuntimeCapabilities = {
   provider: { status: 'available', label: '回答模型可用' },
   embedding: { status: 'available', label: 'Embedding 可用' },
+  vision: { status: 'available', label: '多模态复核可用' },
   native_parser: { status: 'available', label: '原生解析可用' },
   ocr_parser: { status: 'worker_required', label: '需要本地 OCR Worker' },
   mineru_parser: { status: 'worker_required', label: '需要自建 MinerU 服务' },

@@ -6,10 +6,13 @@
 from __future__ import annotations
 
 import asyncio
+import time
+from dataclasses import dataclass
 from enum import StrEnum
 
 from pydantic import ValidationError
 from sqlalchemy import and_, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from study_agent.config import Settings
@@ -20,11 +23,20 @@ from study_agent.infrastructure.db.models import (
     LearningUnitModel,
     LearningUnitSourceModel,
     UserModel,
+    VisionReviewRunModel,
 )
 from study_agent.infrastructure.db.session import Database
+from study_agent.modules.idempotency import IdempotencyService
 from study_agent.modules.sources.preview import SourcePreviewService, SourcePreviewUnavailable
+from study_agent.providers.errors import ProviderError, ProviderErrorCode
 from study_agent.providers.factory import ProviderRegistry
-from study_agent.providers.protocols import ObjectStorage, VisionImage, VisionJsonCompletionPrompt
+from study_agent.providers.protocols import (
+    ObjectStorage,
+    VisionImage,
+    VisionJsonCompletionPrompt,
+    VisionJsonCompletionProvider,
+)
+from study_agent.providers.vision import VISION_ENDPOINT_ALIAS
 from study_contracts import VisionEvidenceReview
 
 
@@ -40,6 +52,14 @@ class VisionReviewError(RuntimeError):
         super().__init__(detail)
         self.code = code
         self.detail = detail
+
+
+@dataclass(frozen=True, slots=True)
+class _AuthorizedSource:
+    user_id: str
+    revision_id: str
+    chunk_id: str
+    content_sha256: str
 
 
 _VISION_SYSTEM_PROMPT = """你是学习资料证据复核器。请以用户上传页面的图像为主要依据，复核一页
@@ -76,6 +96,7 @@ class VisionEvidenceReviewService:
         self._storage = storage
         self._settings = settings
         self._provider_registry = provider_registry
+        self._idempotency = IdempotencyService()
 
     async def review_source(
         self,
@@ -83,19 +104,122 @@ class VisionEvidenceReviewService:
         course_id: str,
         unit_id: str,
         source_id: str,
+        idempotency_key: str,
     ) -> VisionEvidenceReview:
-        revision_id, chunk_id = await self._authorized_source(
+        authorized = await self._authorized_source(
             principal,
             course_id,
             unit_id,
             source_id,
         )
+        request_hash = self._idempotency.request_hash(
+            {
+                "course_id": course_id,
+                "unit_id": unit_id,
+                "source_id": source_id,
+                "revision_id": authorized.revision_id,
+                "source_content_sha256": authorized.content_sha256,
+            }
+        )
+        operation = f"vision-review:{course_id}:{unit_id}:{source_id}"
+        started = time.perf_counter()
+        provider_name = VISION_ENDPOINT_ALIAS
+        model_name: str | None = None
+        image_size_bytes = 0
+        usage: dict[str, int] = {}
+        provider_response_id: str | None = None
         try:
-            preview = await SourcePreviewService(self._database, self._storage).get_graph_source(
+            async with self._database.session(principal) as session:
+                await self._idempotency.lock(
+                    session,
+                    principal,
+                    operation=operation,
+                    key=idempotency_key,
+                )
+                replay = await self._idempotency.replay_or_none(
+                    session,
+                    principal,
+                    operation=operation,
+                    key=idempotency_key,
+                    request_hash=request_hash,
+                )
+                if replay is not None:
+                    return VisionEvidenceReview.model_validate(replay.response_body)
+
+                provider = self._provider_registry.vision()
+                provider_name = str(getattr(provider, "endpoint_alias", VISION_ENDPOINT_ALIAS))
+                raw_model = getattr(provider, "model", None)
+                model_name = raw_model if isinstance(raw_model, str) else None
+                review, image_size_bytes, usage, provider_response_id = await self._perform_review(
+                    principal,
+                    course_id,
+                    unit_id,
+                    source_id,
+                    authorized,
+                    provider,
+                )
+                model_name = review.model
+                self._idempotency.store(
+                    session,
+                    principal,
+                    operation=operation,
+                    key=idempotency_key,
+                    request_hash=request_hash,
+                    response_status=200,
+                    response_body=review.model_dump(mode="json"),
+                )
+                session.add(
+                    self._run_record(
+                        authorized=authorized,
+                        course_id=course_id,
+                        unit_id=unit_id,
+                        source_id=source_id,
+                        request_hash=request_hash,
+                        provider=provider_name,
+                        model=model_name,
+                        provider_response_id=provider_response_id,
+                        usage=usage,
+                        image_size_bytes=image_size_bytes,
+                        duration_ms=_elapsed_ms(started),
+                        status="succeeded",
+                        error_code=None,
+                    )
+                )
+                return review
+        except (VisionReviewError, ProviderError, TimeoutError) as exc:
+            await self._record_failed_run(
+                principal=principal,
+                authorized=authorized,
+                course_id=course_id,
+                unit_id=unit_id,
+                source_id=source_id,
+                request_hash=request_hash,
+                provider=provider_name,
+                model=model_name,
+                usage=usage,
+                image_size_bytes=image_size_bytes,
+                duration_ms=_elapsed_ms(started),
+                error_code=_error_code(exc),
+            )
+            raise
+
+    async def _perform_review(
+        self,
+        principal: Principal,
+        course_id: str,
+        unit_id: str,
+        source_id: str,
+        authorized: _AuthorizedSource,
+        provider: VisionJsonCompletionProvider,
+    ) -> tuple[VisionEvidenceReview, int, dict[str, int], str | None]:
+        del unit_id
+        preview_service = SourcePreviewService(self._database, self._storage)
+        try:
+            preview = await preview_service.get_graph_source(
                 principal,
                 course_id,
-                revision_id,
-                chunk_id,
+                authorized.revision_id,
+                authorized.chunk_id,
                 prefer_rendered_page=True,
             )
         except SourcePreviewUnavailable:
@@ -109,14 +233,8 @@ class VisionEvidenceReviewService:
                 "当前证据片段已失效, 请重新打开学习单元。",
             )
 
-        reader = getattr(self._storage, "read_bytes", None)
-        if not callable(reader):
-            raise VisionReviewError(
-                VisionReviewErrorCode.IMAGE_UNAVAILABLE,
-                "当前存储后端不支持服务端读取页面图片。",
-            )
         try:
-            image_bytes = await reader(preview.object_key)
+            image_bytes = await self._storage.read_bytes(preview.object_key)
         except (FileNotFoundError, OSError):
             raise VisionReviewError(
                 VisionReviewErrorCode.IMAGE_UNAVAILABLE,
@@ -133,7 +251,6 @@ class VisionEvidenceReviewService:
                 "当前页面图片超过多模态复核大小限制。",
             )
 
-        provider = self._provider_registry.vision()
         draft = await asyncio.wait_for(
             provider.complete_json(
                 VisionJsonCompletionPrompt(
@@ -164,12 +281,86 @@ class VisionEvidenceReviewService:
             }
         )
         try:
-            return VisionEvidenceReview.model_validate(payload)
+            review = VisionEvidenceReview.model_validate(payload)
         except ValidationError as exc:
             raise VisionReviewError(
                 VisionReviewErrorCode.OUTPUT_INVALID,
                 "多模态模型返回的复核结果不完整, 请稍后重试。",
             ) from exc
+        return review, len(image_bytes), dict(draft.usage), draft.provider_response_id
+
+    @staticmethod
+    def _run_record(
+        *,
+        authorized: _AuthorizedSource,
+        course_id: str,
+        unit_id: str,
+        source_id: str,
+        request_hash: str,
+        provider: str | None,
+        model: str | None,
+        provider_response_id: str | None,
+        usage: dict[str, int],
+        image_size_bytes: int,
+        duration_ms: int,
+        status: str,
+        error_code: str | None,
+    ) -> VisionReviewRunModel:
+        return VisionReviewRunModel(
+            user_id=authorized.user_id,
+            course_id=course_id,
+            unit_id=unit_id,
+            source_id=source_id,
+            revision_id=authorized.revision_id,
+            source_content_sha256=authorized.content_sha256,
+            request_hash=request_hash,
+            provider=provider,
+            model=model,
+            provider_response_id=provider_response_id,
+            usage=usage,
+            image_size_bytes=image_size_bytes,
+            duration_ms=duration_ms,
+            status=status,
+            error_code=error_code,
+        )
+
+    async def _record_failed_run(
+        self,
+        *,
+        principal: Principal,
+        authorized: _AuthorizedSource,
+        course_id: str,
+        unit_id: str,
+        source_id: str,
+        request_hash: str,
+        provider: str | None,
+        model: str | None,
+        usage: dict[str, int],
+        image_size_bytes: int,
+        duration_ms: int,
+        error_code: str,
+    ) -> None:
+        try:
+            async with self._database.session(principal) as session:
+                session.add(
+                    self._run_record(
+                        authorized=authorized,
+                        course_id=course_id,
+                        unit_id=unit_id,
+                        source_id=source_id,
+                        request_hash=request_hash,
+                        provider=provider,
+                        model=model,
+                        provider_response_id=None,
+                        usage=usage,
+                        image_size_bytes=image_size_bytes,
+                        duration_ms=duration_ms,
+                        status="failed",
+                        error_code=error_code,
+                    )
+                )
+        except SQLAlchemyError:
+            return
 
     async def _authorized_source(
         self,
@@ -177,7 +368,7 @@ class VisionEvidenceReviewService:
         course_id: str,
         unit_id: str,
         source_id: str,
-    ) -> tuple[str, str]:
+    ) -> _AuthorizedSource:
         async with self._database.session(principal) as session:
             course = await session.scalar(
                 select(CourseModel)
@@ -228,7 +419,12 @@ class VisionEvidenceReviewService:
                     VisionReviewErrorCode.SOURCE_UNAVAILABLE,
                     "当前证据片段已失效, 请重新打开学习单元。",
                 )
-            return source.revision_id, source.chunk_id
+            return _AuthorizedSource(
+                user_id=course.user_id,
+                revision_id=source.revision_id,
+                chunk_id=source.chunk_id,
+                content_sha256=source.content_sha256,
+            )
 
     @staticmethod
     async def _scope_ids(
@@ -258,3 +454,15 @@ class VisionEvidenceReviewService:
                     result.add(child_id)
                     pending.append(child_id)
         return result
+
+
+def _elapsed_ms(started: float) -> int:
+    return max(0, round((time.perf_counter() - started) * 1000))
+
+
+def _error_code(exc: VisionReviewError | ProviderError | TimeoutError) -> str:
+    if isinstance(exc, VisionReviewError):
+        return exc.code.value
+    if isinstance(exc, ProviderError):
+        return exc.code.value
+    return ProviderErrorCode.TIMEOUT.value
