@@ -8,6 +8,10 @@ export interface WorkspaceState {
   capabilities: RuntimeCapabilities | undefined
   capabilitiesLoading: boolean
   capabilitiesError: boolean
+  immersiveNotes: boolean
+  setImmersiveNotes: (active: boolean) => void
+  hasUnsavedChanges?: boolean
+  setHasUnsavedChanges?: (active: boolean) => void
 }
 
 export const WorkspaceContext = createContext<WorkspaceState | null>(null)

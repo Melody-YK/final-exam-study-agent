@@ -12,7 +12,8 @@ import {
   Save,
   Sparkles,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useLocation } from "react-router";
 
 import { studyApi } from "../../api/client";
 import type {
@@ -27,6 +28,11 @@ import { PageHeader } from "../../components/ui/PageHeader";
 import { LearningEvidenceModal } from "./LearningEvidenceModal";
 import { LearningSummary } from "./LearningSummary";
 import { PracticeSession } from "./PracticeSession";
+import {
+  learningSourceKey,
+  parseLearningLaunchState,
+  type LearningLaunchState,
+} from "./learningLaunch";
 
 const MAX_QUESTIONS = 10;
 const MAX_SELECTED_SCOPES = MAX_QUESTIONS;
@@ -150,18 +156,66 @@ function isPracticeSelectable(unit: LearningUnit): boolean {
   );
 }
 
+function normalizeLaunchText(value: string): string {
+  return value
+    .normalize("NFKC")
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+function launchUnitIds(
+  units: LearningUnit[],
+  launch: LearningLaunchState,
+): string[] {
+  const sourceKeys = new Set(launch.sourceKeys);
+  const knowledgePointTexts = launch.knowledgePointTexts
+    .map(normalizeLaunchText)
+    .filter(Boolean);
+  const matchesSource = (unit: LearningUnit) =>
+    unit.sources?.some((source) => sourceKeys.has(learningSourceKey(source))) ??
+    false;
+  const matchesText = (unit: LearningUnit) => {
+    const label = normalizeLaunchText(unit.label);
+    return Boolean(
+      label &&
+        knowledgePointTexts.some(
+          (text) => text === label || text.includes(label) || label.includes(text),
+        ),
+    );
+  };
+  const selectable = units.filter(isPracticeSelectable);
+  const concepts = selectable.filter((unit) => unit.kind === "concept");
+  const conceptMatches = concepts.filter(
+    (unit) => matchesSource(unit) || matchesText(unit),
+  );
+  if (conceptMatches.length > 0) {
+    return conceptMatches.slice(0, MAX_QUESTIONS).map((unit) => unit.id);
+  }
+  return selectable
+    .filter((unit) => matchesSource(unit) || matchesText(unit))
+    .slice(0, MAX_QUESTIONS)
+    .map((unit) => unit.id);
+}
+
 export function LearningPage() {
   const { capabilities, capabilitiesLoading, courseId } = useWorkspace();
   const queryClient = useQueryClient();
+  const location = useLocation();
+  const learningLaunch = useMemo(
+    () => parseLearningLaunchState(location.state),
+    [location.state],
+  );
   const storedSessionId = readStorage(courseId, "session-id");
   const storedBatchId = readStorage(courseId, "batch-id");
   const [view, setView] = useState<LearningView>(
     storedSessionId ? "practice" : "overview",
   );
   const [selectedUnitIds, setSelectedUnitIds] = useState<string[]>([]);
+  const [selectionTouched, setSelectionTouched] = useState(false);
   const [questionCountInput, setQuestionCountInput] = useState("5");
   const [questionCountTouched, setQuestionCountTouched] = useState(false);
   const [unitPage, setUnitPage] = useState(1);
+  const [unitPageTouched, setUnitPageTouched] = useState(false);
   const [batchId, setBatchId] = useState<string | null>(storedBatchId);
   const [sessionId, setSessionId] = useState<string | null>(storedSessionId);
   const [activeSession, setActiveSession] =
@@ -227,9 +281,11 @@ export function LearningPage() {
         queryKey: ["learning-review-queue", courseId],
       });
       setSelectedUnitIds([]);
+      setSelectionTouched(true);
       setQuestionCountInput("5");
       setQuestionCountTouched(false);
       setUnitPage(1);
+      setUnitPageTouched(false);
     },
   });
   const createSession = useMutation({
@@ -296,10 +352,59 @@ export function LearningPage() {
     () => new Map(displayUnits.map((unit) => [unit.id, unit])),
     [displayUnits],
   );
+  const defaultQuestionCount = useCallback(
+    (unitIds: string[]): number => {
+      if (unitIds.length === 0) return 5;
+      let includesRecallSection = false;
+      let includesExercise = false;
+      const suggested = unitIds.reduce((total, unitId) => {
+        const unit = unitById.get(unitId);
+        if (!unit) return total;
+        if (unit.kind === "section") {
+          if (isExerciseVariant(unit)) {
+            includesExercise = true;
+            const prototypeCount = (conceptsBySection.get(unit.id) ?? []).filter(
+              (concept) =>
+                isExerciseVariant(concept) && isPracticeSelectable(concept),
+            ).length;
+            return total + Math.max(1, prototypeCount);
+          }
+          includesRecallSection = true;
+          return total;
+        }
+        return total + 1;
+      }, 0);
+      if (includesRecallSection && !includesExercise) return 5;
+      const sectionAllowance = includesRecallSection ? 5 : 0;
+      return Math.min(
+        MAX_QUESTIONS,
+        Math.max(unitIds.length, suggested + sectionAllowance, 1),
+      );
+    },
+    [conceptsBySection, unitById],
+  );
+  const launchSelectedUnitIds = useMemo(
+    () =>
+      learningLaunch && !unitsQuery.isLoading && !unitsQuery.isError
+        ? launchUnitIds(displayUnits, learningLaunch)
+        : [],
+    [displayUnits, learningLaunch, unitsQuery.isError, unitsQuery.isLoading],
+  );
+  const usingLaunchSelection =
+    learningLaunch !== null && !selectionTouched && !unitsQuery.isLoading && !unitsQuery.isError;
+  const effectiveSelectedUnitIds = usingLaunchSelection
+    ? launchSelectedUnitIds
+    : selectedUnitIds;
+  const launchNotice =
+    usingLaunchSelection && learningLaunch
+      ? launchSelectedUnitIds.length > 0
+        ? `已从“${learningLaunch.noteTitle}”预选 ${launchSelectedUnitIds.length} 个相关练习范围。`
+        : `未找到与“${learningLaunch.noteTitle}”关联的可练习知识单元，请先重新生成学习单元。`
+      : null;
   const selectedCoverage = useMemo(() => {
     const selectedGoalIds = new Set<string>();
     const selectedPrototypeIds = new Set<string>();
-    for (const unitId of selectedUnitIds) {
+    for (const unitId of effectiveSelectedUnitIds) {
       const unit = unitById.get(unitId);
       if (unit?.kind === "concept") {
         if (isExerciseVariant(unit)) selectedPrototypeIds.add(unit.id);
@@ -317,15 +422,15 @@ export function LearningPage() {
       exercisePrototypes: selectedPrototypeIds.size,
       knowledgeGoals: selectedGoalIds.size,
     };
-  }, [conceptsBySection, selectedUnitIds, unitById]);
-  const hasSelectedSection = selectedUnitIds.some(
+  }, [conceptsBySection, effectiveSelectedUnitIds, unitById]);
+  const hasSelectedSection = effectiveSelectedUnitIds.some(
     (unitId) => unitById.get(unitId)?.kind === "section",
   );
-  const hasSelectedExercise = selectedUnitIds.some((unitId) => {
+  const hasSelectedExercise = effectiveSelectedUnitIds.some((unitId) => {
     const unit = unitById.get(unitId);
     return unit ? isExerciseVariant(unit) : false;
   });
-  const hasLowConfidenceSelection = selectedUnitIds.some((unitId) => {
+  const hasLowConfidenceSelection = effectiveSelectedUnitIds.some((unitId) => {
     const unit = unitById.get(unitId);
     if (!unit) return false;
     if (unit.practice_status === "low_confidence") return true;
@@ -350,17 +455,21 @@ export function LearningPage() {
   ]
     .filter((label): label is string => label !== null)
     .join(" · ");
-  const questionCount = Number(questionCountInput);
+  const effectiveQuestionCountInput =
+    usingLaunchSelection && !questionCountTouched
+      ? String(defaultQuestionCount(launchSelectedUnitIds))
+      : questionCountInput;
+  const questionCount = Number(effectiveQuestionCountInput);
   const questionCountIsValid =
     Number.isInteger(questionCount) &&
     questionCount >= 1 &&
     questionCount <= MAX_QUESTIONS;
   const selectionBoundaryError = !questionCountIsValid
     ? `题目数量必须是 1–${MAX_QUESTIONS} 之间的整数。`
-    : selectedUnitIds.length > MAX_SELECTED_SCOPES
+    : effectiveSelectedUnitIds.length > MAX_SELECTED_SCOPES
       ? `单批最多选择 ${MAX_SELECTED_SCOPES} 个范围。`
-      : selectedUnitIds.length > questionCount
-        ? `当前选择了 ${selectedUnitIds.length} 个范围，至少需要 ${selectedUnitIds.length} 道题，才能保证每个范围都分到题目。`
+      : effectiveSelectedUnitIds.length > questionCount
+        ? `当前选择了 ${effectiveSelectedUnitIds.length} 个范围，至少需要 ${effectiveSelectedUnitIds.length} 道题，才能保证每个范围都分到题目。`
         : null;
   const sectionById = useMemo(
     () => new Map(sections.map((section) => [section.id, section])),
@@ -389,7 +498,21 @@ export function LearningPage() {
     1,
     Math.ceil(pagedUnits.length / LEARNING_UNITS_PAGE_SIZE),
   );
-  const currentUnitPage = Math.min(unitPage, totalUnitPages);
+  const launchUnitPage =
+    usingLaunchSelection && launchSelectedUnitIds.length > 0
+      ? Math.floor(
+          Math.max(
+            0,
+            pagedUnits.findIndex((unit) =>
+              launchSelectedUnitIds.includes(unit.id),
+            ),
+          ) / LEARNING_UNITS_PAGE_SIZE,
+        ) + 1
+      : 1;
+  const currentUnitPage = Math.min(
+    usingLaunchSelection && !unitPageTouched ? launchUnitPage : unitPage,
+    totalUnitPages,
+  );
   const visibleUnitGroups = useMemo(() => {
     const start = (currentUnitPage - 1) * LEARNING_UNITS_PAGE_SIZE;
     const visibleUnits = pagedUnits.slice(
@@ -445,37 +568,11 @@ export function LearningPage() {
     return [...current.filter((id) => id !== unit.parent_id), unit.id];
   };
 
-  const defaultQuestionCount = (unitIds: string[]): number => {
-    if (unitIds.length === 0) return 5;
-    let includesRecallSection = false;
-    let includesExercise = false;
-    const suggested = unitIds.reduce((total, unitId) => {
-      const unit = unitById.get(unitId);
-      if (!unit) return total;
-      if (unit.kind === "section") {
-        if (isExerciseVariant(unit)) {
-          includesExercise = true;
-          const prototypeCount = (conceptsBySection.get(unit.id) ?? []).filter(
-            (concept) =>
-              isExerciseVariant(concept) && isPracticeSelectable(concept),
-          ).length;
-          return total + Math.max(1, prototypeCount);
-        }
-        includesRecallSection = true;
-        return total;
-      }
-      return total + 1;
-    }, 0);
-    if (includesRecallSection && !includesExercise) return 5;
-    const sectionAllowance = includesRecallSection ? 5 : 0;
-    return Math.min(
-      MAX_QUESTIONS,
-      Math.max(unitIds.length, suggested + sectionAllowance, 1),
-    );
-  };
-
   const handleUnitSelection = (unit: LearningUnit) => {
-    const nextSelection = nextUnitSelection(selectedUnitIds, unit);
+    const nextSelection = nextUnitSelection(effectiveSelectedUnitIds, unit);
+    setSelectionTouched(true);
+    setUnitPageTouched(true);
+    setUnitPage(currentUnitPage);
     setSelectedUnitIds(nextSelection);
     if (!questionCountTouched) {
       setQuestionCountInput(String(defaultQuestionCount(nextSelection)));
@@ -483,11 +580,11 @@ export function LearningPage() {
   };
 
   const renderLearningUnit = (unit: LearningUnit) => {
-    const selected = selectedUnitIds.includes(unit.id);
+    const selected = effectiveSelectedUnitIds.includes(unit.id);
     const practiceReady = isPracticeSelectable(unit);
     const nextSelection = selected
-      ? selectedUnitIds
-      : nextUnitSelection(selectedUnitIds, unit);
+      ? effectiveSelectedUnitIds
+      : nextUnitSelection(effectiveSelectedUnitIds, unit);
     const disabled =
       !practiceReady ||
       (!selected && nextSelection.length > MAX_SELECTED_SCOPES);
@@ -581,7 +678,7 @@ export function LearningPage() {
     session?.status === "completed" && view === "practice" ? "summary" : view;
 
   const startBatch = (
-    unitIds = selectedUnitIds,
+    unitIds = effectiveSelectedUnitIds,
     requestedQuestionCount = questionCount,
   ) => {
     const readyUnitIds = unitIds.filter((id) =>
@@ -640,6 +737,9 @@ export function LearningPage() {
       item.learning_unit_id,
     ]);
     setSelectedUnitIds([item.learning_unit_id]);
+    setSelectionTouched(true);
+    setQuestionCountTouched(true);
+    setUnitPageTouched(true);
     setQuestionCountInput(String(suggestedQuestionCount));
     setView("overview");
     startBatch([item.learning_unit_id], suggestedQuestionCount);
@@ -809,7 +909,7 @@ export function LearningPage() {
                       : ""}
                   </span>
                   <span className="learning-count">
-                    已选 {selectedUnitIds.length} 个范围 · 覆盖{" "}
+                    已选 {effectiveSelectedUnitIds.length} 个范围 · 覆盖{" "}
                     {selectedCoverageLabel || "0 个知识目标"}
                   </span>
                 </div>
@@ -845,6 +945,11 @@ export function LearningPage() {
               章节适合整章练习；知识目标适合精准练习。单批可选 1–10
               个范围，题目数不能少于范围数。
             </p>
+            {launchNotice ? (
+              <p className="learning-inline-status" role="status">
+                {launchNotice}
+              </p>
+            ) : null}
             <div className="learning-unit-list">
               {visibleUnitGroups.map((group) => {
                 const key =
@@ -872,7 +977,10 @@ export function LearningPage() {
                   aria-label="上一页"
                   className="icon-button icon-button--small"
                   disabled={currentUnitPage === 1}
-                  onClick={() => setUnitPage((page) => Math.max(1, page - 1))}
+                  onClick={() => {
+                    setUnitPageTouched(true);
+                    setUnitPage((page) => Math.max(1, page - 1));
+                  }}
                   title="上一页"
                   type="button"
                 >
@@ -889,7 +997,10 @@ export function LearningPage() {
                         aria-label={`第 ${page} 页`}
                         className={`button button--small${page === currentUnitPage ? " is-active" : ""}`}
                         key={page}
-                        onClick={() => setUnitPage(page)}
+                        onClick={() => {
+                          setUnitPageTouched(true);
+                          setUnitPage(page);
+                        }}
                         title={`第 ${page} 页`}
                         type="button"
                       >
@@ -902,9 +1013,10 @@ export function LearningPage() {
                   aria-label="下一页"
                   className="icon-button icon-button--small"
                   disabled={currentUnitPage === totalUnitPages}
-                  onClick={() =>
-                    setUnitPage((page) => Math.min(totalUnitPages, page + 1))
-                  }
+                  onClick={() => {
+                    setUnitPageTouched(true);
+                    setUnitPage((page) => Math.min(totalUnitPages, page + 1));
+                  }}
                   title="下一页"
                   type="button"
                 >
@@ -926,7 +1038,7 @@ export function LearningPage() {
                     setQuestionCountInput(event.target.value);
                   }}
                   type="number"
-                  value={questionCountInput}
+                  value={effectiveQuestionCountInput}
                 />
                 <small>可选 1–10 题</small>
               </label>
@@ -935,7 +1047,7 @@ export function LearningPage() {
                 disabled={
                   capabilitiesLoading ||
                   !providerAvailable ||
-                  selectedUnitIds.length === 0 ||
+                  effectiveSelectedUnitIds.length === 0 ||
                   selectionBoundaryError !== null ||
                   createBatch.isPending
                 }

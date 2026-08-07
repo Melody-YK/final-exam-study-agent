@@ -127,6 +127,46 @@ test('primary views stay nonblank and free of overflow or control overlap', asyn
   await page.getByRole('link', { name: '笔记' }).click()
   await expect(page.getByLabel('笔记阅读视图')).toBeVisible()
   await verifyView(page, testInfo, 'notes')
+  await page.getByRole('button', { name: '进入沉浸模式' }).click()
+  await expect(page.locator('.app-shell')).toHaveClass(/app-shell--immersive-notes/)
+  await expect(page.locator('.topbar')).toBeHidden()
+  await expect(page.locator('.workspace-sidebar')).toBeHidden()
+  await expect(page.locator('.mobile-nav')).toBeHidden()
+  await verifyView(page, testInfo, 'notes-immersive')
+  await page.getByRole('button', { name: '编辑' }).click()
+  await expect(page.getByLabel('笔记正文')).toBeVisible()
+  await page.getByRole('button', { name: '阅读' }).click()
+  await expect(page.getByLabel('笔记阅读视图')).toBeVisible()
+  await page.getByRole('button', { name: '退出沉浸模式' }).click()
+  await expect(page.locator('.app-shell')).not.toHaveClass(/app-shell--immersive-notes/)
+  const noteLayout = await page.evaluate(() => {
+    const pageRoot = document.querySelector<HTMLElement>('.page--notes')
+    const preview = document.querySelector<HTMLElement>('.note-preview')
+    if (!pageRoot || !preview) return null
+    const paragraphs = document.createDocumentFragment()
+    for (let index = 0; index < 80; index += 1) {
+      const paragraph = document.createElement('p')
+      paragraph.textContent = `滚动测试正文 ${index + 1}`
+      paragraphs.append(paragraph)
+    }
+    preview.append(paragraphs)
+    return {
+      pageOverflowY: getComputedStyle(pageRoot).overflowY,
+      previewOverflowY: getComputedStyle(preview).overflowY,
+      previewScrolls: preview.scrollHeight > preview.clientHeight,
+      rootHeight: document.documentElement.scrollHeight,
+      viewportHeight: window.innerHeight,
+    }
+  })
+  expect(noteLayout).not.toBeNull()
+  expect(noteLayout?.pageOverflowY).toBe('hidden')
+  expect(noteLayout?.previewOverflowY).toBe('auto')
+  expect(noteLayout?.previewScrolls).toBe(true)
+  expect(noteLayout?.rootHeight).toBeLessThanOrEqual((noteLayout?.viewportHeight ?? 0) + 1)
+  await page.getByRole('button', { name: '切换到正文目录' }).click()
+  await expect(page.getByRole('navigation', { name: '正文目录' })).toBeVisible()
+  await page.getByRole('button', { name: '切换到笔记列表' }).click()
+  await expect(page.getByLabel('切换笔记')).toBeVisible()
 
   await page.getByRole('link', { name: '概念地图' }).click()
   await expect(page.getByRole('heading', { name: '课程概念地图' })).toBeVisible()

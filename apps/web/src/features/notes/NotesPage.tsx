@@ -9,7 +9,11 @@ import {
   FilePlus2,
   FileText,
   FileUp,
+  GraduationCap,
   LoaderCircle,
+  ListTree,
+  Maximize2,
+  Minimize2,
   Pencil,
   RefreshCw,
   Save,
@@ -17,7 +21,8 @@ import {
   X,
 } from 'lucide-react'
 import ReactMarkdown, { type Components } from 'react-markdown'
-import React, { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { useNavigate } from 'react-router'
 import type { Element as HastElement } from 'hast'
 
 import { ApiError, studyApi } from '../../api/client'
@@ -41,6 +46,7 @@ import { PageHeader } from '../../components/ui/PageHeader'
 import { StatusBadge } from '../../components/ui/StatusBadge'
 import { SourceViewer } from '../source-viewer/SourceViewer'
 import { formatSourceLocator } from '../source-viewer/sourceLocator'
+import { learningSourceKey } from '../learning/learningLaunch'
 
 const MARKDOWN_MEDIA_TYPE = 'text/markdown'
 const MAX_NOTE_MARKDOWN_BYTES = 1_000_000
@@ -813,8 +819,14 @@ function ImportNoteDialog({ error, onClose, onImport, pending }: ImportNoteDialo
 
 interface NoteEditorProps {
   batchInProgress: boolean
+  canStartPractice: boolean
+  draft: string
+  immersiveMode: boolean
   note: NoteRecord
   noteWorkflowReady: boolean
+  onDraftChange: (draft: string) => void
+  onStartPractice: () => void
+  onToggleImmersive: () => void
   onRegenerate: () => void
   onExport: () => void
   providerReady: boolean
@@ -827,8 +839,14 @@ interface NoteEditorProps {
 
 function NoteEditor({
   batchInProgress,
+  canStartPractice,
+  draft,
+  immersiveMode,
   note,
   noteWorkflowReady,
+  onDraftChange,
+  onStartPractice,
+  onToggleImmersive,
   onRegenerate,
   onExport,
   providerReady,
@@ -838,14 +856,12 @@ function NoteEditor({
   onReload,
   onSaved,
 }: NoteEditorProps) {
-  const [draft, setDraft] = useState(note.body_markdown)
   const [viewMode, setViewMode] = useState<'read' | 'edit'>('read')
   const [conflict, setConflict] = useState(false)
   const save = useMutation({
     mutationFn: () => studyApi.updateNote(note.id, draft, note.version),
     onSuccess: (updated) => {
       setConflict(false)
-      setDraft(updated.body_markdown)
       setViewMode('read')
       onSaved(updated)
     },
@@ -864,7 +880,6 @@ function NoteEditor({
     mutationFn: onReload,
     onSuccess: (latest) => {
       if (latest) {
-        setDraft(latest.body_markdown)
         onSaved(latest)
       }
       setConflict(false)
@@ -945,6 +960,34 @@ function NoteEditor({
             )}
             重新生成
           </button>
+          <button
+            className="button button--small"
+            disabled={!canStartPractice}
+            onClick={onStartPractice}
+            title={
+              canStartPractice
+                ? '从当前笔记的资料范围开始练习'
+                : '当前笔记没有可用的关联学习资料'
+            }
+            type="button"
+          >
+            <GraduationCap aria-hidden="true" size={15} />
+            开始练习
+          </button>
+          <button
+            aria-label={immersiveMode ? '退出沉浸模式' : '进入沉浸模式'}
+            aria-pressed={immersiveMode}
+            className="icon-button icon-button--small note-immersive-toggle"
+            onClick={onToggleImmersive}
+            title={immersiveMode ? '退出沉浸模式' : '进入沉浸模式'}
+            type="button"
+          >
+            {immersiveMode ? (
+              <Minimize2 aria-hidden="true" size={16} />
+            ) : (
+              <Maximize2 aria-hidden="true" size={16} />
+            )}
+          </button>
           {viewMode === 'edit' ? (
             <button
               className="button button--primary button--small"
@@ -999,7 +1042,7 @@ function NoteEditor({
           <textarea
             className="note-editor"
             id={`note-body-${note.id}`}
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={(event) => onDraftChange(event.target.value)}
             spellCheck="false"
             value={draft}
           />
@@ -1079,10 +1122,19 @@ function NoteBatchProgress({
 }
 
 export function NotesPage() {
-  const { courseId, capabilities } = useWorkspace()
+  const {
+    courseId,
+    capabilities,
+    immersiveNotes,
+    setHasUnsavedChanges,
+    setImmersiveNotes,
+  } = useWorkspace()
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({})
   const [noteSearch, setNoteSearch] = useState('')
+  const [navigationMode, setNavigationMode] = useState<'notes' | 'outline'>('notes')
   const [createDialog, setCreateDialog] = useState({ courseId, open: false })
   const [importDialog, setImportDialog] = useState({ courseId, open: false })
   const batchStorageKey = noteBatchStorageKey(courseId)
@@ -1135,6 +1187,15 @@ export function NotesPage() {
   })
   const notes = useMemo(() => notesQuery.data ?? [], [notesQuery.data])
   const selected = notes.find((note) => note.id === selectedId) ?? notes[0]
+  const selectedDraft = selected ? noteDrafts[selected.id] ?? selected.body_markdown : ''
+  const hasUnsavedDrafts = useMemo(
+    () =>
+      notes.some(
+        (note) =>
+          noteDrafts[note.id] !== undefined && noteDrafts[note.id] !== note.body_markdown,
+      ),
+    [noteDrafts, notes],
+  )
   const normalizedNoteSearch = noteSearch.trim()
   const visibleNotes = useMemo(
     () =>
@@ -1148,7 +1209,25 @@ export function NotesPage() {
   const noteWorkflowReady =
     capabilities?.note_workflow.enabled === true &&
     capabilities?.note_workflow.generation.status === 'available'
+  const selectNote = useCallback(
+    (noteId: string) => {
+      if (selected && noteId !== selected.id && selectedDraft !== selected.body_markdown) {
+        if (!window.confirm('当前笔记有未保存修改，确定切换吗？草稿会保留。')) return
+      }
+      setSelectedId(noteId)
+    },
+    [selected, selectedDraft],
+  )
+  const updateNoteDraft = (noteId: string, draft: string) => {
+    setNoteDrafts((current) => ({ ...current, [noteId]: draft }))
+  }
   const replaceNote = (updated: NoteRecord) => {
+    setNoteDrafts((current) => {
+      if (!(updated.id in current)) return current
+      const next = { ...current }
+      delete next[updated.id]
+      return next
+    })
     queryClient.setQueryData<NoteRecord[]>(['notes', courseId], (current = []) =>
       current.map((note) => (note.id === updated.id ? updated : note)),
     )
@@ -1180,7 +1259,7 @@ export function NotesPage() {
         imported,
         ...current.filter((note) => note.id !== imported.id),
       ])
-      setSelectedId(imported.id)
+      selectNote(imported.id)
       setImportDialog({ courseId, open: false })
     },
   })
@@ -1211,7 +1290,48 @@ export function NotesPage() {
   const batchInProgress =
     activeBatchId !== null &&
     (!batchSnapshot || !TERMINAL_BATCH_STATUSES.includes(batchSnapshot.status))
-  const selectedHeadings = selected ? extractMarkdownHeadings(selected.body_markdown) : []
+  const selectedHeadings = selected ? extractMarkdownHeadings(selectedDraft) : []
+  const selectedPracticeSources = useMemo(
+    () => (selected ? selected.sources.filter((source) => source.available && !source.stale) : []),
+    [selected],
+  )
+  const canStartPractice = selectedPracticeSources.length > 0
+
+  const startPractice = useCallback(() => {
+    if (!selected || !canStartPractice) return
+    if (selectedDraft !== selected.body_markdown) {
+      if (!window.confirm('当前笔记有未保存修改，确定开始练习吗？未保存修改不会提交。')) return
+    }
+    navigate('/learning', {
+      state: {
+        noteId: selected.id,
+        noteTitle: selected.title,
+        sourceKeys: selectedPracticeSources.map(learningSourceKey),
+        knowledgePointTexts: (selected.knowledge_points ?? []).map((point) => point.text),
+      },
+    })
+  }, [canStartPractice, navigate, selected, selectedDraft, selectedPracticeSources])
+
+  useEffect(() => {
+    setHasUnsavedChanges?.(hasUnsavedDrafts)
+  }, [hasUnsavedDrafts, setHasUnsavedChanges])
+
+  useEffect(
+    () => () => {
+      setHasUnsavedChanges?.(false)
+    },
+    [setHasUnsavedChanges],
+  )
+
+  useEffect(() => {
+    if (!hasUnsavedDrafts) return
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+  }, [hasUnsavedDrafts])
 
   useEffect(() => {
     if (!activeBatchId || !batchInProgress) {
@@ -1226,6 +1346,15 @@ export function NotesPage() {
       },
     )
   }, [activeBatchId, batchInProgress])
+
+  useEffect(() => {
+    if (!immersiveNotes) return
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setImmersiveNotes(false)
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [immersiveNotes, setImmersiveNotes])
 
   useEffect(() => {
     if (
@@ -1253,17 +1382,17 @@ export function NotesPage() {
         const generatedNoteId = generatedNoteIds.find((id) =>
           latestNotes.some((note) => note.id === id),
         )
-        if (generatedNoteId) setSelectedId(generatedNoteId)
+        if (generatedNoteId) selectNote(generatedNoteId)
       })
       .catch(() => {
         if (completedBatchRef.current === batchSnapshot.id) completedBatchRef.current = null
       })
-  }, [batchSnapshot, courseId, queryClient])
+  }, [batchSnapshot, courseId, queryClient, selectNote])
 
   const regenerationPending = regenerateBatch.isPending || regenerateLegacy.isPending
 
   return (
-    <div className="page page--notes">
+    <div className={`page page--notes${immersiveNotes ? ' page--notes--immersive' : ''}`}>
       <PageHeader
         actions={
           <>
@@ -1333,74 +1462,107 @@ export function NotesPage() {
       ) : selected ? (
         <div className="note-workspace">
           <aside aria-label="笔记导航" className="note-tree">
-            <section aria-label="切换笔记" className="note-switcher">
-              <h3>切换笔记</h3>
-              <div className="note-search">
-                <Search aria-hidden="true" size={15} />
-                <label className="sr-only" htmlFor="note-search-input">
-                  搜索笔记
-                </label>
-                <input
-                  id="note-search-input"
-                  onChange={(event) => setNoteSearch(event.target.value)}
-                  placeholder="搜索标题、路径或正文"
-                  type="search"
-                  value={noteSearch}
-                />
-                {noteSearch ? (
-                  <button
-                    aria-label="清除笔记搜索"
-                    className="note-search__clear"
-                    onClick={() => setNoteSearch('')}
-                    title="清除搜索"
-                    type="button"
-                  >
-                    <X aria-hidden="true" size={14} />
-                  </button>
-                ) : null}
-              </div>
-              {visibleNotes.length ? (
-                <NoteSwitcherTree
-                  nodes={noteSectionTree}
-                  onSelect={setSelectedId}
-                  selectedId={selected.id}
-                />
+            <section
+              aria-label={navigationMode === 'notes' ? '切换笔记' : '正文目录'}
+              className="note-navigation"
+            >
+              <header className="note-navigation__header">
+                <div>
+                  <span className="section-kicker">Navigation</span>
+                  <h3>{navigationMode === 'notes' ? '切换笔记' : '正文目录'}</h3>
+                </div>
+                <button
+                  aria-controls="note-navigation-panel"
+                  aria-label={
+                    navigationMode === 'notes' ? '切换到正文目录' : '切换到笔记列表'
+                  }
+                  aria-pressed={navigationMode === 'outline'}
+                  className="icon-button icon-button--small"
+                  onClick={() =>
+                    setNavigationMode((current) => (current === 'notes' ? 'outline' : 'notes'))
+                  }
+                  title={navigationMode === 'notes' ? '切换到正文目录' : '切换到笔记列表'}
+                  type="button"
+                >
+                  <ListTree aria-hidden="true" size={16} />
+                </button>
+              </header>
+              {navigationMode === 'notes' ? (
+                <div className="note-navigation__panel" id="note-navigation-panel">
+                  <div className="note-search">
+                    <Search aria-hidden="true" size={15} />
+                    <label className="sr-only" htmlFor="note-search-input">
+                      搜索笔记
+                    </label>
+                    <input
+                      id="note-search-input"
+                      onChange={(event) => setNoteSearch(event.target.value)}
+                      placeholder="搜索标题、路径或正文"
+                      type="search"
+                      value={noteSearch}
+                    />
+                    {noteSearch ? (
+                      <button
+                        aria-label="清除笔记搜索"
+                        className="note-search__clear"
+                        onClick={() => setNoteSearch('')}
+                        title="清除搜索"
+                        type="button"
+                      >
+                        <X aria-hidden="true" size={14} />
+                      </button>
+                    ) : null}
+                  </div>
+                  {visibleNotes.length ? (
+                    <NoteSwitcherTree
+                      nodes={noteSectionTree}
+                      onSelect={selectNote}
+                      selectedId={selected.id}
+                    />
+                  ) : (
+                    <p className="muted note-search__empty">没有匹配的笔记</p>
+                  )}
+                </div>
               ) : (
-                <p className="muted note-search__empty">没有匹配的笔记</p>
+                <nav aria-label="正文目录" className="note-outline note-navigation__panel" id="note-navigation-panel">
+                  {selectedHeadings.length ? (
+                    <ol>
+                      {selectedHeadings.map((heading) => (
+                        <li key={heading.id}>
+                          <a
+                            href={`#${heading.id}`}
+                            onClick={(event) => {
+                              event.preventDefault()
+                              document.getElementById(heading.id)?.scrollIntoView({
+                                behavior: 'smooth',
+                                block: 'start',
+                              })
+                            }}
+                            style={{ paddingLeft: `${8 + (heading.level - 1) * 12}px` }}
+                          >
+                            {heading.text}
+                          </a>
+                        </li>
+                      ))}
+                    </ol>
+                  ) : (
+                    <p className="muted">正文暂无标题</p>
+                  )}
+                </nav>
               )}
             </section>
-            <nav aria-label="正文目录" className="note-outline">
-              <h3>正文目录</h3>
-              {selectedHeadings.length ? (
-                <ol>
-                  {selectedHeadings.map((heading) => (
-                    <li key={heading.id}>
-                      <a
-                        href={`#${heading.id}`}
-                        onClick={(event) => {
-                          event.preventDefault()
-                          document.getElementById(heading.id)?.scrollIntoView({
-                            behavior: 'smooth',
-                            block: 'start',
-                          })
-                        }}
-                        style={{ paddingLeft: `${8 + (heading.level - 1) * 12}px` }}
-                      >
-                        {heading.text}
-                      </a>
-                    </li>
-                  ))}
-                </ol>
-              ) : (
-                <p className="muted">正文暂无标题</p>
-              )}
-            </nav>
           </aside>
           <NoteEditor
             batchInProgress={batchInProgress}
+            canStartPractice={canStartPractice}
+            draft={selectedDraft}
+            immersiveMode={immersiveNotes}
             key={`${selected.id}-${selected.version}`}
             note={selected}
             noteWorkflowReady={noteWorkflowReady}
+            onDraftChange={(draft) => updateNoteDraft(selected.id, draft)}
+            onStartPractice={startPractice}
+            onToggleImmersive={() => setImmersiveNotes(!immersiveNotes)}
             onRegenerate={() => {
               if (selected.origin_batch_id !== null) {
                 regenerateBatch.mutate({ noteId: selected.id, version: selected.version })

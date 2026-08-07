@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { ChevronDown, CloudOff, LogOut, ShieldCheck, UserRound, Wifi } from 'lucide-react'
-import { Link, Routes, Route, useNavigate } from 'react-router'
+import { useState } from 'react'
+import { Link, Routes, Route, useLocation, useNavigate } from 'react-router'
 
 import { studyApi } from '../api/client'
 import { IconButton } from '../components/ui/IconButton'
@@ -20,7 +21,10 @@ interface WorkspaceShellProps {
 
 export function WorkspaceShell({ courseId, onLeaveCourse }: WorkspaceShellProps) {
   const { user, logout } = useAuth()
+  const location = useLocation()
   const navigate = useNavigate()
+  const [immersiveNotes, setImmersiveNotes] = useState(false)
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const courseQuery = useQuery({
     queryKey: ['course', courseId],
     queryFn: () => studyApi.getCourse(courseId),
@@ -31,8 +35,13 @@ export function WorkspaceShell({ courseId, onLeaveCourse }: WorkspaceShellProps)
     retry: false,
   })
   const providerAvailable = capabilitiesQuery.data?.provider.status === 'available'
+  const showImmersiveNotes = location.pathname === '/notes' && immersiveNotes
+
+  const confirmDiscardChanges = () =>
+    !hasUnsavedChanges || window.confirm('当前有未保存的笔记修改，确定离开吗？')
 
   const signOut = async () => {
+    if (!confirmDiscardChanges()) return
     onLeaveCourse()
     await logout()
     navigate('/login', { replace: true })
@@ -46,12 +55,16 @@ export function WorkspaceShell({ courseId, onLeaveCourse }: WorkspaceShellProps)
         capabilities: capabilitiesQuery.data,
         capabilitiesLoading: capabilitiesQuery.isLoading,
         capabilitiesError: capabilitiesQuery.isError,
+        immersiveNotes: showImmersiveNotes,
+        setImmersiveNotes,
+        hasUnsavedChanges,
+        setHasUnsavedChanges,
       }}
     >
       <a className="skip-link" href="#workspace-content">
         跳到主要内容
       </a>
-      <div className="app-shell">
+      <div className={`app-shell${showImmersiveNotes ? ' app-shell--immersive-notes' : ''}`}>
         <header className="topbar">
           <div className="topbar__identity">
             <span aria-hidden="true" className="brand-mark">
@@ -72,7 +85,13 @@ export function WorkspaceShell({ courseId, onLeaveCourse }: WorkspaceShellProps)
               {user?.display_name}
             </span>
             {user?.role === 'admin' ? (
-              <Link className="topbar-admin-link" to="/admin">
+              <Link
+                className="topbar-admin-link"
+                onClick={(event) => {
+                  if (!confirmDiscardChanges()) event.preventDefault()
+                }}
+                to="/admin"
+              >
                 <ShieldCheck aria-hidden="true" size={16} />
                 管理端
               </Link>
@@ -84,7 +103,13 @@ export function WorkspaceShell({ courseId, onLeaveCourse }: WorkspaceShellProps)
         </header>
         <div className="workspace-layout">
           <aside className="workspace-sidebar">
-            <button className="course-switcher" onClick={onLeaveCourse} type="button">
+            <button
+              className="course-switcher"
+              onClick={() => {
+                if (confirmDiscardChanges()) onLeaveCourse()
+              }}
+              type="button"
+            >
               <span>{courseQuery.data?.title ?? '课程'}</span>
               <ChevronDown aria-hidden="true" size={16} />
             </button>

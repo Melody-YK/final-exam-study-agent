@@ -1,12 +1,23 @@
 import { act, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { StrictMode } from 'react'
+import { useLocation } from 'react-router'
 
 import { ApiError, studyApi } from '../../api/client'
 import type { NoteBatchSnapshot, NoteRecord, RuntimeCapabilities } from '../../api/types'
 import { documentRecord, noteRecord, problem, sourcePreview } from '../../test/fixtures'
 import { availableCapabilities, renderInWorkspace } from '../../test/render'
 import { NotesPage } from './NotesPage'
+
+function LocationProbe() {
+  const location = useLocation()
+  return (
+    <>
+      <output data-testid="location-path">{location.pathname}</output>
+      <output data-testid="location-state">{JSON.stringify(location.state ?? null)}</output>
+    </>
+  )
+}
 
 function noteBatchSnapshot(
   overrides: Partial<NoteBatchSnapshot> = {},
@@ -90,6 +101,59 @@ describe('NotesPage', () => {
     )
     expect(await screen.findByLabelText('笔记阅读视图')).toHaveTextContent('用户整理的正文。')
     expect(screen.queryByLabelText('知识点来源')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '开始练习' })).toBeDisabled()
+  })
+
+  it('starts related practice with the current note source scope', async () => {
+    const note = noteRecord({
+      knowledge_points: [
+        {
+          id: 'knowledge-point-1',
+          text: '进程管理',
+          source_ids: ['note-source-1'],
+        },
+      ],
+    })
+    vi.spyOn(studyApi, 'listNotes').mockResolvedValue([note])
+    const { user } = renderInWorkspace(
+      <>
+        <NotesPage />
+        <LocationProbe />
+      </>,
+    )
+
+    await user.click(await screen.findByRole('button', { name: '开始练习' }))
+
+    expect(screen.getByTestId('location-path')).toHaveTextContent('/learning')
+    expect(JSON.parse(screen.getByTestId('location-state').textContent ?? '')).toEqual({
+      noteId: 'note-1',
+      noteTitle: '进程基础',
+      sourceKeys: ['document-1\u001frevision-1\u001fchunk-1'],
+      knowledgePointTexts: ['进程管理'],
+    })
+  })
+
+  it('asks before starting related practice when the note has an unsaved draft', async () => {
+    vi.spyOn(studyApi, 'listNotes').mockResolvedValue([noteRecord()])
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    const { user } = renderInWorkspace(
+      <>
+        <NotesPage />
+        <LocationProbe />
+      </>,
+    )
+
+    await screen.findByLabelText('笔记阅读视图')
+    await user.click(screen.getByRole('button', { name: '编辑' }))
+    await user.type(screen.getByLabelText('笔记正文'), '\n\n未保存练习草稿')
+    await user.click(screen.getByRole('button', { name: '开始练习' }))
+
+    expect(confirm).toHaveBeenCalledWith('当前笔记有未保存修改，确定开始练习吗？未保存修改不会提交。')
+    expect(screen.getByTestId('location-path')).toHaveTextContent('/')
+
+    confirm.mockReturnValue(true)
+    await user.click(screen.getByRole('button', { name: '开始练习' }))
+    expect(screen.getByTestId('location-path')).toHaveTextContent('/learning')
   })
 
   it('exports the saved Markdown body without the legacy source section', async () => {
@@ -163,7 +227,7 @@ describe('NotesPage', () => {
     expect(studyApi.getNoteSourcePreview).toHaveBeenCalledWith('note-1', 'note-source-1')
   })
 
-  it('separates note switching from the current note heading outline', async () => {
+  it('toggles between note switching and the current note heading outline', async () => {
     const note = noteRecord({
       body_markdown: '# 进程\n\n概念总览。\n\n## 调度\n\n调度决定下一个运行任务。\n\n### 时间片\n\n轮转分配 CPU 时间。',
     })
@@ -177,6 +241,9 @@ describe('NotesPage', () => {
 
     const switcher = await screen.findByLabelText('切换笔记')
     expect(within(switcher).getByRole('button', { name: /进程基础/ })).toBeInTheDocument()
+    expect(screen.queryByRole('navigation', { name: '正文目录' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '切换到正文目录' }))
     const outline = screen.getByRole('navigation', { name: '正文目录' })
     expect(within(outline).getByRole('link', { name: '进程' })).toHaveAttribute(
       'href',
@@ -193,6 +260,26 @@ describe('NotesPage', () => {
 
     await user.click(within(outline).getByRole('link', { name: '调度' }))
     expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'start' })
+
+    await user.click(screen.getByRole('button', { name: '切换到笔记列表' }))
+    expect(screen.getByLabelText('切换笔记')).toBeInTheDocument()
+  })
+
+  it('enters immersive reading mode and exits with Escape', async () => {
+    vi.spyOn(studyApi, 'listNotes').mockResolvedValue([noteRecord()])
+    const { user } = renderInWorkspace(<NotesPage />)
+
+    const preview = await screen.findByLabelText('笔记阅读视图')
+    const page = preview.closest('.page--notes')
+    expect(page).not.toHaveClass('page--notes--immersive')
+
+    await user.click(screen.getByRole('button', { name: '进入沉浸模式' }))
+    expect(page).toHaveClass('page--notes--immersive')
+    expect(screen.getByRole('button', { name: '退出沉浸模式' })).toBeInTheDocument()
+
+    await user.keyboard('{Escape}')
+    expect(page).not.toHaveClass('page--notes--immersive')
+    expect(screen.getByRole('button', { name: '进入沉浸模式' })).toBeInTheDocument()
   })
 
   it('groups notes by section path and filters the switcher by search', async () => {
@@ -223,6 +310,57 @@ describe('NotesPage', () => {
 
     await user.click(within(switcher).getByRole('button', { name: '清除笔记搜索' }))
     expect(within(switcher).getByRole('button', { name: '进程基础' })).toBeInTheDocument()
+  })
+
+  it('keeps unsaved drafts per note and confirms before switching away', async () => {
+    const first = noteRecord({
+      id: 'note-first',
+      title: '第一篇笔记',
+      body_markdown: '# 第一篇笔记\n\n原始正文',
+    })
+    const second = noteRecord({
+      id: 'note-second',
+      title: '第二篇笔记',
+      body_markdown: '# 第二篇笔记\n\n第二篇正文',
+    })
+    vi.spyOn(studyApi, 'listNotes').mockResolvedValue([first, second])
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    const { user } = renderInWorkspace(<NotesPage />)
+
+    await screen.findByLabelText('笔记阅读视图')
+    await user.click(screen.getByRole('button', { name: '编辑' }))
+    const editor = screen.getByLabelText('笔记正文')
+    await user.clear(editor)
+    await user.type(editor, '第一篇未保存草稿')
+
+    await user.click(screen.getByRole('button', { name: '第二篇笔记' }))
+    expect(confirm).toHaveBeenCalledWith('当前笔记有未保存修改，确定切换吗？草稿会保留。')
+    expect(screen.getByRole('heading', { name: '第一篇笔记' })).toBeInTheDocument()
+
+    confirm.mockReturnValue(true)
+    await user.click(screen.getByRole('button', { name: '第二篇笔记' }))
+    expect(
+      within(screen.getByLabelText('笔记阅读视图')).getByRole('heading', {
+        name: '第二篇笔记',
+      }),
+    ).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '第一篇笔记' }))
+    await user.click(screen.getByRole('button', { name: '编辑' }))
+    expect(screen.getByLabelText('笔记正文')).toHaveValue('第一篇未保存草稿')
+  })
+
+  it('blocks unload while a note draft is unsaved', async () => {
+    vi.spyOn(studyApi, 'listNotes').mockResolvedValue([noteRecord()])
+    const { user } = renderInWorkspace(<NotesPage />)
+
+    await screen.findByLabelText('笔记阅读视图')
+    await user.click(screen.getByRole('button', { name: '编辑' }))
+    await user.type(screen.getByLabelText('笔记正文'), '\n\n未保存')
+
+    const event = new Event('beforeunload', { cancelable: true })
+    expect(window.dispatchEvent(event)).toBe(false)
+    expect(event.defaultPrevented).toBe(true)
   })
 
   it('moves legacy source mappings out of the visible note body', async () => {

@@ -100,6 +100,15 @@
     padding: 20px 14px 86px;
   }
 
+  .page--notes {
+    height: calc(100vh - 60px);
+  }
+
+  .page--notes--immersive {
+    height: 100vh;
+    padding: 8px;
+  }
+
   .page-header {
     align-items: flex-start;
     margin-bottom: 16px;
@@ -267,37 +276,37 @@
     border: 0;
     display: flex;
     flex-direction: column;
-    min-height: auto;
-    overflow: visible;
+    flex: 1 1 0;
+    min-height: 0;
+    overflow: hidden;
   }
 
   .note-tree {
     border: 1px solid var(--border);
     border-radius: 7px;
-    display: flex;
-    gap: 6px;
-    overflow-x: auto;
+    flex: 0 0 auto;
+    height: min(190px, 26vh);
+    max-height: 190px;
+    overflow: hidden;
     padding: 8px;
   }
 
-  .note-tree h3 {
-    display: none;
-  }
-
-  .note-tree button {
-    flex: 0 0 180px;
+  .note-navigation__header {
+    margin-bottom: 8px;
   }
 
   .note-workspace__editor {
     border: 1px solid var(--border);
     border-radius: 7px;
+    flex: 1 1 0;
     margin-top: 10px;
-    min-height: 500px;
+    min-height: 0;
   }
 
   .note-editor__header {
     align-items: flex-start;
     flex-direction: column;
+    flex: 0 0 auto;
   }
 
   .note-editor__header > div:last-child {
@@ -306,11 +315,34 @@
   }
 
   .note-editor {
-    min-height: 390px;
+    min-height: 0;
   }
 
   .note-preview {
-    min-height: 390px;
+    min-height: 0;
+    padding: 16px 14px 26px;
+  }
+
+  .page--notes--immersive .note-tree {
+    padding: 8px;
+  }
+
+  .page--notes--immersive .note-workspace__editor {
+    padding: 14px;
+  }
+
+  .page--notes--immersive .note-preview {
+    font-size: 16px;
+    padding: 16px 14px 26px;
+  }
+
+  .page--notes--immersive .note-preview h1 {
+    font-size: 30px;
+  }
+
+  .note-batch-progress {
+    max-height: 190px;
+    overflow: auto;
   }
 
   .note-batch-progress__facts {

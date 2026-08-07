@@ -114,6 +114,8 @@ function renderWithRouteState(state: unknown) {
               capabilities: availableCapabilities,
               capabilitiesLoading: false,
               capabilitiesError: false,
+              immersiveNotes: false,
+              setImmersiveNotes: () => undefined,
             }}
           >
             {children}

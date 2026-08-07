@@ -3,6 +3,7 @@ import { BookOpen, FileSearch, GraduationCap, Library, MessageSquareText, Networ
 import { useSyncExternalStore } from 'react'
 import { NavLink, useLocation } from 'react-router'
 
+import { useWorkspace } from './WorkspaceContext'
 import { LearningPage } from '../features/learning/LearningPage'
 
 const destinations = [
@@ -36,6 +37,7 @@ function LearningPagePortal() {
 
 export function WorkspaceNavigation({ mobile = false }: WorkspaceNavigationProps) {
   const location = useLocation()
+  const { hasUnsavedChanges } = useWorkspace()
 
   return (
     <nav
@@ -49,7 +51,27 @@ export function WorkspaceNavigation({ mobile = false }: WorkspaceNavigationProps
         </div>
       ) : null}
       {destinations.map(({ to, label, icon: Icon, end }) => (
-        <NavLink end={end} key={to} to={to}>
+        <NavLink
+          end={end}
+          key={to}
+          onClick={(event) => {
+            if (
+              !hasUnsavedChanges ||
+              location.pathname === to ||
+              event.button !== 0 ||
+              event.metaKey ||
+              event.ctrlKey ||
+              event.shiftKey ||
+              event.altKey
+            ) {
+              return
+            }
+            if (!window.confirm('当前有未保存的笔记修改，确定离开吗？')) {
+              event.preventDefault()
+            }
+          }}
+          to={to}
+        >
           <Icon aria-hidden="true" size={mobile ? 20 : 18} strokeWidth={1.8} />
           <span>{label}</span>
         </NavLink>

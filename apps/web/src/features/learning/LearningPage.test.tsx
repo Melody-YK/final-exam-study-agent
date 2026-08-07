@@ -11,6 +11,7 @@ import type {
 } from "../../api/types";
 import { availableCapabilities, renderInWorkspace } from "../../test/render";
 import { LearningPage } from "./LearningPage";
+import { learningSourceKey } from "./learningLaunch";
 
 const evidence = {
   chunk_id: "chunk-process",
@@ -162,6 +163,58 @@ describe("LearningPage", () => {
     ).toBeInTheDocument();
     expect(studyApi.createPracticeSession).toHaveBeenCalledWith("course-1", {
       question_ids: ["question-1"],
+    });
+  });
+
+  it("preselects concept scopes launched from a related note", async () => {
+    const concept: LearningUnit = {
+      ...units[0]!,
+      id: "unit-process-state",
+      canonical_key: "concept:process-management/process-state",
+      label: "进程状态",
+      kind: "concept",
+      parent_id: "unit-1",
+    };
+    const launchUnits = [units[0]!, concept];
+    const launchSummary = { ...summary, units: launchUnits };
+    const launchBatch = {
+      ...batch,
+      learning_unit_ids: [concept.id],
+      target_question_count: 1,
+    } satisfies PracticeBatchSnapshot;
+    vi.spyOn(studyApi, "listLearningUnits").mockResolvedValue(launchUnits);
+    vi.spyOn(studyApi, "getLearningSummary").mockResolvedValue(launchSummary);
+    vi.spyOn(studyApi, "getReviewQueue").mockResolvedValue([]);
+    const createBatch = vi
+      .spyOn(studyApi, "createPracticeBatch")
+      .mockResolvedValue(launchBatch);
+    vi.spyOn(studyApi, "getPracticeBatch").mockResolvedValue(launchBatch);
+
+    const { user } = renderInWorkspace(<LearningPage />, {
+      route: {
+        pathname: "/learning",
+        state: {
+          noteId: "note-1",
+          noteTitle: "进程基础",
+          sourceKeys: [learningSourceKey(evidence)],
+          knowledgePointTexts: ["进程状态"],
+        },
+      },
+    });
+
+    expect(
+      await screen.findByText("已从“进程基础”预选 1 个相关练习范围。"),
+    ).toBeInTheDocument();
+    const conceptCheckbox = screen.getByRole("checkbox", {
+      name: /进程状态，知识目标 · 精准练习/,
+    });
+    expect(conceptCheckbox).toBeChecked();
+    expect(screen.getByRole("spinbutton", { name: "题目数量" })).toHaveValue(1);
+
+    await user.click(screen.getByRole("button", { name: /开始生成题目/ }));
+    expect(createBatch).toHaveBeenCalledWith("course-1", {
+      learning_unit_ids: [concept.id],
+      question_count: 1,
     });
   });
 

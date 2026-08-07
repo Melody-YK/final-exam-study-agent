@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, type RenderOptions } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import type { ReactElement, ReactNode } from 'react'
+import { useState, type ReactElement, type ReactNode } from 'react'
 import { MemoryRouter } from 'react-router'
 
 import type { Course, RuntimeCapabilities } from '../api/types'
@@ -26,7 +26,7 @@ export const availableCapabilities: RuntimeCapabilities = {
 const course: Course = { id: 'course-1', title: '操作系统', lifecycle: 'active' }
 
 interface WorkspaceRenderOptions extends Omit<RenderOptions, 'wrapper'> {
-  route?: string
+  route?: string | { pathname: string; state?: unknown }
   workspace?: Partial<WorkspaceState>
 }
 
@@ -51,13 +51,22 @@ export function renderInWorkspace(
     capabilitiesLoading: false,
     capabilitiesError: false,
     ...workspace,
+    immersiveNotes: workspace?.immersiveNotes ?? false,
+    setImmersiveNotes: workspace?.setImmersiveNotes ?? (() => undefined),
+    hasUnsavedChanges: workspace?.hasUnsavedChanges ?? false,
+    setHasUnsavedChanges: workspace?.setHasUnsavedChanges ?? (() => undefined),
   }
 
   function Wrapper({ children }: { children: ReactNode }) {
+    const [immersiveNotes, setImmersiveNotes] = useState(workspace?.immersiveNotes ?? false)
     return (
       <QueryClientProvider client={queryClient}>
         <MemoryRouter initialEntries={[route]}>
-          <WorkspaceContext.Provider value={state}>{children}</WorkspaceContext.Provider>
+          <WorkspaceContext.Provider
+            value={{ ...state, immersiveNotes, setImmersiveNotes }}
+          >
+            {children}
+          </WorkspaceContext.Provider>
         </MemoryRouter>
       </QueryClientProvider>
     )

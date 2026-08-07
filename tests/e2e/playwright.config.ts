@@ -1,6 +1,6 @@
 import { defineConfig } from '@playwright/test'
 
-const baseURL = 'http://127.0.0.1:4173'
+const baseURL = 'http://127.0.0.1:5173'
 
 export default defineConfig({
   testDir: '.',
@@ -20,7 +20,7 @@ export default defineConfig({
     video: 'off',
   },
   webServer: {
-    command: 'npm run dev --workspace @study-agent/web -- --host 127.0.0.1 --port 4173',
+    command: 'npm run dev --workspace @study-agent/web -- --host 127.0.0.1 --port 5173',
     cwd: '../..',
     url: baseURL,
     reuseExistingServer: true,
